@@ -1,0 +1,108 @@
+name: Release
+
+# Publishing happens when a GitHub release is published, so the release notes
+# and the published version are created in the same step. A bare tag push does
+# not publish anything, and nothing here runs on push or pull_request.
+#
+# There is no npm token anywhere in this repository or its secrets. The job
+# authenticates to npm with a short-lived OIDC token (trusted publishing).
+#
+# There is no --provenance flag. npm only attests builds from a public
+# repository, and this one stays private until brane is announced, so the flag
+# would fail every publish. Trusted publishing adds provenance automatically
+# once the repository is public.
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    name: Publish to npm
+    runs-on: ubuntu-latest
+    env:
+      # Embedding model cache dir (read by src/memory/embedder.ts). Lives in
+      # the workspace so actions/cache can persist it across runs; the tests
+      # need the model and would otherwise download it from HuggingFace.
+      BRANE_MODEL_CACHE: ${{ github.workspace }}/.cache/brane-models
+
+    permissions:
+      contents: read
+      # Required for npm trusted publishing: lets the job mint the short-lived
+      # OIDC token that npm exchanges for publish rights.
+      id-token: write
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.release.tag_name }}
+
+      # Trusted publishing needs Node >= 22.14 and npm >= 11.5.1, which is
+      # newer than the npm bundled with any Node the runners provide.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            expo/package-lock.json
+
+      - name: Update npm
+        run: |
+          npm install -g npm@latest
+          npm --version
+
+      - name: Check the release tag against package.json
+        run: |
+          tag='${{ github.event.release.tag_name }}'
+          version=$(node -p 'require("./package.json").version')
+          if [ "$tag" != "v$version" ]; then
+            echo "Release tag $tag does not match package.json version $version." >&2
+            echo "Tags must be the package version prefixed with v." >&2
+            exit 1
+          fi
+          if [ -n "$(npm view "brane@$version" version 2>/dev/null)" ]; then
+            echo "brane@$version is already published to npm." >&2
+            exit 1
+          fi
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install expo dependencies
+        run: cd expo && npm ci
+
+      - name: Cache embedding model
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.BRANE_MODEL_CACHE }}
+          key: hf-model-Xenova-bge-small-en-v1.5-v1
+
+      # dist/ and expo/dist/ are gitignored and there is no prepare script, so
+      # the tarball is only as fresh as this step. npm run build is tsc plus
+      # the expo web export plus the service-worker precache manifest.
+      - name: Build and verify precache
+        run: npm run build && cd expo && node scripts/check-precache.mjs
+
+      - name: Run tests
+        run: node --test dist/test/*.test.js
+
+      # The file list is in the run log, so a release that shipped the wrong
+      # files can be diagnosed from the run rather than from the registry.
+      - name: Show what will be published
+        run: npm pack --dry-run
+
+      # A release marked as a pre-release publishes under the next dist-tag; an
+      # ordinary release publishes under latest. Which dist-tag moves is
+      # therefore a visible choice made in the GitHub release form.
+      - name: Publish
+        run: |
+          if [ '${{ github.event.release.prerelease }}' = 'true' ]; then
+            tag=next
+          else
+            tag=latest
+          fi
+          echo "Publishing under the $tag dist-tag."
+          npm publish --tag "$tag"

@@ -1,0 +1,93 @@
+{
+  "name": "brane",
+  "version": "0.3.0",
+  "description": "Userspace daemon and CLI for narrative agent sessions",
+  "keywords": [
+    "agents",
+    "claude",
+    "mcp",
+    "tmux",
+    "daemon",
+    "cli",
+    "llm"
+  ],
+  "homepage": "https://github.com/benjamn/brane#readme",
+  "bugs": {
+    "url": "https://github.com/benjamn/brane/issues"
+  },
+  "funding": {
+    "type": "github",
+    "url": "https://github.com/sponsors/benjamn"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/benjamn/brane.git"
+  },
+  "type": "module",
+  "bin": {
+    "brane": "./dist/cli.js"
+  },
+  "files": [
+    "dist",
+    "!dist/**/*.d.ts",
+    "!dist/**/*.map",
+    "expo/dist",
+    "protocols",
+    "wiki/shared",
+    "AGENTS.md",
+    "docs",
+    "CONTRIBUTING.md",
+    "CHANGELOG.md",
+    "DESIGN.md",
+    "SECURITY.md",
+    "Dockerfile",
+    "docker-entrypoint.sh"
+  ],
+  "scripts": {
+    "clean": "node scripts/clean-dist.mjs",
+    "prebuild": "npm run clean",
+    "build": "tsc && npm run build:web --prefix expo",
+    "postbuild": "node scripts/chmod-bin.mjs",
+    "prebuild:server": "npm run clean",
+    "build:server": "tsc",
+    "postbuild:server": "node scripts/chmod-bin.mjs",
+    "start": "node dist/cli.js",
+    "test": "tsc && node --test dist/test/*.test.js"
+  },
+  "dependencies": {
+    "@dagrejs/dagre": "^3.1.1",
+    "better-sqlite3": "^13.0.3",
+    "citty": "^0.1.6",
+    "katex": "^0.18.4",
+    "mdast-util-from-markdown": "^2.0.3",
+    "mdast-util-gfm-autolink-literal": "^2.0.1",
+    "mdast-util-gfm-table": "^2.0.0",
+    "mdast-util-gfm-task-list-item": "^2.0.0",
+    "micromark": "^4.0.2",
+    "micromark-extension-gfm-autolink-literal": "^2.1.0",
+    "micromark-extension-gfm-table": "^2.1.1",
+    "micromark-extension-gfm-task-list-item": "^2.1.0",
+    "micromark-extension-math": "^3.1.0",
+    "onnxruntime-node": "^1.21.0",
+    "qrcode-terminal": "^0.12.0",
+    "shiki": "^4.0.2",
+    "sqlite-vec": "^0.1.9",
+    "stream-json": "^3.7.0",
+    "ws": "^8.19.0"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.12",
+    "@types/node": "^22.0.0",
+    "@types/qrcode-terminal": "^0.12.2",
+    "@types/ws": "^8.18.1",
+    "typescript": "^5.7.0",
+    "wrangler": "^4.70.0"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "license": "AGPL-3.0-or-later",
+  "overrides": {
+    "katex": "$katex"
+  }
+}

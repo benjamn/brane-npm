@@ -1,0 +1,175 @@
+<!DOCTYPE html>
+<html lang="%LANG_ISO_CODE%">
+  <head>
+    <meta charset="utf-8" />
+    <meta httpEquiv="X-UA-Compatible" content="IE=edge" />
+    <!--
+      The viewport, and the html/body/#root rules at the end of the reset below,
+      have to be here and not only in the runtime `<Head>` in app/_layout.tsx:
+      with `output: "single"` that one lands once the ~2 MB bundle has executed,
+      so a page that started loading under this tag would be laid out a second
+      time, mid-load, under a different one. On a link opened from another app —
+      Safari still animating in, its toolbars still settling — that second
+      layout could leave the whole document scrolled up behind the address bar,
+      stuck there until a reload. The `<Head>` copy is kept identical, so when
+      it lands nothing changes.
+    -->
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover, shrink-to-fit=no" />
+    <title>%WEB_TITLE%</title>
+    <!--
+      The link preview card. A chat app's unfurler fetches this document and
+      reads these tags; it never runs the bundle, and never sees the fragment
+      that carries the daemon's host and token. So the card can say what brane
+      is, and show the 膜, but never a narrative's title or summary — those live
+      on the daemon, which nothing outside the tailnet can reach. The image URL
+      is absolute and on the shared host on purpose: a daemon's own bundle
+      serves this same file, and the phone unfurling that link can still fetch
+      the picture. The filename is versioned because iMessage caches a preview
+      by URL until the URL changes. Rendered by scripts/og-membrane/render.mjs.
+      Kept in step with app/+html.tsx; the apple-touch-icon also in _layout.tsx.
+    -->
+    <meta property="og:site_name" content="brane" />
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="brane" />
+    <meta property="og:description" content="Your agents, live — chat, terminal and files for every session, from any device on your tailnet." />
+    <meta property="og:image" content="https://brane.organelle.dev/og/membrane.v1.png" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:image:alt" content="膜 — the character for membrane, filled with a swirl of thin-film color on a dark ground" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <!--
+      KaTeX lays its span tree out entirely in CSS — without this, rendered math
+      is a pile of overlapping glyphs. Vendored under public/katex/ by
+      `npm run sync:katex` rather than imported from node_modules, because metro
+      bundles a CSS import but never copies the fonts that stylesheet points at.
+      The standalone HTML export inlines the same stylesheet itself (src/math.ts).
+      Kept in step with the matching <link> in app/+html.tsx, the way the reset
+      style below already is.
+    -->
+    <link rel="stylesheet" href="/katex/katex.min.css" />
+    <!--
+      Installability has to be declared in the served HTML, not from the runtime
+      `<Head>` in app/_layout.tsx: that one only lands once the ~2 MB bundle has
+      executed, so a browser deciding whether this is an installable app — and a
+      cold offline load that never gets the bundle — sees no manifest at all.
+      The `<Head>` copy is kept in step, the way the KaTeX <link> above is.
+    -->
+    <link rel="manifest" href="/manifest.json" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <!-- The `react-native-web` recommended style reset: https://necolas.github.io/react-native-web/docs/setup/#root-element -->
+    <style id="expo-reset">
+      /*
+       * Pin text to our declared CSS sizes. Without this, iOS Safari's
+       * per-block text autosizing rescales short vs long message bubbles
+       * differently in landscape, making short operator messages look
+       * smaller than surrounding agent replies.
+       */
+      html,
+      body {
+        -webkit-text-size-adjust: 100%;
+        text-size-adjust: 100%;
+      }
+      /* These styles make the body full-height */
+      html,
+      body {
+        height: 100%;
+      }
+      /* These styles disable body scrolling if you are using <ScrollView> */
+      body {
+        overflow: hidden;
+      }
+      /* These styles make the root element full-height */
+      #root {
+        display: flex;
+        height: 100%;
+        flex: 1;
+      }
+      /*
+       * The app's own rules, from first paint (see the viewport comment above).
+       * `border-box` is the load-bearing one: #root is not a react-native-web
+       * View, so it was `content-box`, and `height: 100%` plus the safe-area
+       * padding made it taller than the page by both insets. That gave <body>
+       * — a scroll container of its own under `overflow: hidden` — exactly that
+       * much to scroll: out of a finger's reach, not out of iOS's, and at the
+       * end of it the header sits behind the address bar.
+       */
+      html,
+      body {
+        background-color: #111;
+        overflow: hidden;
+        overscroll-behavior: none;
+      }
+      #root {
+        box-sizing: border-box;
+        padding-top: env(safe-area-inset-top);
+        padding-bottom: env(safe-area-inset-bottom);
+        overflow: hidden;
+        /*
+         * The visible area, set by expo/lib/noPan.ts: with the keyboard up,
+         * #root ends where the keyboard starts, so a bottom bar sits on it
+         * without iOS moving the page. See src/shared/no-pan.ts.
+         */
+        height: var(--brane-vvh, 100%);
+      }
+    </style>
+    <script>
+      // Every scroller in this app is an inner ScrollView; the window, <body>
+      // and #root never scroll on purpose. So a nonzero offset on any of them is
+      // the stuck-behind-the-address-bar state, and is put back. All three,
+      // because the one observed stuck was <body>: `overflow: hidden` makes it a
+      // scroll container of its own, which scrolls programmatically while
+      // window.scrollY reads 0. Two exceptions: while an editable has focus (iOS
+      // may be scrolling the caret into view, and fighting it would jitter —
+      // the keyboard's own pan is refused at the source by expo/lib/noPan.ts)
+      // and while pinch-zoomed (iOS reports the zoomed view's pan in scrollY). `focusout` is the moment the keyboard goes, which is when
+      // iOS is known to leave the page shifted.
+      (function () {
+        var vv = window.visualViewport;
+        function editableFocused() {
+          var el = document.activeElement;
+          if (!el || el === document.body) return false;
+          var tag = el.tagName;
+          return tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || el.isContentEditable;
+        }
+        function pin() {
+          var body = document.body, root = document.getElementById("root");
+          var shifted =
+            window.scrollX || window.scrollY ||
+            (body && (body.scrollTop || body.scrollLeft)) ||
+            (root && (root.scrollTop || root.scrollLeft));
+          if (!shifted) return;
+          if (editableFocused()) return;
+          if (vv && Math.abs(vv.scale - 1) > 0.01) return;
+          window.scrollTo(0, 0);
+          if (body) body.scrollTop = body.scrollLeft = 0;
+          if (root) root.scrollTop = root.scrollLeft = 0;
+        }
+        // Scroll events don't bubble, so <body> and #root are listened to
+        // directly; a capturing listener would run on every ScrollView's scroll.
+        window.addEventListener("scroll", pin, { passive: true });
+        document.addEventListener("DOMContentLoaded", function () {
+          document.body.addEventListener("scroll", pin, { passive: true });
+          document.getElementById("root").addEventListener("scroll", pin, { passive: true });
+        });
+        window.addEventListener("resize", pin);
+        window.addEventListener("pageshow", pin);
+        // After focus has actually left, not while the next field is taking it.
+        document.addEventListener("focusout", function () { setTimeout(pin, 0); });
+        if (vv) vv.addEventListener("resize", pin);
+        requestAnimationFrame(pin);
+      })();
+    </script>
+  </head>
+
+  <body>
+    <!-- Use static rendering with Expo Router to support running without JavaScript. -->
+    <noscript>
+      You need to enable JavaScript to run this app.
+    </noscript>
+    <!-- The root element for your Expo app. -->
+    <div id="root"></div>
+  </body>
+</html>

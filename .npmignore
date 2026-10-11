@@ -1,0 +1,11 @@
+node_modules/
+.mcp.json
+.organelle/
+.claude/
+.env
+expo/node_modules/
+expo/.expo/
+expo/web-build/
+expo/*.tsbuildinfo
+dist/**/*.d.ts
+dist/**/*.d.ts.map

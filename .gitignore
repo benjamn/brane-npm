@@ -1,0 +1,8 @@
+node_modules/
+dist/
+.mcp.json
+.organelle/
+.claude/
+.env
+*.tgz
+.crush.json

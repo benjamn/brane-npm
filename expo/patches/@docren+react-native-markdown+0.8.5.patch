@@ -1,0 +1,92 @@
+diff --git a/node_modules/@docren/react-native-markdown/lib/module/components/ASTRenderer.js b/node_modules/@docren/react-native-markdown/lib/module/components/ASTRenderer.js
+index eb2d77d..9b4c6e7 100644
+--- a/node_modules/@docren/react-native-markdown/lib/module/components/ASTRenderer.js
++++ b/node_modules/@docren/react-native-markdown/lib/module/components/ASTRenderer.js
+@@ -95,10 +95,6 @@ export default class ASTRenderer {
+         }
+       }
+     }
+-    if (type === 'table' || type === 'tableCell' || type === 'tableRow') {
+-      console.warn(`Skipping unsupported node type: ${type}`);
+-      return null;
+-    }
+     const renderFunction = this.getRenderFunction(type);
+     this.debugLog(parentStack.length, type);
+     return renderFunction({
+diff --git a/node_modules/@docren/react-native-markdown/lib/module/components/Markdown.js b/node_modules/@docren/react-native-markdown/lib/module/components/Markdown.js
+index a985a14..75d74df 100644
+--- a/node_modules/@docren/react-native-markdown/lib/module/components/Markdown.js
++++ b/node_modules/@docren/react-native-markdown/lib/module/components/Markdown.js
+@@ -14,9 +14,11 @@ const Markdown = /*#__PURE__*/memo(({
+   mergeStyle,
+   customBulletElement,
+   onLinkPress,
+-  extensions = []
++  extensions = [],
++  syntaxExtensions = []
+ }) => {
+   const tree = fromMarkdown(markdown, {
++    extensions: syntaxExtensions,
+     mdastExtensions: [resolveReference(), getKeyFromMarkdown(), ...extensions]
+   });
+   const renderer = new ASTRenderer({
+diff --git a/node_modules/@docren/react-native-markdown/lib/typescript/src/components/Markdown.types.d.ts b/node_modules/@docren/react-native-markdown/lib/typescript/src/components/Markdown.types.d.ts
+index 9252905..6c90192 100644
+--- a/node_modules/@docren/react-native-markdown/lib/typescript/src/components/Markdown.types.d.ts
++++ b/node_modules/@docren/react-native-markdown/lib/typescript/src/components/Markdown.types.d.ts
+@@ -1,7 +1,9 @@
+ import type { Extension } from 'mdast-util-from-markdown';
++import type { Extension as SyntaxExtension } from 'micromark-util-types';
+ import type { ASTRendererOptions } from './ASTRenderer.types';
+ export interface MarkdownProps extends ASTRendererOptions {
+     markdown: Uint8Array | string;
+     extensions?: Extension[];
++    syntaxExtensions?: SyntaxExtension[];
+ }
+ //# sourceMappingURL=Markdown.types.d.ts.map
+\ No newline at end of file
+diff --git a/node_modules/@docren/react-native-markdown/src/components/ASTRenderer.ts b/node_modules/@docren/react-native-markdown/src/components/ASTRenderer.ts
+index eefb82f..f1e5076 100644
+--- a/node_modules/@docren/react-native-markdown/src/components/ASTRenderer.ts
++++ b/node_modules/@docren/react-native-markdown/src/components/ASTRenderer.ts
+@@ -130,11 +130,6 @@ export default class ASTRenderer {
+       }
+     }
+ 
+-    if (type === 'table' || type === 'tableCell' || type === 'tableRow') {
+-      console.warn(`Skipping unsupported node type: ${type}`);
+-      return null;
+-    }
+-
+     const renderFunction = this.getRenderFunction(type);
+     this.debugLog(parentStack.length, type);
+ 
+diff --git a/node_modules/@docren/react-native-markdown/src/components/Markdown.tsx b/node_modules/@docren/react-native-markdown/src/components/Markdown.tsx
+index cfd0d1e..884ffe3 100644
+--- a/node_modules/@docren/react-native-markdown/src/components/Markdown.tsx
++++ b/node_modules/@docren/react-native-markdown/src/components/Markdown.tsx
+@@ -16,8 +16,10 @@ const Markdown = memo(
+     customBulletElement,
+     onLinkPress,
+     extensions = [],
++    syntaxExtensions = [],
+   }: MarkdownProps) => {
+     const tree = fromMarkdown(markdown, {
++      extensions: syntaxExtensions,
+       mdastExtensions: [
+         resolveReference(),
+         getKeyFromMarkdown(),
+diff --git a/node_modules/@docren/react-native-markdown/src/components/Markdown.types.ts b/node_modules/@docren/react-native-markdown/src/components/Markdown.types.ts
+index 8be651b..1d2419a 100644
+--- a/node_modules/@docren/react-native-markdown/src/components/Markdown.types.ts
++++ b/node_modules/@docren/react-native-markdown/src/components/Markdown.types.ts
+@@ -1,7 +1,9 @@
+ import type { Extension } from 'mdast-util-from-markdown';
++import type { Extension as SyntaxExtension } from 'micromark-util-types';
+ import type { ASTRendererOptions } from './ASTRenderer.types';
+ 
+ export interface MarkdownProps extends ASTRendererOptions {
+   markdown: Uint8Array | string;
+   extensions?: Extension[];
++  syntaxExtensions?: SyntaxExtension[];
+ }

@@ -1,0 +1,10 @@
+node_modules
+expo/node_modules
+src
+expo
+dist
+expo/dist
+.git
+protocols
+scripts
+tsconfig.json

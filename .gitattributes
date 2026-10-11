@@ -1,0 +1,11 @@
+# Force git/GitHub to render source files as textual diffs even if a stray
+# control byte would otherwise trip binary auto-detection. (A literal NUL in
+# src/memory/index.ts once made the whole file show as "Binary file not
+# shown" on GitHub — see #317/#318.) The `diff` attribute only affects diff
+# rendering; it does not normalize line endings, so it introduces no churn.
+*.ts   diff
+*.tsx  diff
+*.js   diff
+*.jsx  diff
+*.json diff
+*.md   diff

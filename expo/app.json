@@ -1,0 +1,16 @@
+{
+  "expo": {
+    "name": "brane",
+    "slug": "brane",
+    "version": "0.1.0",
+    "scheme": "brane",
+    "platforms": ["web"],
+    "backgroundColor": "#141414",
+    "web": {
+      "bundler": "metro",
+      "output": "single",
+      "themeColor": "#141414"
+    },
+    "plugins": ["expo-router"]
+  }
+}

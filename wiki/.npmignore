@@ -1,0 +1,16 @@
+# Backstop denylist for the published npm package.
+#
+# The operative mechanism is package.json "files", which ships only
+# "wiki/shared" — the shared subdirectory is the publication unit, and
+# everything directly under wiki/ is fold-local by construction. This
+# list is dormant under that rule. It activates only if "files" is ever
+# loosened back to the whole directory ("wiki") or a glob ("wiki/*.md"),
+# keeping draft artifacts from leaking into a publish even then.
+#
+# Files listed here remain fully visible to the local daemon's wiki
+# tools (list_wiki / search_wiki / read_wiki) — this only curates the
+# tarball. It does not keep anything private: every file in this
+# directory is in the source repository npm publishes from
+# (docs/releasing.md), so a page that must stay private does not belong
+# in this checkout at all.
+*.scribe.json

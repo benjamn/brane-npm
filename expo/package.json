@@ -1,0 +1,54 @@
+{
+  "name": "brane-app",
+  "version": "0.3.0",
+  "private": true,
+  "license": "AGPL-3.0-or-later",
+  "main": "expo-router/entry",
+  "scripts": {
+    "start": "expo start",
+    "web": "expo start --web",
+    "build:web": "expo export --platform web && node scripts/gen-precache.mjs",
+    "sync:katex": "node scripts/sync-katex.mjs",
+    "sync:pdfjs": "node scripts/sync-pdfjs.mjs",
+    "postinstall": "patch-package"
+  },
+  "dependencies": {
+    "@docren/react-native-markdown": "^0.8.5",
+    "@expo/metro-runtime": "~55.0.9",
+    "ansi_up": "^6.0.6",
+    "expo": "^55",
+    "expo-constants": "~55.0.13",
+    "expo-linking": "~55.0.12",
+    "expo-router": "~55.0.12",
+    "expo-status-bar": "~55.0.5",
+    "katex": "^0.18.4",
+    "mdast-util-gfm-autolink-literal": "^2.0.1",
+    "mdast-util-gfm-table": "^2.0.0",
+    "mdast-util-gfm-task-list-item": "^2.0.0",
+    "mdast-util-math": "^3.0.0",
+    "micromark-extension-gfm-autolink-literal": "^2.1.0",
+    "micromark-extension-gfm-table": "^2.1.1",
+    "micromark-extension-gfm-task-list-item": "^2.1.0",
+    "micromark-extension-math": "^3.1.0",
+    "pdfjs-dist": "^6.0.227",
+    "react": "19.2.5",
+    "react-dom": "19.2.5",
+    "react-native": "0.83.4",
+    "react-native-safe-area-context": "~5.7.0",
+    "react-native-screens": "~4.24.0",
+    "react-native-web": "^0.21.0",
+    "react-qr-code": "^2.0.21"
+  },
+  "devDependencies": {
+    "@babel/core": "^7.25.0",
+    "@types/react": "~19.2.14",
+    "patch-package": "^8.0.1",
+    "typescript": "~5.9.2"
+  },
+  "overrides": {
+    "postcss": "^8.5.10",
+    "decode-uri-component": "^0.5.0",
+    "uuid": "^11.1.1",
+    "katex": "$katex"
+  }
+}
