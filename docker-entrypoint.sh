@@ -109,8 +109,18 @@ fi
 # Clear stale daemon meta from the persisted volume — PIDs from a previous
 # container life are never valid in a new container, but may collide with
 # a live PID here (e.g., tailscaled) and trip the "already running" check.
+#
+# Not the ports, though. Every melded device's URL and every fold's hook
+# config names them, so the daemon comes back on the ones it had, as it
+# does after any restart; clearing them moved both on every boot. The main
+# port's row still goes (the fold registration below waits for the daemon
+# to write it back), so it is read first and handed back with --port. The
+# HTTP fallback port's row stays: the daemon only ever takes it as a hint
+# for what to bind, and nothing reads it while daemon_tls is unset.
+PREV_PORT=$(gosu brane sqlite3 /home/brane/.brane/brane.db \
+    "SELECT value FROM meta WHERE key = 'daemon_port';" 2>/dev/null || true)
 gosu brane sqlite3 /home/brane/.brane/brane.db \
-    "DELETE FROM meta WHERE key IN ('daemon_pid','daemon_token','daemon_port','daemon_version','daemon_tls','daemon_http_port','daemon_socket');" \
+    "DELETE FROM meta WHERE key IN ('daemon_pid','daemon_token','daemon_port','daemon_version','daemon_tls','daemon_socket');" \
     2>/dev/null || true
 
 # Register the default workspace as a fold (idempotent) once the daemon is up.
@@ -138,4 +148,7 @@ gosu brane sqlite3 /home/brane/.brane/brane.db \
 # with EADDRNOTAVAIL. Binding broadly is safe here — Fly's only reachable
 # networks are Tailscale and the private 6PN, both of which the userspace
 # IP filter already restricts.
-exec gosu brane brane daemon start --foreground --bind 0.0.0.0 "$@"
+# --port: the port the last boot had (above). If something else holds it
+# now, the daemon exits before writing its row back, so the next boot finds
+# none and lets the OS pick.
+exec gosu brane brane daemon start --foreground --bind 0.0.0.0 ${PREV_PORT:+--port "$PREV_PORT"} "$@"

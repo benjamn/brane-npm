@@ -19,6 +19,7 @@ import { useCallback, useEffect, useState } from "react";
 import { ActivityIndicator, Modal, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { listDeviceTokens, revokeDeviceToken, type ConnectionParams, type DeviceToken } from "@/lib/api";
 import { relPart } from "@shared/narrative-format";
+import { originHost } from "@shared/app-origin";
 
 function ago(ms: number): string {
   const p = relPart(ms);
@@ -51,6 +52,9 @@ function rowDetail(t: DeviceToken): string {
   const seen = t.connected ? "connected now" : t.last_used_at !== null ? `seen ${ago(t.last_used_at)}` : "never used";
   const parts = [seen];
   if (t.remote_addr) parts.push(t.remote_addr);
+  // Which copy of the app the device runs: the hosted shell, a staging or
+  // fork hostname, or a daemon's own bundle. A label, never a gate.
+  if (t.app_origin) parts.push(`via ${originHost(t.app_origin)}`);
   parts.push(added);
   return parts.join(" · ");
 }

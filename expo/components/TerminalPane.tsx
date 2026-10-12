@@ -1290,6 +1290,10 @@ const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(function 
       void handlePasteButton();
       return;
     }
+    if (control.action === "clear-history") {
+      channelRef.current.clearHistory();
+      return;
+    }
     if (control.keys) {
       channelRef.current.sendKeys(control.keys);
       trackScrollIntent(control.keys);

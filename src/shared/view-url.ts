@@ -4,8 +4,8 @@
  *  This lives in `shared/` rather than in the screen that uses it because the
  *  URL is the only carrier of view state between two *origins*. Tab layout and
  *  last-visited file are also kept in `sessionStorage`, which is origin-scoped,
- *  and the Isolate menu item hops between `brane.organelle.dev` and a daemon's
- *  own host —
+ *  and the Isolate menu item hops between the shared app's origin and a
+ *  daemon's own host —
  *  so whatever isn't in the query string does not survive the jump. Keeping
  *  the serialization and the link builder in one pure module means the URL you
  *  get from tapping around and the URL Isolate hands the other origin are the
@@ -20,15 +20,17 @@ export const CANONICAL_TABS: Tab[] = ["chat", "terminal", "files"];
 
 const VALID_TABS = new Set<Tab>(CANONICAL_TABS);
 
-/** The multi-daemon SPA, which can be melded to any number of daemons. Every
- *  other host is a single daemon serving its own bundle. */
-export const SHARED_SPA_HOST = "brane.organelle.dev";
-
-/** True when this page is a single daemon's own bundle rather than the shared
- *  SPA — i.e. when "isolated" is the *current* state and the menu offers the
- *  way back out. */
-export function isIsolatedHost(hostname: string): boolean {
-  return hostname !== SHARED_SPA_HOST;
+/** True when this page is served by the daemon it is connected to — a
+ *  daemon's own bundle — so "isolated" is the *current* state and the menu
+ *  offers the way back out. Everything else is a shared app: the hosted
+ *  shell, a staging hostname, a fork's deployment, a dev server. The app
+ *  carries no host of its own, so this is a comparison with no constant in
+ *  it: `window.location.host` against the connection's host, which a
+ *  daemon's bundle fills from the same `location.host` (expo/lib/api.ts).
+ *  Hosts are case-insensitive; the port is part of the answer, since a
+ *  daemon's bundle is reached on its port. */
+export function isIsolated(pageHost: string, daemonHost: string): boolean {
+  return pageHost.toLowerCase() === daemonHost.toLowerCase();
 }
 
 export function parseActiveTab(tab?: string): Tab {
@@ -145,7 +147,7 @@ export function withoutConnectionHash(hash: string): string {
 /** Where a link puts the daemon's address and token: the URL **fragment**.
  *
  *  A query string is part of the HTTP request, so `?host=…&token=…` on a
- *  `brane.organelle.dev` link reached Cloudflare's edge with the daemon's
+ *  shared-app link reached its host's edge with the daemon's
  *  bearer token in it, landed in the daemon's own request log on an Isolate
  *  hop, and was fetched by every chat app's link unfurler when a meld URL was
  *  pasted. A fragment is never sent to any server: the browser keeps it, the
@@ -162,8 +164,9 @@ export function connectionFragment(conn: { host: string; token: string }, includ
 }
 
 export interface ViewUrlOptions {
-  /** `window.location.hostname` of the page building the link. */
-  hostname: string;
+  /** `window.location.host` of the page building the link: the hostname,
+   *  plus the port when there is one. */
+  host: string;
   /** `window.location.protocol` — `"https:"` or `"http:"`. */
   protocol: string;
   /** `window.location.search`, leading `?` optional. */
@@ -172,6 +175,11 @@ export interface ViewUrlOptions {
   path: string;
   /** Where the daemon actually lives, and the token to reach it with. */
   conn: { host: string; token: string };
+  /** The shared app's host, as the daemon reports it (`app_domain` in
+   *  `GET /api/status`): where a daemon's own bundle hops *out* to. A shared
+   *  app never needs it, since the shared origin is its own; a daemon's
+   *  bundle without it has no way out, and `buildIsolateUrl` says so. */
+  appHost?: string | null;
   /** Live view state, from `viewParams`. */
   view: Record<string, string | undefined>;
 }
@@ -195,7 +203,7 @@ export type UrlTarget = "shared" | "daemon";
  *  view rides in the query string; the connection rides in the fragment, which
  *  no server ever sees (`connectionFragment`).
  */
-export function buildViewUrl(target: UrlTarget, opts: ViewUrlOptions): string {
+export function buildViewUrl(target: UrlTarget, opts: ViewUrlOptions): string | null {
   const { protocol, search, path, conn, view } = opts;
   const params = new URLSearchParams(search);
   for (const [key, value] of Object.entries(view)) {
@@ -207,26 +215,43 @@ export function buildViewUrl(target: UrlTarget, opts: ViewUrlOptions): string {
   const rest = (query ? `?${query}` : "") + connectionFragment(conn, target === "shared");
 
   if (target === "shared") {
-    // The shared SPA serves every daemon, so it has to be told which one.
-    return `https://${SHARED_SPA_HOST}${path}${rest}`;
+    // A shared app serves every daemon, so it has to be told which one.
+    const origin = sharedOrigin(opts);
+    return origin === null ? null : `${origin}${path}${rest}`;
   }
   // A daemon's own bundle already knows which daemon it is; only the token is
   // needed. The scheme follows the page building the link, so a plain-http LAN
   // session doesn't hand out https links that won't load.
-  const scheme = protocol === "https:" ? "https" : "http";
-  return `${scheme}://${conn.host}${path}${rest}`;
+  return `${pageScheme(protocol)}://${conn.host}${path}${rest}`;
+}
+
+function pageScheme(protocol: string): "https" | "http" {
+  return protocol === "https:" ? "https" : "http";
+}
+
+/** The shared app's origin, from where this page stands. On a shared app it
+ *  is this page's own origin, scheme included (a dev server is plain http).
+ *  On a daemon's own bundle it is whatever the daemon reports as its
+ *  `app_domain`, over https, since that is a hosted shell; with none
+ *  reported there is no shared origin to name, and the answer is null. */
+function sharedOrigin(opts: ViewUrlOptions): string | null {
+  if (!isIsolated(opts.host, opts.conn.host)) return `${pageScheme(opts.protocol)}://${opts.host}`;
+  return opts.appHost ? `https://${opts.appHost}` : null;
 }
 
 /** Isolate / Unisolate: the same view, on the *other* kind of origin. Which
- *  way it goes is just where you are now. */
-export function buildIsolateUrl(opts: ViewUrlOptions): string {
-  return buildViewUrl(isIsolatedHost(opts.hostname) ? "shared" : "daemon", opts);
+ *  way it goes is just where you are now. Null only from a daemon's own
+ *  bundle that was told no `appHost`: there is nowhere to hop out to, and
+ *  the menu should say so rather than offer a link. */
+export function buildIsolateUrl(opts: ViewUrlOptions): string | null {
+  return buildViewUrl(isIsolated(opts.host, opts.conn.host) ? "shared" : "daemon", opts);
 }
 
 /** Meld: the same view, on another *device*. The origin kind is the one thing
  *  that must not change — someone reaching the daemon directly can't be handed
- *  a shared-SPA link, and someone on the shared app expects to stay there — so
- *  where Isolate flips, this stays put. */
+ *  a shared-app link, and someone on a shared app expects to stay on *that*
+ *  one — so where Isolate flips, this stays put. It never needs `appHost`:
+ *  the shared origin it names is the page's own, so it is never null. */
 export function buildMeldUrl(opts: ViewUrlOptions): string {
-  return buildViewUrl(isIsolatedHost(opts.hostname) ? "daemon" : "shared", opts);
+  return buildViewUrl(isIsolated(opts.host, opts.conn.host) ? "daemon" : "shared", opts)!;
 }

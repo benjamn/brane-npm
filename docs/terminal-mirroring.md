@@ -209,3 +209,35 @@ left a hairline between lit rows. Each row starts on a fractional pixel, and
 each layer anti-aliased its own edge onto the shared boundary pixel. A
 full-cell gradient with hard stops (linear for bars, conic for quadrants)
 has the span's own edges, and the browser snaps those to whole pixels.
+
+## Launch residue in scrollback
+
+The mirror shows the pane's whole scrollback (`capture-pane -S -`), so
+anything a TUI drew and abandoned before the session settled is on screen for
+good. The case that prompted this section: a new fold opened under a stack of
+yellow `────` rules and three copies of "Accessing workspace". It was Claude
+Code's folder-trust dialog, redrawn at each width the window passed through:
+first created at `lastTerminalSize` (the last size applied to *any* session),
+then fitted to the viewer. Every stale frame went up into history, reflowed,
+its full-width rules now wider than the pane. The live screen was clean; the
+input box was pushed off the bottom only because the history above it was
+tall and wide.
+
+Two things address it, and neither touches the live screen:
+
+- **Start at the viewer's size.** The app remembers the grid its terminal pane
+  last measured (`lastTerminalSize()`, `expo/lib/terminal.ts`) and sends it as
+  `terminal_size` on `POST /api/spawn` and `POST /api/run`. The daemon starts
+  the tmux session at that grid when it is usable (`parseTerminalSize`,
+  `src/tmux.ts`, pinned by `src/test/terminal-size.test.ts`) and falls back to
+  `lastTerminalSize` otherwise, which is still what `brane spawn` from a shell
+  gets. A session that launches at the size it is watched at isn't resized
+  through a TUI's first screen.
+- **Clear scrollback, on request.** The 🦾 menu's last row, `Clear 🧽`, sends
+  `{ type: "clear_history" }` on the terminal socket; the daemon runs `tmux
+  clear-history` on the pane and forces a capture. The client trims to the
+  frame's `totalLines`, so the stale lines go with the next frame. It discards
+  history, so it is only ever the operator's explicit action, never automatic.
+
+A fold Claude has never been trusted in still shows the dialog once. Accepting
+it on the operator's behalf was considered and left for the operator to decide.

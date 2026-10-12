@@ -6,6 +6,11 @@ source of truth; these pages are an opinionated projection of them
 ([why-wikis-work](why-wikis-work.md)). When a page disagrees with the
 narrative record, the record wins.
 
+Citations like `claude-4c7289d1:42` point into the maintainer's own brane,
+where the argument was first made. Outside it they don't resolve; they
+record provenance, and in your own brane the same form links your own
+narratives.
+
 New here? Read in order:
 
 1. [sedimentary-superintelligence](sedimentary-superintelligence.md) —

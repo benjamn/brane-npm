@@ -47,7 +47,8 @@ import SpawnDialog from "@/components/SpawnDialog";
 import MembraneEmpty from "@/components/MembraneEmpty";
 import QrModal from "@/components/QrModal";
 import DevicesLayer from "@/components/DevicesLayer";
-import { buildIsolateUrl, isIsolatedHost, terminalOnlyHref } from "@shared/view-url";
+import { buildIsolateUrl, isIsolated, terminalOnlyHref } from "@shared/view-url";
+import { useAppHost } from "@/lib/appHost";
 import { sortNarratives } from "@shared/narrative-sort";
 import { isAwaiting, awaitingGlow, AWAITING_STATUS, NOT_AWAITING_STATUS } from "@shared/narrative-status";
 import { isListScrollKey, listScrollTarget } from "@shared/list-scroll-keys";
@@ -84,6 +85,8 @@ function NarrativeCard({
   setMenuVisible,
   hits,
   onHitPress,
+  isolated,
+  appHost,
 }: {
   item: NarrativeInfo;
   conn: ConnectionParams | null;
@@ -105,6 +108,11 @@ function NarrativeCard({
   setMenuVisible: (open: boolean) => void;
   hits?: SearchHit[];
   onHitPress?: (nid: string, seq: number) => void;
+  /** Whether this page is the daemon's own bundle, and if so where Isolate
+   *  hops out to. Decided once by the screen, not per card: a row renders
+   *  hundreds of times and must not each probe the daemon. */
+  isolated: boolean;
+  appHost: string | null;
 }) {
 
   // The three words name what the narrative is *doing*, not what a column
@@ -203,25 +211,24 @@ function NarrativeCard({
                   status: item.status,
                   mcpConnected: item.mcp_connected,
                   archived: !!item.archived,
-                  isIsolated: typeof window !== "undefined" && isIsolatedHost(window.location.hostname),
+                  isIsolated: isolated,
+                  canIsolate: !isolated || !!appHost,
                   onMeld: () => { setMenuVisible(false); onMeld(); },
                   onIsolate: () => {
                     setMenuVisible(false);
                     if (!conn || typeof window === "undefined") return;
                     // No view to carry from a list row — the link travels as
                     // the bare narrative and opens on its default tab.
-                    window.open(
-                      buildIsolateUrl({
-                        hostname: window.location.hostname,
-                        protocol: window.location.protocol,
-                        search: window.location.search,
-                        path: `/${item.id}`,
-                        conn,
-                        view: {},
-                      }),
-                      "_blank",
-                      "noopener,noreferrer",
-                    );
+                    const url = buildIsolateUrl({
+                      host: window.location.host,
+                      protocol: window.location.protocol,
+                      search: window.location.search,
+                      path: `/${item.id}`,
+                      conn,
+                      appHost,
+                      view: {},
+                    });
+                    if (url) window.open(url, "_blank", "noopener,noreferrer");
                   },
                   onExport: () => {
                     setMenuVisible(false);
@@ -1110,6 +1117,11 @@ export default function NarrativeList() {
     subscribeActivity,
     unsubscribeActivity,
   } = useBrane();
+  // Whether this page is the daemon's own bundle, and if so where Isolate
+  // hops out to: the host the daemon reports, never one the app knows. Asked
+  // once here and handed to every card.
+  const isolated = typeof window !== "undefined" && !!conn && isIsolated(window.location.host, conn.host);
+  const appHost = useAppHost(conn, isolated);
   const [narratives, setNarratives] = useState<NarrativeInfo[]>([]);
   const [branes, setBranes] = useState<BraneInfo[]>([]);
   const braneRefetchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -1703,6 +1715,8 @@ export default function NarrativeList() {
                 setMenuVisible={(open) => setOpenMenuNid(open ? item.id : null)}
                 hits={hitsByNarrative.get(item.id)}
                 onHitPress={(nid, seq) => router.push(`/${nid}?scrollToSeq=${seq}`)}
+                isolated={isolated}
+                appHost={appHost}
               />
             )}
             onEndReached={

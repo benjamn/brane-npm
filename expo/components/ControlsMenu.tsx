@@ -12,7 +12,7 @@ export interface Control {
   emoji: string;      // operator-chosen glyph hint
   label: string;      // tooltip / a11y description
   keys?: string;      // tmux key name to send (omitted for custom actions)
-  action?: "transcript" | "paste";
+  action?: "transcript" | "paste" | "clear-history";
 }
 
 // Row 1 — common control sequences. Labels follow Claude Code's keybindings.md.
@@ -43,6 +43,12 @@ const NAV_CONTROLS: Control[] = [
   { code: "Page", emoji: "⬇️", label: "page down", keys: "NPage" },
 ];
 
+// Row 3 — not a key at all: drops the pane's tmux scrollback, where stale
+// redraws pile up (Claude's trust dialog drawn at every width a new session
+// passed through, say). The live screen is untouched; the history is gone, so
+// it sits on its own row rather than among keys pressed in passing.
+const CLEAR_HISTORY: Control = { code: "Clear", emoji: "🧽", label: "clear scrollback (keeps the screen)", action: "clear-history" };
+
 interface ControlsMenuProps {
   onControl: (control: Control) => void;
 }
@@ -70,9 +76,9 @@ export default function ControlsMenu({ onControl }: ControlsMenuProps) {
       onClick={() => {
         // Stay open on tap: many of these (Page up/down especially) are made to
         // be pressed repeatedly. Dismiss via outside-tap or the 🦾 toggle.
-        // Paste is the exception — it's one-shot, and the operator wants to
-        // see the terminal (or the fallback sheet) the moment it lands.
-        if (control.action === "paste") setOpen(false);
+        // Paste and Clear are the exceptions — one-shot, and the operator wants
+        // to see the terminal (or paste's fallback sheet) the moment they land.
+        if (control.action === "paste" || control.action === "clear-history") setOpen(false);
         onControl(control);
       }}
       style={{
@@ -160,6 +166,8 @@ export default function ControlsMenu({ onControl }: ControlsMenuProps) {
           <div style={commonGroupStyle}>{COMMON_CONTROLS.map(renderKeycap)}</div>
           <div style={{ height: 1, backgroundColor: `rgba(${menuHueRgb("blue")}, 0.25)` }} />
           <div style={navGroupStyle}>{NAV_CONTROLS.map(renderKeycap)}</div>
+          <div style={{ height: 1, backgroundColor: `rgba(${menuHueRgb("blue")}, 0.25)` }} />
+          <div style={{ display: "grid" }}>{renderKeycap(CLEAR_HISTORY)}</div>
         </MenuPanel>
       )}
     </div>

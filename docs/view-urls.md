@@ -3,7 +3,7 @@
 The query string of a narrative screen is not decoration — it is the only way
 a view travels. Active tab, pinned tabs, open file and line range are kept in
 `sessionStorage`, which is **origin-scoped**, and two menu items cross an
-origin: **Isolate** hops between `brane.organelle.dev` and a daemon's own
+origin: **Isolate** hops between a shared app's origin and a daemon's own
 bundle, and **Meld** hands a URL to another device. Whatever is not in the URL
 does not arrive.
 
@@ -15,15 +15,35 @@ tab, pin subset, path and line spec):
 |---|---|
 | `viewParams()` | The view as params, `undefined` for anything at its default — which is how `router.setParams` clears one |
 | `parseActiveTab()`, `parsePinnedTabs()`, `parseLineSpec()` | Read them back. Writer and reader live together on purpose: a param whose two halves sit in different modules drifts |
+| `isIsolated(pageHost, daemonHost)` | Whether this page is the daemon's own bundle: `location.host` against the connection's host, no constant in it |
 | `buildViewUrl(target, opts)` | The same narrative, same view, somewhere else |
-| `buildIsolateUrl()` / `buildMeldUrl()` | The same builder with one bit different — see below |
+| `buildIsolateUrl()` / `buildMeldUrl()` | The same builder with one bit different — see below. Isolate is `null` from a daemon's bundle that reported no app host |
 | `withoutConnectionParams()`, `withoutConnectionHash()` | Strip `host`/`token` from the query string and from the fragment, and leave everything else |
 | `connectionFragment()` | `#host=…&token=…` for the shared app, `#token=…` for a daemon's own bundle — the one place the connection is written into a URL, used by `buildViewUrl` and by `brane meld` |
 
 **Isolate flips the origin kind; Meld stays on it.** Isolate exists to change
-which app serves you. Meld aims at another *device* — hand a phone a shared-SPA
+which app serves you. Meld aims at another *device* — hand a phone a shared-app
 link while the operator is reaching the daemon directly, and the phone loads an
 app that has never heard of that daemon.
+
+**The app knows no host.** There is no constant naming `brane.organelle.dev`
+in the bundle, and `src/test/app-host-literal.test.ts` keeps it that way.
+"Isolated" means *this page is served by the daemon it is connected to*:
+`window.location.host` equal to the connection's host, which a daemon's own
+bundle fills from the same `location.host`. Everything else is a shared app,
+whichever host serves it: the hosted shell, a staging hostname, a fork's
+deployment, a dev server on `localhost`. From a shared app, Meld stays on
+*that* origin and Isolate hops in to the daemon; neither needs to be told a
+host. From a daemon's bundle, Isolate hops *out* to whatever the daemon
+reports as its `app_domain` in `GET /api/status` (`useAppHost`,
+`expo/lib/appHost.ts`, fetched before the tap, since a `window.open` after an
+await is a popup the browser blocks). A daemon that reports none, or cannot
+be reached for it, has no way out, and the menu leaves Isolate out rather
+than hand you a link to a host the app made up. `brane meld` reads the same
+config, so a fork changes `CONFIG_DEFAULTS.app_domain` and both its CLI and
+its daemons name its own shell. None of this is trust: the daemon accepts any
+origin (`SECURITY.md`, Authentication); the host only decides which copy of
+the app a browser loads.
 
 **Back undoes a jump, never a view change.** A jump pushes a history entry: to
 a different narrative (from the list, an `@nid` link, the switcher, Revive or
@@ -86,9 +106,9 @@ by resetting to the bare pathname, which would throw away the view that just
 arrived.
 
 **The connection rides in the fragment; the view rides in the query string.**
-A query string is part of the HTTP request. On a `brane.organelle.dev` link
-that meant the daemon's bearer token and tailnet hostname reached Cloudflare's
-edge with every meld; on an Isolate hop it landed in the daemon's own request
+A query string is part of the HTTP request. On a shared-app link that meant
+the daemon's bearer token and tailnet hostname reached the shell host's edge
+with every meld; on an Isolate hop it landed in the daemon's own request
 log; and a meld URL pasted into iMessage or Slack handed it to the link
 unfurler. A fragment is never sent to any server, so `#host=…&token=…` is what
 every link carries now (`connectionFragment`), and `?token=` is read only for

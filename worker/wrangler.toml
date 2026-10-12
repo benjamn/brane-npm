@@ -1,6 +1,16 @@
 name = "brane"
 compatibility_date = "2026-03-04"
 
+# The shared app's host, declared here so the Cloudflare dashboard holds no
+# state the repository doesn't. It is CONFIG_DEFAULTS.app_domain
+# (src/commands/config.ts), which src/test/wrangler-route.test.ts keeps in
+# step; a fork changes both. No workers.dev alias: this route is the only
+# place the shared app is served.
+routes = [{ pattern = "brane.organelle.dev", custom_domain = true }]
+workers_dev = false
+
+# What a release deploys here is its tarball's expo/dist, unpacked into place
+# by .github/workflows/deploy-app.yml; nothing builds it (docs/releasing.md).
 [assets]
 directory = "../expo/dist"
 not_found_handling = "single-page-application"

@@ -1,6 +1,6 @@
 # Web App (Expo)
 
-The Expo app runs as a web PWA served by the daemon (and optionally via Cloudflare Workers at `brane.organelle.dev`). It provides:
+The Expo app runs as a web PWA served by the daemon (and optionally via Cloudflare Workers at `brane.organelle.dev`, which serves the app of the `latest` npm release and is deployed only by a release — see [The app ships with the release](releasing.md#the-app-ships-with-the-release)). It provides:
 
 - **Narrative list** — shows all narratives with summary, status, and MCP connection indicator
 - **Spawn button** — header button that opens fold picker modal (or spawns directly with 1 fold)

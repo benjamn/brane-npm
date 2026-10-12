@@ -24,7 +24,7 @@ until someone lists it. An agent also may not revive or prompt a
 
 | Method | Path | Purpose |
 |--------|------|---------|
-| `GET` | `/api/status` | Daemon status (brane_id, hostname, username, pid, port, uptime_ms, `tls: { state, expires_at, ... }`) |
+| `GET` | `/api/status` | Daemon status (brane_id, hostname, username, pid, port, uptime_ms, `tls: { state, expires_at, ... }`, `app_domain`: the shared app's host, where a daemon's own bundle hops out to on Isolate — see [View URLs](view-urls.md)) |
 | `GET` | `/api/narratives?archived=1` | List narratives (excludes archived by default) |
 | `GET` | `/api/narratives/recent?since=&search=&status=&fold=&limit=&archived=1&brane_ids=` | Recently active narratives — the browse half of the `narrative_info` MCP tool; every brane unless `brane_ids` scopes it |
 | `PATCH` | `/api/narratives/:id/archive` | Archive/unarchive a narrative |
@@ -36,9 +36,9 @@ until someone lists it. An agent also may not revive or prompt a
 | `GET` | `/api/folds?archived=1` | List registered fold directories (includes brane_id; archived hidden unless asked) |
 | `POST` | `/api/folds` | Register a fold (`{ path, brane_id? }`) — idempotent; see [Folds API](#folds-api) for who may register what |
 | `PATCH` | `/api/folds/archive` | Soft-hide/unhide a fold (`{ path, archived }`) — never deletes the row |
-| `POST` | `/api/spawn` | Spawn agent (`{ agent, fold_path, role?, model?, re?, extra_args? }`) — used by both the web app and `brane spawn` |
+| `POST` | `/api/spawn` | Spawn agent (`{ agent, fold_path, role?, model?, re?, extra_args?, terminal_size? }`) — used by both the web app and `brane spawn` |
 | `GET` | `/api/spawn-history` | Recent distinct `launch_args`, most-recent first (spawn dialog quick-fill) |
-| `POST` | `/api/run` | Run non-agent command (`{ command, fold_path }`) |
+| `POST` | `/api/run` | Run non-agent command (`{ command, fold_path, terminal_size? }`) |
 | `GET` | `/api/run-history` | Commands utility sessions have run before (by basename), most-recent first — the spawn dialog's Utility list; derived from `narratives`, nothing stored |
 | `POST` | `/api/revive/:nid` | Revive a dead agent session (`{ prompt?, no_prompt?, agent? }`) — see [Revive API](#revive-api) |
 | `POST` | `/api/search` | Semantic search over narrative history (`{ query, limit?, brane_ids? }`) |
@@ -85,7 +85,7 @@ Control WebSocket commands (client → server):
 
 ## Spawn API
 
-`POST /api/spawn` accepts `{ agent, fold_path, role?, model?, re?, extra_args? }` and returns the new narrative object with `mcp_connected` status. The fold picker modal lets the operator choose which registered fold to spawn into.
+`POST /api/spawn` accepts `{ agent, fold_path, role?, model?, re?, extra_args?, terminal_size? }` and returns the new narrative object with `mcp_connected` status. `terminal_size` (`{ cols, rows }`) is the grid the requesting viewer's terminal pane last measured; the session starts at it rather than at the last size applied to any session, so its first screen is not redrawn through a resize — see [Launch residue in scrollback](terminal-mirroring.md#launch-residue-in-scrollback). `/api/run` takes it too. The fold picker modal lets the operator choose which registered fold to spawn into. The dialog's Agent list is the built-in adapters plus an "Other…" entry that takes any agent name, as `brane spawn <agent>` does: the daemon accepts any `[A-Za-z0-9_-]+` name it can find with `which`, and an agent without an adapter gets tmux, MCP config and mirroring but no session resumption. What is typed there splits like the args box, so the first word is the agent and the rest lead its `extra_args`.
 
 This is the **only** spawn path. The web UI calls it, and so does `brane spawn` — the CLI resolves a daemon (starting one if needed), POSTs here with `fold_path` set from `cwd` and `-- <args>` as `extra_args`, and then does only terminal-shaped work with the response: `--meld`'s QR code and `--attach`. It does not open the database or create tmux sessions itself, so tmux bootstrap (`ensureTmux`), terminal sizing, and MCP config writing happen once, daemon-side, identically for both callers. Two consequences follow from that and are intended: the agent binary is resolved against the *daemon's* `PATH`, and MCP config files point at the checkout the *daemon* runs from — not the CLI you invoked.
 

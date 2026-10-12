@@ -38,10 +38,10 @@ function classifyHost(host: string): Reach {
 }
 
 // Build the meld URL from current connection params, a target path, and the
-// view being looked at. Mirrors `brane meld`: either a brane.organelle.dev
-// wrapper (when the operator is currently using the hosted app) or a direct
-// daemon URL otherwise — buildMeldUrl keeps the origin kind, since the QR is
-// aimed at another device, not another origin.
+// view being looked at. Mirrors `brane meld`: either this same shared app
+// (when the operator is on one, whichever host serves it) or a direct daemon
+// URL otherwise — buildMeldUrl keeps the origin kind, since the QR is aimed
+// at another device, not another origin.
 //
 // The daemon's host comes from the active connection, not from
 // window.location, because the URL-clean step in _layout.tsx strips it after
@@ -55,7 +55,7 @@ function buildUrl(
 ): string {
   if (typeof window === "undefined") return "";
   return buildMeldUrl({
-    hostname: window.location.hostname,
+    host: window.location.host,
     protocol: window.location.protocol,
     search: window.location.search,
     path,

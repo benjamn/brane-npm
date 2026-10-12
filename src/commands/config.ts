@@ -1,12 +1,30 @@
 import { defineCommand } from "citty";
 import type Database from "better-sqlite3";
 import { openDatabase } from "../db/schema.js";
+import { cleanAppHost } from "../shared/app-origin.js";
 
 // Well-known config keys and their defaults
 export const CONFIG_DEFAULTS: Record<string, string> = {
+  // The hostname that serves the shared app: where `brane meld` points a QR
+  // unless `--app` says otherwise, and what `GET /api/status` reports so a
+  // daemon's own bundle knows where Isolate hops out to. Never a trust
+  // decision: the daemon accepts any origin (SECURITY.md, Authentication).
+  // A fork changes this one line, and its daemons point at its own shell.
   app_domain: "brane.organelle.dev",
   "session-affinity.enabled": "true",
 };
+
+/** The shared app's host from a configured or given `app_domain` value,
+ *  reduced to a host (`cleanAppHost`); a blank one means the default, so
+ *  `brane config app_domain ""` or `brane meld --app ""` can never make a QR
+ *  for `https:///`. Every reader applies this one rule — `brane meld`
+ *  (`buildMeldUrl`) and `GET /api/status` (`statusAppDomain`) — so a daemon's
+ *  bundle and the QR always agree on where the shared app is. Lives here,
+ *  beside the default it falls back to, so the daemon need not import the
+ *  meld command to read it. */
+export function resolveAppHost(value: string | null | undefined): string {
+  return cleanAppHost(value ?? "") || cleanAppHost(CONFIG_DEFAULTS.app_domain);
+}
 
 /** Reads a config key. Pass the caller's `db` whenever it has one: the daemon
  *  and every test do. Without it this opens `~/.brane/brane.db` itself — right

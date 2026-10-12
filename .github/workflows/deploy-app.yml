@@ -1,0 +1,109 @@
+name: Deploy app
+
+# Puts the web app of one published npm version on the shared app host (the
+# `brane` worker in worker/wrangler.toml). The bytes come from the registry,
+# not from a build: the deploy unpacks `npm pack <name>@<version>` and serves
+# its expo/dist, so the shared app is exactly what the tarball every daemon
+# installs carries. A merge to main deploys nothing; staging is Isolate on a
+# daemon running main (docs/releasing.md, "The app ships with the release").
+#
+# The shared app serves the `latest` dist-tag and nothing else, so the version
+# must be `latest` when this runs. release.yml calls it after an ordinary
+# (not pre-release) publish. Run it by hand to redeploy after a Cloudflare
+# failure, or to roll back: `npm dist-tag add <name>@<version> latest`, then
+# dispatch that version.
+on:
+  workflow_call:
+    inputs:
+      version:
+        description: Published version to deploy (a leading v is ignored)
+        required: true
+        type: string
+    secrets:
+      CLOUDFLARE_API_TOKEN:
+        required: true
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Published version to deploy, which must be the latest dist-tag (a leading v is ignored)
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    name: Deploy the app
+    runs-on: ubuntu-latest
+    # Two deploys never race; the second waits for the first. On the job, not
+    # the workflow: a called workflow's top-level concurrency is applied to the
+    # caller's run, which would queue the whole Release behind a dispatch.
+    concurrency:
+      group: deploy-app
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      # Right after a publish the registry can 404 the version, or still name
+      # the previous one as latest, for seconds to a minute. Wait for both
+      # rather than deploy what latest used to be.
+      - name: Wait for the version to be latest on the registry
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          name=$(node -p 'require("./package.json").name')
+          version="${VERSION#v}"
+          for delay in 5 10 20 30 60 60 60; do
+            published=$(npm view "$name@$version" version 2>/dev/null || true)
+            latest=$(npm view "$name" dist-tags.latest 2>/dev/null || true)
+            if [ "$published" = "$version" ] && [ "$latest" = "$version" ]; then
+              echo "$name@$version is published and is latest."
+              echo "NAME=$name" >> "$GITHUB_ENV"
+              echo "VERSION=$version" >> "$GITHUB_ENV"
+              exit 0
+            fi
+            echo "Registry has $name@$version: '${published}', latest: '${latest}'. Retrying in ${delay}s."
+            sleep "$delay"
+          done
+          echo "$name@$version is not the latest dist-tag on the registry." >&2
+          echo "The shared app serves latest only. To roll back, run" >&2
+          echo "  npm dist-tag add $name@$version latest" >&2
+          echo "and dispatch this workflow again." >&2
+          exit 1
+
+      # expo/dist is gitignored, so the checkout has none; the tarball's goes
+      # where worker/wrangler.toml looks for it.
+      - name: Unpack the published app
+        run: |
+          pack="$RUNNER_TEMP/pack"
+          mkdir -p "$pack"
+          (cd "$pack" && npm pack "$NAME@$VERSION" --silent)
+          tar xzf "$pack"/*.tgz -C "$pack"
+          unpacked=$(node -p 'const p = require(process.argv[1]); p.name + "@" + p.version' "$pack/package/package.json")
+          if [ "$unpacked" != "$NAME@$VERSION" ]; then
+            echo "The tarball says $unpacked, not $NAME@$VERSION." >&2
+            exit 1
+          fi
+          if [ ! -f "$pack/package/expo/dist/index.html" ]; then
+            echo "$NAME@$VERSION carries no expo/dist/index.html." >&2
+            exit 1
+          fi
+          mkdir -p expo
+          cp -R "$pack/package/expo/dist" expo/dist
+
+      - name: Verify precache
+        run: node expo/scripts/check-precache.mjs
+
+      # wrangler at the version this checkout's lockfile pins, without
+      # installing the whole project.
+      - name: Deploy to Cloudflare Workers
+        run: |
+          wrangler=$(node -p 'require("./package-lock.json").packages["node_modules/wrangler"].version')
+          cd worker && npx --yes "wrangler@$wrangler" deploy
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}

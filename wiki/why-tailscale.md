@@ -15,8 +15,8 @@ And the design decision that followed:
 The daemon holds the record of every agent's narration, the live
 terminal of every session, and a bearer token that grants all of it.
 The only cross-network path to any of that is Tailscale. Everything
-else brane does on top of it — TLS, bearer tokens, origin checks, the
-TCP-level IP filter — is hardening *inside* the Tailscale perimeter.
+else brane does on top of it — TLS, bearer tokens, the TCP-level IP
+filter — is hardening *inside* the Tailscale perimeter.
 
 ## Invisibility, not authentication
 
@@ -234,10 +234,11 @@ a same-machine fallback [claude-0c9d425b:5]:
 Meld's host preference is now: Tailscale DNS hostname if present, else
 `127.0.0.1` (`src/commands/meld.ts`). An operator who wants to
 advertise a LAN IP on a trusted home network can pass `--host <ip>`
-explicitly — an opt-in made with knowledge of the network. The daemon's
-origin check still whitelists any origin ending in `.ts.net` for CORS
-and WebSocket upgrades (`isTailscaleOrigin` in `src/daemon/server.ts`). None of this
-requires a flag or an env var; if Tailscale is running, brane uses it.
+explicitly — an opt-in made with knowledge of the network. The daemon
+has no origin allowlist: the token is the credential, and which origin a
+device runs the app from is recorded on its token rather than judged
+(`SECURITY.md`, Authentication). None of this requires a flag or an env
+var; if Tailscale is running, brane uses it.
 
 ## The WARP escape valve
 
@@ -309,7 +310,7 @@ longer-form version of:
 > model."*
 
 Everything brane does to harden the daemon (TCP-level IP filter,
-128-bit bearer token, TLS on the hostname, origin checks) is hardening
+128-bit bearer token, TLS on the hostname) is hardening
 that assumes the network path is already narrowed. Tailscale is what
 narrows it.
 

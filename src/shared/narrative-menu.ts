@@ -43,6 +43,12 @@ export interface NarrativeMenuOptions {
   archived?: boolean;
   /** Whether the app is currently served from a daemon's own bundle. */
   isIsolated?: boolean;
+  /** False when there is nowhere for Isolate to go: a daemon's own bundle
+   *  whose daemon reported no app host (`app_domain` in `/api/status`). The
+   *  item is left out rather than offered as a link to a host the app made
+   *  up. A shared app can always hop in to the daemon, so it is never false
+   *  there. */
+  canIsolate?: boolean;
   /** How many messages the chat currently has selected. Nonzero splits Export
    *  into the two sides of that selection, and says so on each item — the
    *  selection lives in the detail screen, and this is the only place the menu
@@ -69,6 +75,7 @@ export function narrativeMenuItems({
   mcpConnected,
   archived = false,
   isIsolated = false,
+  canIsolate = true,
   selectedCount = 0,
   onMeld,
   onIsolate,
@@ -88,11 +95,13 @@ export function narrativeMenuItems({
   const isExternal = role === "external";
   return [
     { icon: "🖖", label: "Meld", onPress: onMeld },
-    {
-      icon: isIsolated ? "🏘️" : "🏠",
-      label: isIsolated ? "Unisolate" : "Isolate",
-      onPress: onIsolate,
-    },
+    ...(canIsolate
+      ? [{
+          icon: isIsolated ? "🏘️" : "🏠",
+          label: isIsolated ? "Unisolate" : "Isolate",
+          onPress: onIsolate,
+        }]
+      : []),
     // With a selection, Export becomes two items — the picks, or everything but
     // the picks — because a selection is as often "these are the interesting
     // ones" as "these are the ones nobody else should read". Both items name

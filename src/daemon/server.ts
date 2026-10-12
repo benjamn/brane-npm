@@ -58,8 +58,8 @@ import { signalEventFields, signalStanding } from "./signal-source.js";
 import { AGENT_LOOPBACK_REFUSAL, AGENT_REVIVE_REFUSAL, agentRefusal, agentReviveRefusal } from "./agent-scope.js";
 import { DbTokenStore, bootstrapTokens, legacyTokenWarning, parseTokenHashes, liveAgentTokenId, mintAgentToken, recordLauncher, settleAgentLaunch, verifyAgentToken } from "../db/tokens.js";
 import { closeSocketsOf, listTokensRoute, socketOwners, retireTokens } from "./token-routes.js";
-import { getConfig } from "../commands/config.js";
-import { doSpawn, buildGooseExtensionArg, reestablishMcpConfigArgs, braneTmuxEnv, resolveAgentCommand, LIVE_LOOP_PROMPT } from "../commands/spawn.js";
+import { getConfig, resolveAppHost } from "../commands/config.js";
+import { doSpawn, buildGooseExtensionArg, reestablishMcpConfigArgs, braneTmuxEnv, ensureHookConfig, resolveAgentCommand, LIVE_LOOP_PROMPT } from "../commands/spawn.js";
 import { ensureSessionAffinityConfig } from "../session-affinity.js";
 import { revivedContent, restartedContent } from "../shared/narrative-format.js";
 import { parseRecolorSalt } from "../shared/speaker-color.js";
@@ -81,7 +81,7 @@ import { getTailscaleIps, getTailscaleIpsAsync } from "../tailscale.js";
 import { addressesToBind, nextProbeDelay, TAILSCALE_PROBE_MAX_MS } from "./tailscale-rebind.js";
 import { CertManager, type CertStatus } from "./cert-manager.js";
 import { KeepAwake } from "./keep-awake.js";
-import { resolveTmux, ensureTmux, newTmuxSession } from "../tmux.js";
+import { resolveTmux, ensureTmux, newTmuxSession, parseTerminalSize } from "../tmux.js";
 import { INHERITED_AGENT_ENV, unsetAgentEnvPrefix } from "../agent-env.js";
 import { highlight } from "../highlight.js";
 import { browseFold, openFoldSource, parseOffsetParam } from "../files/browse.js";
@@ -260,6 +260,15 @@ export function reviveNarrative(
   }
 
   // Same agent — use resume args
+
+  // Point the fold's tool-call hooks at this daemon before anything else can
+  // fail. The config names a port, and a daemon that came back on another
+  // one (its old port was taken, or a Fly boot cleared the hint) leaves it
+  // naming a dead one: every tool call then fails its hook, and the chat
+  // stops showing tool rows. doSpawn does this for fresh sessions; a revive
+  // builds its launch here, so it has to as well (claude-nkrks0of:23).
+  ensureHookConfig(db, effectiveAgent, absoluteFoldPath, nid);
+
   const agentCommand = resolveAgentCommand(effectiveAgent);
 
   // The revived session's agent token. Minted with the previous one left
@@ -403,76 +412,47 @@ interface NarrativeRow {
   last_activity?: number | null;
 }
 
-function isLocalhostOrigin(origin: string): boolean {
-  try {
-    const url = new URL(origin);
-    return url.hostname === "localhost" || url.hostname === "127.0.0.1";
-  } catch {
-    return false;
-  }
+/** What `GET /api/status` reports as `app_domain`: the config, reduced to a
+ *  host exactly as `brane meld` reduces it (`resolveAppHost`), so an operator
+ *  who stored it as a URL (`brane config app_domain https://staging.example/`)
+ *  gets a working Isolate link from a daemon's bundle rather than
+ *  `https://https://…`, and a blank value means the default on both sides.
+ *  The app reads a missing field, from a daemon older than this, as "no way
+ *  out". */
+export function statusAppDomain(db: Database.Database): string {
+  return resolveAppHost(getConfig("app_domain", db));
 }
 
-function isAppDomainOrigin(origin: string, appDomain: string): boolean {
-  try {
-    const url = new URL(origin);
-    // Match exact domain or any subdomain
-    return url.hostname === appDomain || url.hostname.endsWith(`.${appDomain}`);
-  } catch {
-    return false;
-  }
-}
-
-function isSameOrigin(origin: string, ...serverPorts: number[]): boolean {
-  try {
-    const url = new URL(origin);
-    const originPort = parseInt(url.port, 10);
-    return serverPorts.some((p) => originPort === p);
-  } catch {
-    return false;
-  }
-}
-
-function isTailscaleOrigin(origin: string): boolean {
-  try {
-    const url = new URL(origin);
-    return url.hostname.endsWith(".ts.net");
-  } catch {
-    return false;
-  }
-}
-
-function isAllowedOrigin(origin: string, appDomain: string, ...serverPorts: number[]): boolean {
-  if (isLocalhostOrigin(origin)) return true;
-  if (isSameOrigin(origin, ...serverPorts)) return true;
-  if (isAppDomainOrigin(origin, appDomain)) return true;
-  if (isTailscaleOrigin(origin)) return true;
-  return false;
-}
-
-export function setCorsHeaders(
-  req: IncomingMessage,
-  res: ServerResponse,
-  appDomain: string,
-  ...serverPorts: number[]
-): void {
-  const origin = req.headers.origin;
-  if (origin && isAllowedOrigin(origin, appDomain, ...serverPorts)) {
-    res.setHeader("Access-Control-Allow-Origin", origin);
-    res.setHeader("Access-Control-Allow-Methods", "GET, POST, PATCH, OPTIONS");
-    res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
-    res.setHeader("Access-Control-Allow-Credentials", "true");
-    // How long the browser may reuse this preflight's answer. Without it
-    // Chrome caches for 5 seconds, which on a fast link is indistinguishable
-    // from caching forever and on a slow one is indistinguishable from not
-    // caching at all: nearly every request pays its own extra round trip.
-    // Measured at 741ms RTT that was fatal rather than merely slow — see the
-    // note on `apiUrl` in expo/lib/api.ts. The bodiless requests avoid the
-    // preflight entirely now; this is for the ones that carry JSON and can't.
-    // A day is the practical ceiling (Chrome caps at 2h, Firefox 24h), and
-    // the answer being cached is safe: it does not authenticate anything,
-    // it only says which methods and headers this origin may use.
-    res.setHeader("Access-Control-Max-Age", "86400");
-  }
+/** CORS for a browser on any origin. The token is the only credential, so
+ *  the origin is not a trust decision: a page holding no token gets a 401
+ *  whatever its origin, and a page holding one can act with it from any
+ *  origin regardless of what is answered here — `?token=` is taken on any
+ *  method and bodies are parsed as JSON whatever their `Content-Type`, so a
+ *  `text/plain` POST needs no preflight. An origin allowlist would only
+ *  hide responses and refuse WebSockets. So the answer is `*`, never a
+ *  reflected origin, and never `Allow-Credentials`: brane sets no cookies,
+ *  and credentials with a reflected origin is the one CORS combination that
+ *  could ever be dangerous. This is what lets one daemon be fronted
+ *  by `brane.organelle.dev`, a staging hostname, a fork's own deployment, or
+ *  its own bundle, with nothing to configure. Which origin a device actually
+ *  runs is recorded on its token and shown in the Devices list, not gated
+ *  here (SECURITY.md, "Authentication"). */
+export function setCorsHeaders(req: IncomingMessage, res: ServerResponse): void {
+  if (req.headers.origin === undefined) return;
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader("Access-Control-Allow-Methods", "GET, POST, PATCH, OPTIONS");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
+  // How long the browser may reuse this preflight's answer. Without it
+  // Chrome caches for 5 seconds, which on a fast link is indistinguishable
+  // from caching forever and on a slow one is indistinguishable from not
+  // caching at all: nearly every request pays its own extra round trip.
+  // Measured at 741ms RTT that was fatal rather than merely slow — see the
+  // note on `apiUrl` in expo/lib/api.ts. The bodiless requests avoid the
+  // preflight entirely now; this is for the ones that carry JSON and can't.
+  // A day is the practical ceiling (Chrome caps at 2h, Firefox 24h), and
+  // the answer being cached is safe: it does not authenticate anything,
+  // it only says which methods and headers a page may use.
+  res.setHeader("Access-Control-Max-Age", "86400");
 }
 
 /** Below this, compressing costs more than it saves — a gzip header is 20-odd
@@ -742,9 +722,11 @@ export function authenticateRequest(
   now: number = Date.now(),
 ): AuthResult {
   const userAgent = req.headers["user-agent"];
+  const origin = req.headers.origin;
   const seen = {
     userAgent: typeof userAgent === "string" ? userAgent : null,
     remoteAddr: connectionLabel(req.socket),
+    origin: typeof origin === "string" ? origin : null,
   };
   if (!presented && isUnixConnection(req.socket)) {
     const refusal = tokenlessRefusal(req, braneDir);
@@ -922,7 +904,6 @@ export async function startServer(config: DaemonConfig): Promise<void> {
     return refusal;
   };
   const braneId = getBraneId(db);
-  const appDomain = getConfig("app_domain", db) ?? "brane.organelle.dev";
 
   let actualPort = port; // updated after bind when port is 0
   let actualHttpPort = 0; // HTTP fallback port (set when httpServer binds)
@@ -1296,7 +1277,7 @@ export async function startServer(config: DaemonConfig): Promise<void> {
     // response — including the early auth and error exits — can see whether
     // the client accepts gzip.
     trackRequest(res, req);
-    setCorsHeaders(req, res, appDomain, actualPort, actualHttpPort);
+    setCorsHeaders(req, res);
 
     // Handle CORS preflight
     if (req.method === "OPTIONS") {
@@ -1424,6 +1405,12 @@ export async function startServer(config: DaemonConfig): Promise<void> {
         // Listening on the address over HTTPS, but the HTTP fallback (the
         // local/LAN path) is not up there yet.
         fallback_missing: [...needFallback],
+        // The hostname that serves the shared app: where `brane meld` points
+        // a QR, and where a daemon's own bundle offers to hop *out* to
+        // (Isolate's way back). The app reads it from here rather than
+        // carrying a host of its own, so a fork's daemon names the fork's
+        // shell (src/shared/view-url.ts).
+        app_domain: statusAppDomain(db),
       });
       return;
     }
@@ -2173,7 +2160,7 @@ export async function startServer(config: DaemonConfig): Promise<void> {
     // Route: POST /api/spawn
     if (path === "/api/spawn" && req.method === "POST") {
       parseBody(req).then(async (body) => {
-        const { agent, role, model, re, fold_path, extra_args } = JSON.parse(body);
+        const { agent, role, model, re, fold_path, extra_args, terminal_size } = JSON.parse(body);
         if (!agent) {
           sendJson(res, 400, { error: "agent is required" });
           return;
@@ -2191,7 +2178,11 @@ export async function startServer(config: DaemonConfig): Promise<void> {
           if (extra_args.length > 0) extraArgs = extra_args;
         }
         await ensureTmux();
-        const result = doSpawn({ db, agent, role, model, re, foldPath: fold_path, extraArgs, terminalSize: lastTerminalSize ?? undefined });
+        // Start at the requesting viewer's grid when it sent one: a session
+        // resized right after launch redraws at each width, and the stale
+        // frames land in the scrollback the mirror shows.
+        const terminalSize = parseTerminalSize(terminal_size) ?? lastTerminalSize ?? undefined;
+        const result = doSpawn({ db, agent, role, model, re, foldPath: fold_path, extraArgs, terminalSize });
         recordLauncher(db, result.narrativeId, auth.record.id);
         const connectedNids = mcpConnectedNids(mcpClients);
         sendJson(res, 200, {
@@ -2217,7 +2208,7 @@ export async function startServer(config: DaemonConfig): Promise<void> {
     // Route: POST /api/run
     if (path === "/api/run" && req.method === "POST") {
       parseBody(req).then(async (body) => {
-        const { command, fold_path } = JSON.parse(body);
+        const { command, fold_path, terminal_size } = JSON.parse(body);
         if (!command || !Array.isArray(command) || command.length === 0) {
           sendJson(res, 400, { error: "command is required (array of strings)" });
           return;
@@ -2227,7 +2218,8 @@ export async function startServer(config: DaemonConfig): Promise<void> {
           return;
         }
         await ensureTmux();
-        const result = doRun({ db, command, foldPath: fold_path, terminalSize: lastTerminalSize ?? undefined });
+        const terminalSize = parseTerminalSize(terminal_size) ?? lastTerminalSize ?? undefined;
+        const result = doRun({ db, command, foldPath: fold_path, terminalSize });
         recordLauncher(db, result.narrativeId, auth.record.id);
         sendJson(res, 200, {
           narrative: {
@@ -2788,14 +2780,10 @@ export async function startServer(config: DaemonConfig): Promise<void> {
       return;
     }
     if (auth.retired) finishRotation({ retired: auth.retired });
-
-    // Origin check
-    const origin = req.headers.origin;
-    if (origin && !isAllowedOrigin(origin, appDomain, actualPort, actualHttpPort)) {
-      socket.write("HTTP/1.1 403 Forbidden\r\n\r\n");
-      socket.destroy();
-      return;
-    }
+    // No Origin check: the token above is the credential, and the origin it
+    // was presented from is now on its row for the Devices list to show
+    // (`authenticateRequest`). Every browser sends one on an upgrade, so
+    // this is the request that names which copy of the app a device runs.
 
     // WS: /ws/control — single real-time channel
     if (path === "/ws/control") {
@@ -2997,7 +2985,6 @@ export async function startServer(config: DaemonConfig): Promise<void> {
           "cannot reach this daemon; agents and signed-in devices still can",
       );
     }
-    console.log(`app domain: ${appDomain}`);
     console.log(`pid: ${process.pid}`);
 
     // Eagerly load the embedding model so first search is fast
@@ -7074,6 +7061,9 @@ function handleTerminalSocket(ws: WebSocket, nid: string): void {
         case "mouse":
           sendMouseToTmux(nid, msg);
           break;
+        case "clear_history":
+          clearTerminalHistory(nid);
+          break;
         case "refresh": {
           // Client requests a clean full frame. The client has just wiped its
           // <pre> DOM, so if we wait for `forceCapture()` alone the capture
@@ -7146,6 +7136,19 @@ function fitWindowToViewers(nid: string): void {
   if (cap.appliedSize && cap.appliedSize.cols === cols && cap.appliedSize.rows === rows) return;
   cap.appliedSize = { cols, rows };
   resizeTerminal(nid, cols, rows);
+}
+
+// The operator's "Clear scrollback": drop the pane's tmux history and leave
+// the live screen alone. Scrollback is where a TUI's stale redraws pile up —
+// Claude's trust dialog drawn at three widths before the session settled, its
+// full-width rules now wider than the pane — and the mirror shows all of it
+// (`capture-pane -S -`). Only ever on an explicit request, since it throws
+// that history away. The forced capture sends the shorter frame at once; the
+// client trims to `totalLines`, so the stale lines go with it.
+function clearTerminalHistory(nid: string): void {
+  execFile(resolveTmux(), ["clear-history", "-t", nid], { timeout: 2000 }, (err) => {
+    if (!err) terminalCaptures.get(nid)?.forceCapture();
+  });
 }
 
 function resizeTerminal(nid: string, cols: number, rows: number): void {

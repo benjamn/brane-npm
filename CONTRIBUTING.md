@@ -6,6 +6,14 @@ and every one of them was reviewed, authored, committed, and merged by a
 human. This document says what that means for anyone touching the
 repository, human or agent.
 
+## Issues and pull requests
+
+Brane is not a product, and its maintainer makes no support promise.
+Issues are open: bug reports and ideas are welcome there, and may or may
+not get an answer. Pull requests are limited to the maintainer; if you
+have a fix, describe it in an issue. Vulnerabilities go through private
+reporting instead, as `SECURITY.md` describes.
+
 ## How changes land
 
 - `main` takes pull requests only. The `protect-main-branch` ruleset
@@ -58,7 +66,8 @@ Responsibility for a change belongs to a person. Concretely:
   the work under the project's license. A model cannot hold copyright,
   enter an agreement, or take responsibility, so it cannot certify
   anything, and an agent must not write a sign-off on a human's behalf.
-- **Outside contributors sign off.** Add
+- **Outside contributors sign off**, should outside pull requests open
+  (for now they are maintainer-only; see above). Add
   `Signed-off-by: Your Name <you@example.com>` to each commit
   (`git commit -s`), certifying the
   [Developer Certificate of Origin 1.1](https://developercertificate.org/).
@@ -82,7 +91,8 @@ that way, including code whose origin you cannot account for.
 
 ## Security
 
-Do not open a public issue for a vulnerability. See `SECURITY.md`.
+Report a vulnerability privately, as `SECURITY.md` describes, not in an
+issue.
 
 ## For agents
 

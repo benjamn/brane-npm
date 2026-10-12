@@ -22,6 +22,20 @@ import {
  *  noise, and an unbounded header is not something to keep forever. */
 const MAX_USER_AGENT_LENGTH = 512;
 
+/** An `Origin` is `scheme://host[:port]`; anything longer than this is not
+ *  one a browser sent. */
+const MAX_ORIGIN_LENGTH = 256;
+
+/** An `Origin` header as it may be stored. The literal `null` is what a
+ *  browser sends for an opaque origin (a sandboxed iframe, a `file://` page,
+ *  some cross-origin redirects): it names nothing, and stored it would read
+ *  "via null" for good, since the first origin is never overwritten. So it
+ *  counts as no origin at all. */
+function cleanOrigin(value: string | null | undefined): string | null {
+  const clean = cleanSighting(value, MAX_ORIGIN_LENGTH);
+  return clean === "null" ? null : clean;
+}
+
 /** A header or address as it may be stored and shown: control characters
  *  become spaces (a newline in a list is a forged row), capped, or null. */
 function cleanSighting(value: string | null | undefined, max: number): string | null {
@@ -187,6 +201,12 @@ export interface TokenListing {
   /** The most recent request's, refreshed at most once a minute. */
   last_user_agent: string | null;
   last_remote_addr: string | null;
+  /** The `Origin` it was first presented from — which copy of the app the
+   *  device runs, a hosted one or a daemon's own — and the latest. Null until
+   *  a request carries one: browsers omit it on same-origin GETs, every
+   *  WebSocket upgrade has it. */
+  app_origin: string | null;
+  last_app_origin: string | null;
   /** When it was last presented from an address other than the first one:
    *  a copy, or the same device on another network. Sticky, so a copy used
    *  once is still flagged after the real device is back. */
@@ -220,6 +240,8 @@ interface TokenRow {
   remote_addr: string | null;
   last_user_agent: string | null;
   last_remote_addr: string | null;
+  app_origin: string | null;
+  last_app_origin: string | null;
   elsewhere_at: number | null;
   minted_by: string | null;
   owner_nid: string | null;
@@ -227,7 +249,7 @@ interface TokenRow {
 
 const ROW_COLUMNS =
   "id, kind, label, origin, created_at, last_used_at, user_agent, remote_addr, " +
-  "last_user_agent, last_remote_addr, elsewhere_at, minted_by, owner_nid";
+  "last_user_agent, last_remote_addr, app_origin, last_app_origin, elsewhere_at, minted_by, owner_nid";
 
 /** `ROW_COLUMNS` qualified as `t.`, plus what the minting token is, for the list. */
 const LISTING_COLUMNS =
@@ -281,6 +303,15 @@ export class DbTokenStore implements TokenStore {
       // Best-effort, like the stamp below; the next request retries it.
       else try { if (this.recordSighting(row.id, seen)) this.sighted.add(row.id); } catch {}
     }
+    // The origin is sighted on its own, not with the user agent and address:
+    // the first request to present a token is often a same-origin GET, which
+    // carries no Origin, so it is the first request that *has* one — in
+    // practice the control socket's upgrade — that names the app. Written
+    // once, like the sighting, and best-effort, like everything here.
+    const origin = seen ? cleanOrigin(seen.origin) : null;
+    if (origin !== null && row.app_origin === null) {
+      try { this.recordOrigin(row.id, origin); } catch {}
+    }
     // The first sighting names the row; the latest, and whether it came from
     // somewhere else, is what shows a copied token. An address is the one
     // thing about a request its sender cannot choose, so it is what's compared.
@@ -298,10 +329,11 @@ export class DbTokenStore implements TokenStore {
             `UPDATE tokens SET last_used_at = ?,
                last_user_agent = COALESCE(?, last_user_agent),
                last_remote_addr = COALESCE(?, last_remote_addr),
+               last_app_origin = COALESCE(?, last_app_origin),
                elsewhere_at = CASE WHEN ? THEN ? ELSE elsewhere_at END
              WHERE id = ?`,
           )
-          .run(now, userAgent, remoteAddr, elsewhere ? 1 : 0, now, row.id);
+          .run(now, userAgent, remoteAddr, origin, elsewhere ? 1 : 0, now, row.id);
         this.touched.set(row.id, now);
         if (elsewhere) this.elsewhereStamped.set(row.id, now);
       } catch {}
@@ -332,7 +364,20 @@ export class DbTokenStore implements TokenStore {
     // Best-effort: a rotation's replacement is inserted inside the rotation's
     // transaction, and a label for a list must never be what aborts it.
     if (opts.seen) try { if (this.recordSighting(record.id, opts.seen)) this.sighted.add(record.id); } catch {}
+    if (opts.seen) {
+      const origin = cleanOrigin(opts.seen.origin);
+      if (origin !== null) try { this.recordOrigin(record.id, origin); } catch {}
+    }
     return record;
+  }
+
+  /** Write a row's first origin, if it has none; the latest rides with
+   *  `last_used_at`. Never overwrites one, for the same reason as the
+   *  sighting: the row keeps naming the app that claimed it. */
+  private recordOrigin(id: string, origin: string): void {
+    this.db
+      .prepare("UPDATE tokens SET app_origin = ?, last_app_origin = COALESCE(last_app_origin, ?) WHERE id = ? AND app_origin IS NULL")
+      .run(origin, origin, id);
   }
 
   /** Write a row's first sighting, if it has none. Never overwrites one: the

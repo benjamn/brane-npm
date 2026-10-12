@@ -3,8 +3,7 @@ import assert from "node:assert/strict";
 import {
   type Tab,
   CANONICAL_TABS,
-  SHARED_SPA_HOST,
-  isIsolatedHost,
+  isIsolated,
   parseActiveTab,
   parsePinnedTabs,
   serializePinned,
@@ -19,14 +18,24 @@ import {
 } from "../shared/view-url.js";
 
 // These pin the URL contract that the Isolate menu item depends on. It opens
-// the same narrative on the *other* origin — the shared SPA at brane.organelle.dev
-// or a daemon's own bundle — and the tab layout and open file live in
-// sessionStorage, which is origin-scoped. So the query string is the only thing
-// that crosses, and every assertion below is really asking the same question:
-// does the view you were looking at survive the hop?
+// the same narrative on the *other* origin — a shared app, or a daemon's own
+// bundle — and the tab layout and open file live in sessionStorage, which is
+// origin-scoped. So the query string is the only thing that crosses, and every
+// assertion below is really asking the same question: does the view you were
+// looking at survive the hop?
+//
+// The app carries no host of its own: "isolated" is `location.host` equal to
+// the connection's host, and the way out of a daemon's bundle is whatever the
+// daemon reports as its app host. So the shared host here is deliberately not
+// brane's; any host serving the bundle is a shared app.
 
 const CONN = { host: "chalk.tail1234.ts.net", token: "tok-abc123" };
 const NID = "claude-0b9okmy2";
+/** The page's host while on a shared app. */
+const SHARED_SPA_HOST = "shell.example.test";
+/** What the daemon reports as its `app_domain`: where a daemon's own bundle
+ *  hops out to, which need not be the shared app the operator came from. */
+const APP_HOST = "app.example.test";
 
 /** Every subset of the tab set, as a Set — 8 of them. */
 function pinPowerset(): Set<Tab>[] {
@@ -190,12 +199,19 @@ describe("parseActiveTab / parsePinnedTabs", () => {
   });
 });
 
-describe("isIsolatedHost", () => {
-  it("treats only the shared SPA as un-isolated", () => {
-    assert.equal(isIsolatedHost(SHARED_SPA_HOST), false);
-    for (const host of ["chalk.tail1234.ts.net", "localhost", "127.0.0.1", "brane.example.com"]) {
-      assert.equal(isIsolatedHost(host), true, host);
+describe("isIsolated", () => {
+  it("is true only when the page is served by the daemon it is connected to", () => {
+    assert.equal(isIsolated(CONN.host, CONN.host), true);
+    assert.equal(isIsolated("CHALK.tail1234.TS.NET", CONN.host), true, "hosts are case-insensitive");
+    for (const host of [SHARED_SPA_HOST, "brane.organelle.dev", "main.brane.organelle.dev", "localhost:8081", "127.0.0.1:8081"]) {
+      assert.equal(isIsolated(host, CONN.host), false, host);
     }
+  });
+
+  it("counts the port: a daemon's bundle is reached on its port", () => {
+    assert.equal(isIsolated("192.168.1.20:7777", "192.168.1.20:7777"), true);
+    assert.equal(isIsolated("192.168.1.20:7777", "192.168.1.20:8888"), false);
+    assert.equal(isIsolated("192.168.1.20", "192.168.1.20:7777"), false);
   });
 });
 
@@ -286,13 +302,14 @@ describe("connectionFragment", () => {
     for (const c of CASES) {
       const view = params(c);
       const url = new URL(buildIsolateUrl({
-        hostname: CONN.host,
+        host: CONN.host,
+        appHost: APP_HOST,
         protocol: "https:",
         search: "?scrollToSeq=42",
         path: `/${NID}`,
         conn: CONN,
         view,
-      }));
+      })!);
       const cleaned = new URLSearchParams(withoutConnectionParams(url.search));
       assert.equal(cleaned.get("token"), null, label(c));
       assert.equal(cleaned.get("host"), null, label(c));
@@ -311,14 +328,17 @@ describe("connectionFragment", () => {
 describe("buildIsolateUrl", () => {
   it("targets the shared SPA when leaving a daemon, and melds it back", () => {
     const { origin, pathname, params, conn } = open(buildIsolateUrl({
-      hostname: CONN.host,
+      host: CONN.host,
+        appHost: APP_HOST,
       protocol: "https:",
       search: "?token=old-token",
       path: `/${NID}`,
       conn: CONN,
       view: viewParams("files", new Set(["terminal"]), "src/cli.ts", 4, 9),
-    }));
-    assert.equal(origin, `https://${SHARED_SPA_HOST}`);
+    })!);
+    // Out of a daemon's bundle, the target is what the daemon reported, not
+    // any host the app knows.
+    assert.equal(origin, `https://${APP_HOST}`);
     assert.equal(pathname, `/${NID}`);
     // The connection rides in the fragment, never the query string: a query
     // string is sent to the SPA's host, a fragment is not.
@@ -334,13 +354,13 @@ describe("buildIsolateUrl", () => {
 
   it("targets the daemon's own bundle when leaving the SPA, with no host param", () => {
     const { origin, pathname, params, conn } = open(buildIsolateUrl({
-      hostname: SHARED_SPA_HOST,
+      host: SHARED_SPA_HOST,
       protocol: "https:",
       search: `?host=${CONN.host}&token=${CONN.token}`,
       path: `/${NID}`,
       conn: CONN,
       view: viewParams("terminal", new Set(["chat"])),
-    }));
+    })!);
     assert.equal(origin, `https://${CONN.host}`);
     assert.equal(pathname, `/${NID}`);
     // The daemon's own bundle knows which daemon it is; host would be noise.
@@ -354,56 +374,82 @@ describe("buildIsolateUrl", () => {
   it("follows the page's scheme to the daemon, so plain http stays http", () => {
     for (const [protocol, scheme] of [["https:", "https"], ["http:", "http"]] as const) {
       const { origin } = open(buildIsolateUrl({
-        hostname: SHARED_SPA_HOST,
+        host: SHARED_SPA_HOST,
         protocol,
         search: "",
         path: `/${NID}`,
         conn: CONN,
         view: viewParams("chat", new Set()),
-      }));
+      })!);
       assert.equal(origin, `${scheme}://${CONN.host}`, protocol);
     }
-    // The shared SPA is https-only, whatever the page you left was served over.
+    // The hosted shell is https-only, whatever the daemon's bundle you left
+    // was served over (a LAN session is plain http).
     const { origin } = open(buildIsolateUrl({
-      hostname: "localhost",
+      host: "192.168.1.20:7777",
       protocol: "http:",
       search: "",
       path: `/${NID}`,
-      conn: CONN,
+      conn: { host: "192.168.1.20:7777", token: CONN.token },
+      appHost: APP_HOST,
       view: viewParams("chat", new Set()),
-    }));
-    assert.equal(origin, `https://${SHARED_SPA_HOST}`);
+    })!);
+    assert.equal(origin, `https://${APP_HOST}`);
+  });
+
+  it("has nowhere to go from a daemon's bundle that reported no app host, and says so", () => {
+    // A daemon from before `app_domain` rode in /api/status, or one the
+    // status probe could not reach: the menu hides Isolate rather than
+    // handing out a link to a host the app made up.
+    for (const appHost of [undefined, null, ""]) {
+      assert.equal(
+        buildIsolateUrl({ host: CONN.host, protocol: "https:", search: "", path: `/${NID}`, conn: CONN, appHost, view: {} }),
+        null,
+        String(appHost),
+      );
+    }
+    // From a shared app the way *in* needs no app host at all.
+    assert.ok(buildIsolateUrl({ host: SHARED_SPA_HOST, protocol: "https:", search: "", path: `/${NID}`, conn: CONN, view: {} }));
+  });
+
+  it("treats any host serving the bundle as a shared app, and hops in to the daemon from it", () => {
+    for (const host of ["brane.organelle.dev", "main.brane.organelle.dev", "fork.example", "localhost:8081"]) {
+      const { origin, conn } = open(buildIsolateUrl({ host, protocol: "https:", search: "", path: `/${NID}`, conn: CONN, view: {} })!);
+      assert.equal(origin, `https://${CONN.host}`, host);
+      assert.equal(conn.get("host"), null, host);
+    }
   });
 
   it("never carries the departing origin's credentials", () => {
     // A stale host/token in the search string is the danger case: the SPA's
     // meld params must not follow you onto the daemon's own origin, where the
     // host is wrong and the URL would carry a second copy of the token.
-    for (const hostname of [SHARED_SPA_HOST, CONN.host]) {
+    for (const host of [SHARED_SPA_HOST, CONN.host]) {
       const { params, conn } = open(buildIsolateUrl({
-        hostname,
+        host,
+        appHost: APP_HOST,
         protocol: "https:",
         search: "?host=stale.example.com&token=stale-token&tab=files",
         path: `/${NID}`,
         conn: CONN,
         view: viewParams("files", new Set()),
-      }));
-      assert.deepEqual(params.getAll("host"), [], hostname);
-      assert.deepEqual(params.getAll("token"), [], hostname);
-      assert.notEqual(conn.get("host"), "stale.example.com", hostname);
-      assert.deepEqual(conn.getAll("token"), [CONN.token], hostname);
+      })!);
+      assert.deepEqual(params.getAll("host"), [], host);
+      assert.deepEqual(params.getAll("token"), [], host);
+      assert.notEqual(conn.get("host"), "stale.example.com", host);
+      assert.deepEqual(conn.getAll("token"), [CONN.token], host);
     }
   });
 
   it("keeps params it doesn't model, like the scroll target", () => {
     const { params } = open(buildIsolateUrl({
-      hostname: SHARED_SPA_HOST,
+      host: SHARED_SPA_HOST,
       protocol: "https:",
       search: "?scrollToSeq=42&scrollTo=1787255699631&theme=dark",
       path: `/${NID}`,
       conn: CONN,
       view: viewParams("chat", new Set()),
-    }));
+    })!);
     assert.equal(params.get("scrollToSeq"), "42");
     assert.equal(params.get("scrollTo"), "1787255699631");
     assert.equal(params.get("theme"), "dark");
@@ -413,13 +459,13 @@ describe("buildIsolateUrl", () => {
     // This is why the URL alone isn't enough: what's in the address bar can be
     // older than what you're looking at.
     const { params } = open(buildIsolateUrl({
-      hostname: SHARED_SPA_HOST,
+      host: SHARED_SPA_HOST,
       protocol: "https:",
       search: "?tab=chat&pinned=chat&path=old/file.ts&line=1",
       path: `/${NID}`,
       conn: CONN,
       view: viewParams("files", new Set(["terminal", "files"]), "new/file.ts", 30, 40),
-    }));
+    })!);
     assert.equal(params.get("tab"), "files");
     assert.equal(params.get("pinned"), "terminal,files");
     assert.equal(params.get("path"), "new/file.ts");
@@ -428,13 +474,13 @@ describe("buildIsolateUrl", () => {
 
   it("lets live state at its default clear a stale param", () => {
     const { params } = open(buildIsolateUrl({
-      hostname: SHARED_SPA_HOST,
+      host: SHARED_SPA_HOST,
       protocol: "https:",
       search: "?tab=files&pinned=terminal&path=old/file.ts&line=1-9",
       path: `/${NID}`,
       conn: CONN,
       view: viewParams("chat", new Set()),
-    }));
+    })!);
     for (const key of ["tab", "pinned", "path", "line"]) {
       assert.equal(params.get(key), null, key);
     }
@@ -444,13 +490,13 @@ describe("buildIsolateUrl", () => {
     // The restore path deliberately skips router.setParams, so this is the
     // case the whole overlay exists for: an empty search string, a full view.
     const { params } = open(buildIsolateUrl({
-      hostname: SHARED_SPA_HOST,
+      host: SHARED_SPA_HOST,
       protocol: "https:",
       search: "",
       path: `/${NID}`,
       conn: CONN,
       view: viewParams("files", new Set(["chat", "files"]), "src/shared/view-url.ts", 12),
-    }));
+    })!);
     assert.equal(params.get("tab"), "files");
     assert.equal(params.get("pinned"), "chat,files");
     assert.equal(params.get("path"), "src/shared/view-url.ts");
@@ -459,8 +505,8 @@ describe("buildIsolateUrl", () => {
 
   it("accepts a search string with or without its leading ?", () => {
     const view = viewParams("files", new Set(), "a.ts");
-    const withQ = open(buildIsolateUrl({ hostname: SHARED_SPA_HOST, protocol: "https:", search: "?scrollToSeq=7", path: `/${NID}`, conn: CONN, view }));
-    const without = open(buildIsolateUrl({ hostname: SHARED_SPA_HOST, protocol: "https:", search: "scrollToSeq=7", path: `/${NID}`, conn: CONN, view }));
+    const withQ = open(buildIsolateUrl({ host: SHARED_SPA_HOST, protocol: "https:", search: "?scrollToSeq=7", path: `/${NID}`, conn: CONN, view })!);
+    const without = open(buildIsolateUrl({ host: SHARED_SPA_HOST, protocol: "https:", search: "scrollToSeq=7", path: `/${NID}`, conn: CONN, view })!);
     assert.equal(withQ.params.get("scrollToSeq"), "7");
     assert.deepEqual([...withQ.params], [...without.params]);
   });
@@ -468,24 +514,24 @@ describe("buildIsolateUrl", () => {
   it("encodes paths that would otherwise break the URL", () => {
     for (const path of ["docs/a file with spaces.md", "src/c#sharp.ts", "a/b/c/d.ts", "notes/100% done.md", "x?y=z.ts", "π/unicode.ts"]) {
       const url = buildIsolateUrl({
-        hostname: SHARED_SPA_HOST,
+        host: SHARED_SPA_HOST,
         protocol: "https:",
         search: "",
         path: `/${NID}`,
         conn: CONN,
         view: viewParams("files", new Set(), path),
-      });
-      assert.equal(open(url).params.get("path"), path, path);
+      })!;
+      assert.equal(open(url!).params.get("path"), path, path);
     }
   });
 
   it("preserves every view in the grid, in both directions", () => {
     for (const c of CASES) {
       const view = params(c);
-      for (const hostname of [SHARED_SPA_HOST, CONN.host]) {
+      for (const host of [SHARED_SPA_HOST, CONN.host]) {
         const { params: got, conn } = open(buildIsolateUrl({
-          hostname, protocol: "https:", search: "", path: `/${NID}`, conn: CONN, view,
-        }));
+          host, appHost: APP_HOST, protocol: "https:", search: "", path: `/${NID}`, conn: CONN, view,
+        })!);
         assert.equal(got.get("tab"), view.tab ?? null, label(c));
         assert.equal(got.get("pinned"), view.pinned ?? null, label(c));
         assert.equal(got.get("path"), view.path ?? null, label(c));
@@ -503,16 +549,18 @@ describe("buildIsolateUrl", () => {
     for (const c of CASES) {
       const view = params(c);
       const out = new URL(buildIsolateUrl({
-        hostname: SHARED_SPA_HOST,
+        host: SHARED_SPA_HOST,
         protocol: "https:",
         search: "?scrollToSeq=42",
         path: `/${NID}`,
         conn: CONN,
         view,
-      }));
+      })!);
       const back = new URL(buildIsolateUrl({
-        hostname: out.hostname,
+        host: out.host,
         protocol: out.protocol,
+        // The daemon's bundle is told where out is, as /api/status would.
+        appHost: APP_HOST,
         search: out.search,
         path: `/${NID}`,
         conn: CONN,
@@ -525,8 +573,10 @@ describe("buildIsolateUrl", () => {
           parseLineSpec(out.searchParams.get("line")).line,
           parseLineSpec(out.searchParams.get("line")).lineEnd,
         ),
-      }));
-      assert.equal(back.origin, `https://${SHARED_SPA_HOST}`, label(c));
+      })!);
+      // Back out lands where the daemon says, which is the page we left only
+      // if its app_domain names it; here it names APP_HOST.
+      assert.equal(back.origin, `https://${APP_HOST}`, label(c));
       assert.equal(back.pathname, `/${NID}`, label(c));
       assert.equal(back.searchParams.get("scrollToSeq"), "42", label(c));
       const conn = new URLSearchParams(back.hash.slice(1));
@@ -548,13 +598,13 @@ describe("buildMeldUrl", () => {
   // has never heard of that daemon.
   it("stays on the shared SPA when that's where you are", () => {
     const url = new URL(buildMeldUrl({
-      hostname: SHARED_SPA_HOST,
+      host: SHARED_SPA_HOST,
       protocol: "https:",
       search: "",
       path: `/${NID}`,
       conn: CONN,
       view: viewParams("files", new Set(["terminal"]), "src/cli.ts", 4, 9),
-    }));
+    })!);
     assert.equal(url.origin, `https://${SHARED_SPA_HOST}`);
     assert.equal(url.pathname, `/${NID}`);
     // The scanning device has never met this daemon, so it needs both — in
@@ -572,13 +622,14 @@ describe("buildMeldUrl", () => {
 
   it("stays on the daemon's own bundle when that's where you are", () => {
     const url = new URL(buildMeldUrl({
-      hostname: CONN.host,
+      host: CONN.host,
+        appHost: APP_HOST,
       protocol: "https:",
       search: "",
       path: `/${NID}`,
       conn: CONN,
       view: viewParams("terminal", new Set()),
-    }));
+    })!);
     assert.equal(url.origin, `https://${CONN.host}`);
     const conn = new URLSearchParams(url.hash.slice(1));
     assert.equal(conn.get("host"), null);
@@ -589,9 +640,10 @@ describe("buildMeldUrl", () => {
 
   it("goes the opposite way from Isolate, from either origin", () => {
     // The whole difference between the two menu items, stated once.
-    for (const hostname of [SHARED_SPA_HOST, CONN.host]) {
+    for (const host of [SHARED_SPA_HOST, CONN.host]) {
       const opts = {
-        hostname,
+        host,
+        appHost: APP_HOST,
         protocol: "https:",
         search: "",
         path: `/${NID}`,
@@ -599,19 +651,19 @@ describe("buildMeldUrl", () => {
         view: viewParams("chat", new Set()),
       };
       const meld = new URL(buildMeldUrl(opts));
-      const isolate = new URL(buildIsolateUrl(opts));
-      assert.equal(meld.hostname, hostname, `meld stays put from ${hostname}`);
-      assert.notEqual(isolate.hostname, hostname, `isolate flips from ${hostname}`);
+      const isolate = new URL(buildIsolateUrl(opts)!);
+      assert.equal(meld.host, host, `meld stays put from ${host}`);
+      assert.notEqual(isolate.host, host, `isolate flips from ${host}`);
     }
   });
 
   it("carries the same view Isolate would, over the whole grid", () => {
     for (const c of CASES) {
       const view = params(c);
-      for (const hostname of [SHARED_SPA_HOST, CONN.host]) {
+      for (const host of [SHARED_SPA_HOST, CONN.host]) {
         const url = new URL(buildMeldUrl({
-          hostname, protocol: "https:", search: "?scrollToSeq=42", path: `/${NID}`, conn: CONN, view,
-        }));
+          host, appHost: APP_HOST, protocol: "https:", search: "?scrollToSeq=42", path: `/${NID}`, conn: CONN, view,
+        })!);
         assert.equal(url.searchParams.get("scrollToSeq"), "42", label(c));
         assert.equal(new URLSearchParams(url.hash.slice(1)).get("token"), CONN.token, label(c));
         assert.equal(url.searchParams.get("token"), null, label(c));
@@ -625,13 +677,13 @@ describe("buildMeldUrl", () => {
   it("hands out an http link when the page itself is http", () => {
     // A LAN session without TLS must not emit https links the phone can't load.
     const url = new URL(buildMeldUrl({
-      hostname: "192.168.1.20:7777",
+      host: "192.168.1.20:7777",
       protocol: "http:",
       search: "",
       path: `/${NID}`,
       conn: { host: "192.168.1.20:7777", token: CONN.token },
       view: viewParams("chat", new Set()),
-    }));
+    })!);
     assert.equal(url.protocol, "http:");
   });
 });

@@ -67,10 +67,11 @@ import {
   serializePinned,
   viewParams,
   parseLineSpec,
-  isIsolatedHost,
+  isIsolated,
   buildIsolateUrl,
   terminalOnlyHref,
 } from "@shared/view-url";
+import { useAppHost } from "@/lib/appHost";
 import { visiblePanes, selectPane } from "@shared/pane-layout";
 
 interface PendingPayload {
@@ -708,6 +709,9 @@ type NarrativeHeaderProps = {
   onShowQr: () => void;
   onIsolateDaemon: () => void;
   isIsolated: boolean;
+  /** False on a daemon's own bundle that reported no app host: there is
+   *  nowhere to hop out to, so the menu leaves Isolate out. */
+  canIsolate: boolean;
 };
 
 const NarrativeHeader = memo(function NarrativeHeader({
@@ -734,6 +738,7 @@ const NarrativeHeader = memo(function NarrativeHeader({
   onShowQr,
   onIsolateDaemon,
   isIsolated,
+  canIsolate,
 }: NarrativeHeaderProps) {
   const [menuVisible, setMenuVisible] = useState(false);
   const selectedCount = useSelectedSeqs(selection).length;
@@ -795,6 +800,7 @@ const NarrativeHeader = memo(function NarrativeHeader({
               mcpConnected: narrativeMcpConnected,
               archived,
               isIsolated,
+              canIsolate,
               selectedCount,
               onMeld: () => { setMenuVisible(false); onShowQr(); },
               onIsolate: () => { setMenuVisible(false); onIsolateDaemon(); },
@@ -1930,21 +1936,27 @@ export default function ChatView() {
     [activeTab, pinnedTabs, filesPath, filesLine, filesLineEnd],
   );
 
+  // Whether this page is the daemon's own bundle, and if so where Isolate
+  // hops out to: the host the daemon reports, never one the app knows.
+  const isolated = typeof window !== "undefined" && !!conn && isIsolated(window.location.host, conn.host);
+  const appHost = useAppHost(conn, isolated);
+
   const handleIsolateDaemon = useCallback(() => {
     if (!conn || !nid) return;
     if (typeof window === "undefined") return;
     // The whole view goes across, because isolating crosses origins and the
     // URL is the only thing that survives that. buildIsolateUrl owns the rest.
     const url = buildIsolateUrl({
-      hostname: window.location.hostname,
+      host: window.location.host,
       protocol: window.location.protocol,
       search: window.location.search,
       path: `/${nid}`,
       conn,
+      appHost,
       view: currentView,
     });
-    window.open(url, "_blank", "noopener,noreferrer");
-  }, [conn, nid, currentView]);
+    if (url) window.open(url, "_blank", "noopener,noreferrer");
+  }, [conn, nid, currentView, appHost]);
 
   const handleArchiveToggle = useCallback(async () => {
     if (!conn || !nid) return;
@@ -2024,7 +2036,8 @@ export default function ChatView() {
         onRecolor={handleRecolor}
         onShowQr={() => setQrVisible(true)}
         onIsolateDaemon={handleIsolateDaemon}
-        isIsolated={typeof window !== "undefined" && isIsolatedHost(window.location.hostname)}
+        isIsolated={isolated}
+        canIsolate={!isolated || !!appHost}
       />
       <View style={styles.tabBar}>
         {CANONICAL_TABS.map((tab, idx) => {

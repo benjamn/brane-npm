@@ -319,6 +319,16 @@ device. Less obvious than it looks:
   both prefer the daemon's Unix socket, recorded as `daemon.sock` since it
   has no address (`connectionLabel`); one token used by any of them is not
   a copy.
+- **Which app a device runs is recorded too** (`app_origin`,
+  `last_app_origin`): the request's `Origin`, first and latest, shown as
+  "via main.brane.organelle.dev", or "via mac.tail1234.ts.net:47443" for a
+  daemon's own bundle. Browsers omit `Origin` on same-origin GETs, so the
+  first request that names a device often cannot name its app; the store
+  writes the first `Origin` it is given, which in practice is the control
+  socket's upgrade, and never overwrites it. It is a label, not a gate:
+  the token is the credential and the daemon accepts any origin
+  (`SECURITY.md`, Authentication), which is what lets a staging hostname
+  or a fork's deployment front the same daemon with nothing to configure.
 - **The address is the only field a token holder cannot choose.** The
   User-Agent and the label are both free text from whoever holds the
   token. So the app never uses the label as a row's title — a row with a
@@ -404,10 +414,18 @@ should guard revoking, as it will guard adding a device, is open: see
 - A revoke does not cut a streaming response already in flight (the Files
   search and `POST /api/absorb`, both NDJSON). Each is bounded work, not a
   listener, and ends on its own.
-- The WebSocket origin check compares only the port for same-origin and
-  accepts any `*.ts.net` host. Nothing rides on it today, since every
-  request must present a token; a passkey verifier will need its own exact
-  origin list.
+- There is no origin check, by design: every request must present a token,
+  and the origin it came from is recorded on the token rather than judged.
+  A passkey verifier will need its own exact origin list
+  ([Passkeys](passkeys.md)); the origins recorded per token are where one
+  would come from.
+- A token is not bound to the origin it was first used from. Pinning it
+  (refusing a different `Origin` afterwards) was considered and left out:
+  Isolate carries the same token between the hosted shell and a daemon's
+  own bundle ([View URLs](view-urls.md)), so the daemon's own origin would need
+  an exemption, and since `?token=` is taken on any method a pin would
+  protect only reads. If a phished link ever needs more than revocation,
+  this is the lever (claude-wh3d2hz2:20, point 4).
 - Fold registration treats a loopback peer as the operator's shell, so a
   forwarder to 127.0.0.1 (`tailscale serve`, an SSH tunnel) would make a
   remote caller look local.

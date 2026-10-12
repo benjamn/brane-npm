@@ -30,6 +30,10 @@ const AGENT_TYPES = ["claude", "gemini", "goose", "copilot", "cline", "codex", "
  *  run yet. Empty, which no history entry can be (`runHistory` excludes it). */
 const OTHER_UTILITY = "";
 
+/** The Agent dropdown's escape hatch: any executable on the daemon's PATH, as
+ *  `brane spawn <agent>` takes. Empty, which no entry in AGENT_TYPES is. */
+const OTHER_AGENT = "";
+
 type SpawnMode = "agent" | "utility";
 
 const nativeSelectChevron =
@@ -91,6 +95,7 @@ export interface SpawnDialogProps {
 export default function SpawnDialog({ visible, conn, re, defaultFoldPath, onClose, onSpawned }: SpawnDialogProps) {
   const [mode, setMode] = useState<SpawnMode>("agent");
   const [selectedAgent, setSelectedAgent] = useState<string>("claude");
+  const [otherAgent, setOtherAgent] = useState<string>("");
   const [utilities, setUtilities] = useState<string[]>([]);
   const [selectedUtility, setSelectedUtility] = useState<string>(OTHER_UTILITY);
   const [otherUtility, setOtherUtility] = useState<string>("");
@@ -104,6 +109,7 @@ export default function SpawnDialog({ visible, conn, re, defaultFoldPath, onClos
   const [foldPath, setFoldPath] = useState<string | null>(null);
   const [recentArgs, setRecentArgs] = useState<SpawnHistoryEntry[]>([]);
   const [spawning, setSpawning] = useState(false);
+  const [spawnError, setSpawnError] = useState<string | null>(null);
   // Fold management (add / archive) state.
   const [showHidden, setShowHidden] = useState(false);
   const [showAddFold, setShowAddFold] = useState(false);
@@ -155,6 +161,8 @@ export default function SpawnDialog({ visible, conn, re, defaultFoldPath, onClos
     setRole(re ? "twin" : "worker");
     setMode("agent");
     setSelectedAgent("claude");
+    setOtherAgent("");
+    setSpawnError(null);
     setSelectedUtility(OTHER_UTILITY);
     utilityTouched.current = false;
     setOtherUtility("");
@@ -246,6 +254,13 @@ export default function SpawnDialog({ visible, conn, re, defaultFoldPath, onClos
     .trim()
     .split(/\s+/)
     .filter((tok) => tok.length > 0);
+  // Same for "Other…" on the Agent side: the first word is the agent, the rest
+  // lead its args, so `aider --model x` spawns aider with `--model x`.
+  const typingAgent = !utilityMode && selectedAgent === OTHER_AGENT;
+  const agentCommand = (typingAgent ? otherAgent : selectedAgent)
+    .trim()
+    .split(/\s+/)
+    .filter((tok) => tok.length > 0);
 
   const handleGo = useCallback(async () => {
     if (!conn || spawning) return;
@@ -257,29 +272,38 @@ export default function SpawnDialog({ visible, conn, re, defaultFoldPath, onClos
       .split(/\s+/)
       .filter((tok) => tok.length > 0);
     if (utilityMode && utilityCommand.length === 0) return;
+    if (!utilityMode && agentCommand.length === 0) return;
+    const agentArgs = [...agentCommand.slice(1), ...extraArgs];
     setSpawning(true);
+    setSpawnError(null);
     try {
       const narrative = utilityMode
         ? await runUtility(conn, [...utilityCommand, ...extraArgs], fold)
         : await spawnAgent(
         conn,
-        selectedAgent,
+        agentCommand[0],
         fold,
         effectiveRole,
         undefined,
-        extraArgs.length > 0 ? extraArgs : undefined,
+        agentArgs.length > 0 ? agentArgs : undefined,
         re ?? undefined,
       );
       onSpawned(narrative);
       onClose();
     } catch (err) {
       console.error("Spawn failed:", err);
+      // A typed agent the daemon can't find ("Agent command not found: aidr")
+      // is the operator's to fix, so say so here rather than only in the console.
+      setSpawnError(err instanceof Error ? err.message : String(err));
     } finally {
       setSpawning(false);
     }
-  }, [conn, spawning, foldPath, folds, role, argsText, utilityMode, utilityCommand, selectedAgent, re, onSpawned, onClose]);
+  }, [conn, spawning, foldPath, folds, role, argsText, utilityMode, utilityCommand, agentCommand, re, onSpawned, onClose]);
 
-  const canSpawn = !spawning && !!foldPath && !(utilityMode && utilityCommand.length === 0);
+  const canSpawn =
+    !spawning &&
+    !!foldPath &&
+    (utilityMode ? utilityCommand.length > 0 : agentCommand.length > 0);
 
   return (
     <>
@@ -339,7 +363,21 @@ export default function SpawnDialog({ visible, conn, re, defaultFoldPath, onClos
                 {AGENT_TYPES.map((agent) => (
                   <option key={agent} value={agent}>{agent}</option>
                 ))}
+                <option value={OTHER_AGENT}>Other…</option>
               </select>
+            )}
+
+            {typingAgent && (
+              <TextInput
+                style={[styles.addInput, { marginTop: 6 }]}
+                value={otherAgent}
+                onChangeText={setOtherAgent}
+                placeholder="aider"
+                placeholderTextColor="#666"
+                autoCapitalize="none"
+                autoCorrect={false}
+                autoFocus
+              />
             )}
 
             {typingUtility && (
@@ -545,6 +583,7 @@ export default function SpawnDialog({ visible, conn, re, defaultFoldPath, onClos
             {foldError && <Text style={styles.foldErrorText}>{foldError}</Text>}
           </ScrollView>
 
+          {spawnError && <Text style={styles.foldErrorText}>{spawnError}</Text>}
           <Pressable
             style={[styles.addButton, { marginTop: 12 }, !canSpawn && { opacity: 0.5 }]}
             onPress={handleGo}

@@ -6,6 +6,7 @@ import {
   type DaemonEndpoint,
 } from "../daemon/client.js";
 import { announcePresenceWait } from "./meld.js";
+import { originHost } from "../shared/app-origin.js";
 
 /** What `POST /api/token/rotate` answers this shell. */
 export interface RotateResponse {
@@ -77,6 +78,8 @@ export interface TokenListRow {
   remote_addr: string | null;
   last_device?: string | null;
   last_remote_addr?: string | null;
+  app_origin?: string | null;
+  last_app_origin?: string | null;
   elsewhere_at?: number | null;
   minted_by_device?: string | null;
   current: boolean;
@@ -111,7 +114,7 @@ export function formatTokenList(tokens: TokenListRow[]): string {
           : "never used";
       const lines = [
         `${t.id}  ${name}${marks.length ? ` [${marks.join("; ")}]` : ""}`,
-        `    "${t.label}", created ${formatTime(t.created_at)}${t.minted_by_device ? ` by ${t.minted_by_device}` : ""}, ${seen}${t.remote_addr ? `, from ${t.remote_addr}` : ""}`,
+        `    "${t.label}", created ${formatTime(t.created_at)}${t.minted_by_device ? ` by ${t.minted_by_device}` : ""}, ${seen}${t.remote_addr ? `, from ${t.remote_addr}` : ""}${t.app_origin ? `, via ${originHost(t.app_origin)}` : ""}`,
       ];
       if (t.descendants?.length) lines.push(`    added ${t.descendants.length} device(s): ${t.descendants.join(", ")} (revoke --cascade takes them too)`);
       const running = (t.agents ?? []).filter((a) => a.status !== "ended");

@@ -103,6 +103,19 @@ describe("the remote daemon's address", () => {
     assert.deepEqual(loopback, { kind: "wait", reason: "the remote machine has no Tailscale name yet" });
   });
 
+  it("follows the remote daemon's app host, end to end, and ignores one that is not a string", () => {
+    // What `brane meld --connection` prints on a remote whose app_domain
+    // names a fork's shell, read back by `--remote` and turned into the QR.
+    const reply = readMeldReply(JSON.stringify({ ready: true, ...c, appHost: "https://Fork.example/" }));
+    assert.equal(reply.kind, "address");
+    if (reply.kind !== "address") return;
+    assert.equal(reply.connection.appHost, "fork.example");
+    assert.equal(new URL(meldLink(reply.connection, "tok")).host, "fork.example");
+    // A remote that sends something other than a string names no shell.
+    const odd = readMeldReply(JSON.stringify({ ready: true, ...c, appHost: 42 }));
+    assert.equal(odd.kind === "address" && odd.connection.appHost, undefined);
+  });
+
   it("calls an answer with no JSON line an older brane, which ran a plain meld", () => {
     assert.deepEqual(readMeldReply("\nScan this QR code to meld:\n█▀▀▀▀▀█\n"), { kind: "old" });
     assert.deepEqual(readMeldReply('{"daemonHost": 1}'), { kind: "old" });

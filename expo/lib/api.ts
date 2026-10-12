@@ -17,6 +17,7 @@ import {
 } from "@shared/api-request";
 import { withoutConnectionHash, withoutConnectionParams } from "@shared/view-url";
 import { formatSeqModeParam, formatSeqParam, type SeqSelectionMode } from "@shared/export-selection";
+import { lastTerminalSize } from "./terminal";
 
 export interface ConnectionParams {
   host: string; // "hostname:port" or empty for same-origin
@@ -112,6 +113,10 @@ export interface DaemonStatus {
   pid: number;
   port: number;
   uptime_ms: number;
+  /** The shared app's host, as the daemon's `app_domain` config names it:
+   *  where a daemon's own bundle hops out to (Isolate). Absent from a daemon
+   *  that predates it. */
+  app_domain?: string;
 }
 
 const STORAGE_KEY = "brane_conn";
@@ -511,6 +516,8 @@ export async function spawnAgent(
   if (extraArgs && extraArgs.length > 0) body.extra_args = extraArgs;
   // Predecessor narrative to twin from (server pins it to nid:seq + forces role "twin").
   if (re) body.re = re;
+  const size = lastTerminalSize();
+  if (size) body.terminal_size = size;
   const res = await fetchWithTimeout(apiUrl(conn, "/api/spawn"), {
     method: "POST",
     headers: JSON_HEADERS,
@@ -535,7 +542,7 @@ export async function runUtility(
   const res = await fetchWithTimeout(apiUrl(conn, "/api/run"), {
     method: "POST",
     headers: JSON_HEADERS,
-    body: JSON.stringify({ command, fold_path: foldPath }),
+    body: JSON.stringify({ command, fold_path: foldPath, terminal_size: lastTerminalSize() ?? undefined }),
   });
   if (!res.ok) {
     const data = await res.json().catch(() => ({}));
@@ -1138,6 +1145,10 @@ export interface DeviceToken {
   /** The same two, from the latest request. */
   last_device: string | null;
   last_remote_addr: string | null;
+  /** The `Origin` it was first presented from — which copy of the app the
+   *  device runs — and the latest. Null until a request carries one. */
+  app_origin: string | null;
+  last_app_origin: string | null;
   /** Last presented from an address other than its first: a copy of the
    *  token, or the same device on another network. */
   elsewhere_at: number | null;

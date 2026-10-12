@@ -1037,7 +1037,9 @@ export function doSpawn(opts: SpawnOptions): SpawnResult {
 }
 
 /** Set up MCP config and build launch command for an agent in a fold.
- *  Used by revive when switching agent types. */
+ *  Nothing calls this: switching agents on revive goes through
+ *  `doSpawn({ re })`, and a same-agent revive builds its own launch in
+ *  `reviveNarrative`, which has to refresh hook and affinity config itself. */
 export function prepareAgentLaunch(
   db: Database.Database,
   agent: string,
@@ -1138,7 +1140,11 @@ export const spawnCommand = defineCommand({
     },
     "meld-local": {
       type: "boolean",
-      description: "Use a direct daemon URL in the meld output instead of brane.organelle.dev",
+      description: "Use a direct daemon URL in the meld output instead of the shared app's",
+    },
+    "meld-app": {
+      type: "string",
+      description: "The shared app's host for the meld output (default: the `app_domain` config)",
     },
   },
   async run({ args }) {
@@ -1179,12 +1185,13 @@ export const spawnCommand = defineCommand({
 
       if (deviceToken) {
         const meldDb = openDatabase();
-        const { url, daemonHost, scheme, useLocal, isLoopbackFallback, tlsDegraded } = buildMeldUrl({
+        const { url, daemonHost, scheme, useLocal, appHost, isLoopbackFallback, tlsDegraded } = buildMeldUrl({
           db: meldDb,
           daemon: { port: endpoint.port, token: deviceToken },
           path: `/${narrative.id}`,
           host: args["meld-host"],
           local: args["meld-local"],
+          app: args["meld-app"],
         });
         meldDb.close();
 
@@ -1194,7 +1201,7 @@ export const spawnCommand = defineCommand({
         });
         console.log(`\n${url}\n`);
         console.log(`Daemon: ${daemonHost} (${scheme})`);
-        if (!useLocal) console.log(`App: brane.organelle.dev`);
+        if (!useLocal) console.log(`App: ${appHost}`);
         console.log(meldLapseNote());
         if (isLoopbackFallback) {
           console.log(

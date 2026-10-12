@@ -212,6 +212,75 @@ describe("describeUserAgent", () => {
   }
 });
 
+describe("which app a device runs", () => {
+  const MAIN = "https://main.brane.organelle.dev";
+  const APEX = "https://brane.organelle.dev";
+  const origins = (db: ReturnType<typeof setup>["db"], id: string) =>
+    db.prepare("SELECT app_origin, last_app_origin FROM tokens WHERE id = ?").get(id) as {
+      app_origin: string | null;
+      last_app_origin: string | null;
+    };
+
+  it("is recorded from the first request that carries an Origin, and the first is never overwritten", () => {
+    const { ring, phone, db } = setup();
+    // A same-origin GET carries no Origin: the device is named, the app not yet.
+    ring.authenticate("phone", T0 + 1, { userAgent: IPHONE_SAFARI, remoteAddr: "100.101.1.2" });
+    assert.deepEqual(origins(db, phone.id), { app_origin: null, last_app_origin: null });
+    // The control socket's upgrade carries one. Inside the once-a-minute
+    // throttle of the last-seen stamp, so the first write must carry both.
+    ring.authenticate("phone", T0 + 2, { userAgent: IPHONE_SAFARI, remoteAddr: "100.101.1.2", origin: MAIN });
+    assert.deepEqual(origins(db, phone.id), { app_origin: MAIN, last_app_origin: MAIN });
+    // The same token from another copy of the app: the first stands, the latest moves.
+    ring.authenticate("phone", T0 + 2 + 60_000, { userAgent: IPHONE_SAFARI, remoteAddr: "100.101.1.2", origin: APEX });
+    assert.deepEqual(origins(db, phone.id), { app_origin: MAIN, last_app_origin: APEX });
+    // A request with no Origin after that leaves the latest alone.
+    ring.authenticate("phone", T0 + 2 + 120_000, { userAgent: IPHONE_SAFARI, remoteAddr: "100.101.1.2" });
+    assert.deepEqual(origins(db, phone.id), { app_origin: MAIN, last_app_origin: APEX });
+  });
+
+  it("is listed, and shown as a host", () => {
+    const { ring, store, local, phone, db } = setup();
+    ring.authenticate("phone", T0 + 1, { userAgent: IPHONE_SAFARI, remoteAddr: "100.101.1.2", origin: MAIN });
+    const listed = listTokensRoute(store, local, T0 + 2).body.tokens.find((t) => t.id === phone.id)!;
+    assert.equal(listed.app_origin, MAIN);
+    assert.match(formatTokenList([listed]), /via main\.brane\.organelle\.dev/);
+    // A daemon's own bundle is an origin like any other, port included.
+    ring.authenticate("laptop", T0 + 1, { userAgent: MAC_CHROME, remoteAddr: "100.101.1.3", origin: "https://mac.tail1234.ts.net:47443" });
+    assert.match(formatTokenList(listTokensRoute(store, local, T0 + 2).body.tokens), /via mac\.tail1234\.ts\.net:47443/);
+    assert.equal(origins(db, local.id).app_origin, null);
+  });
+
+  it("is stored as text a list can show: control characters become spaces, and it is capped", () => {
+    const { ring, phone, db } = setup();
+    ring.authenticate("phone", T0 + 1, { userAgent: IPHONE_SAFARI, origin: "https://evil.example\r\nX-Forged: row" + "a".repeat(300) });
+    const { app_origin } = origins(db, phone.id);
+    assert.ok(app_origin && !/[\r\n]/.test(app_origin));
+    assert.ok(app_origin.length <= 256);
+  });
+
+  it("treats the opaque origin `null` as no origin, so it never names a device", () => {
+    // A sandboxed iframe or a file:// page sends the literal `Origin: null`.
+    // Stored, it would read "via null" for good, since the first origin is
+    // never overwritten; so it must not take the slot a real one would fill.
+    const { ring, phone, db } = setup();
+    ring.authenticate("phone", T0 + 1, { userAgent: IPHONE_SAFARI, origin: "null" });
+    assert.deepEqual(origins(db, phone.id), { app_origin: null, last_app_origin: null });
+    ring.authenticate("phone", T0 + 2, { userAgent: IPHONE_SAFARI, origin: MAIN });
+    assert.deepEqual(origins(db, phone.id), { app_origin: MAIN, last_app_origin: MAIN });
+    ring.authenticate("phone", T0 + 2 + 60_000, { userAgent: IPHONE_SAFARI, origin: "null" });
+    assert.deepEqual(origins(db, phone.id), { app_origin: MAIN, last_app_origin: MAIN });
+  });
+
+  it("a rotation's replacement takes the origin of the request that confirms it", () => {
+    const { store } = setup();
+    const replacement = store.insert(hashToken("fresh"), "device", "phone", T0 + 3, {
+      used: true,
+      seen: { userAgent: IPHONE_SAFARI, remoteAddr: "100.101.1.2", origin: MAIN },
+    });
+    assert.equal(store.list(T0 + 4).find((t) => t.id === replacement.id)?.app_origin, MAIN);
+  });
+});
+
 describe("formatTokenList", () => {
   it("puts the id first, and marks this machine, the requester and an unscanned QR", () => {
     const text = formatTokenList([

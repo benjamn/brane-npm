@@ -2,7 +2,7 @@ import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, readFileSync, existsSync, writeFileSync, mkdirSync, statSync, chmodSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { createTestDb } from "./helpers.js";
 import {
   ensureClaudeHookConfig,
@@ -10,6 +10,7 @@ import {
   ensureClineHookConfig,
   ensureHookConfig,
 } from "../commands/spawn.js";
+import { reviveNarrative } from "../daemon/server.js";
 
 const HOOK_PATH = "/api/hooks/tool-use";
 
@@ -320,5 +321,48 @@ describe("ensureHookConfig", () => {
     seedDaemon(db, "4321");
     // A fold path that cannot be written to: the spawn still has to proceed.
     assert.doesNotThrow(() => ensureHookConfig(db, "goose", "/dev/null/nope", "claude-nid00006"));
+  });
+});
+
+describe("reviveNarrative", () => {
+  // A daemon that comes back on another port leaves every fold's hook config
+  // naming the dead one. Fresh spawns rewrote it; a same-agent revive didn't,
+  // so on Fly, where every boot moved the port, revived sessions failed every
+  // tool call's hook (claude-nkrks0of:23).
+  it("repoints a stale hook config before it launches anything", (t) => {
+    // With no `claude` reachable the revive fails at resolving the agent,
+    // after the hook config and before any token or tmux session exists.
+    // resolveAgentCommand's fallback is node_modules/.bin two levels above
+    // the entry script; if one is there, this would launch a real agent.
+    const fallback = resolve(process.argv[1], "../..", "node_modules", ".bin", "claude");
+    if (existsSync(fallback)) return t.skip(`${fallback} exists`);
+
+    const db = createTestDb();
+    seedDaemon(db, "4321", "46347");
+    const fold = mkdtempSync(join(tmpdir(), "brane-hook-"));
+    const stale = `http://127.0.0.1:39287${HOOK_PATH}`;
+    mkdirSync(join(fold, ".claude"));
+    writeFileSync(
+      join(fold, ".claude", "settings.local.json"),
+      JSON.stringify({
+        hooks: { PostToolUse: [{ matcher: ".*", hooks: [{ type: "http", url: stale }] }] },
+      }),
+    );
+    db.prepare(
+      "INSERT INTO narratives (id, brane_id, agent_type, role, status, fold_path, created_at) VALUES ('claude-rev00001', 'brane-test', 'claude', 'worker', 'ended', ?, ?)",
+    ).run(fold, Date.now());
+
+    const path = process.env.PATH;
+    process.env.PATH = mkdtempSync(join(tmpdir(), "brane-empty-path-"));
+    try {
+      assert.throws(() => reviveNarrative(db, "claude-rev00001"), /Agent command not found: claude/);
+    } finally {
+      process.env.PATH = path;
+    }
+
+    const settings = readSettings(fold);
+    for (const event of ["PreToolUse", "PostToolUse"] as const) {
+      assert.equal(settings.hooks![event]![0].hooks![0].url, `http://127.0.0.1:46347${HOOK_PATH}`, event);
+    }
   });
 });

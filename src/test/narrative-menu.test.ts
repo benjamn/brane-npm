@@ -165,3 +165,18 @@ describe("revivesAsTwin", () => {
     }
   });
 });
+
+describe("narrativeMenuItems — Isolate", () => {
+  it("reads Isolate on a shared app and Unisolate on a daemon's own bundle", () => {
+    assert.ok(labels().includes("Isolate"));
+    assert.ok(labels({ isIsolated: true }).includes("Unisolate"));
+  });
+
+  it("is left out when there is nowhere to go, and nothing else moves", () => {
+    // A daemon's own bundle whose daemon reported no app host: offering the
+    // item would mean a link to a host the app made up.
+    const without = labels({ isIsolated: true, canIsolate: false });
+    assert.ok(!without.includes("Isolate") && !without.includes("Unisolate"));
+    assert.deepEqual(without, labels({ isIsolated: true }).filter((l) => l !== "Unisolate"));
+  });
+});

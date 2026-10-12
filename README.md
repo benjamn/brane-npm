@@ -164,7 +164,7 @@ CLI whenever that calculus changes for you.
 
 ## Contributing
 
-Brane is developed by one maintainer working with coding agents. Commits an agent writes carry a disclosure trailer; responsibility for every change stays with a human, who reviews, signs off, and merges it. Sign-off is human-only: an agent never certifies a contribution. See [CONTRIBUTING.md](CONTRIBUTING.md) for the rules, including the DCO sign-off asked of outside contributors, and for working from a clone.
+Brane is developed by one maintainer working with coding agents. Commits an agent writes carry a disclosure trailer; responsibility for every change stays with a human, who reviews, signs off, and merges it. Sign-off is human-only: an agent never certifies a contribution. Issues are open; pull requests are maintainer-only. See [CONTRIBUTING.md](CONTRIBUTING.md) for the rules, including the DCO sign-off, and for working from a clone.
 
 ## License
 
@@ -172,4 +172,4 @@ GNU Affero General Public License v3.0 or later (AGPL-3.0-or-later). See [LICENS
 
 Brane is designed to be run as a standalone daemon by individual operators, not embedded into other products. The AGPL's network-use clause ensures that anyone who modifies brane and offers it as a hosted service must share their modifications back.
 
-> Note: the `brane` package was previously published on npm under MIT in 2020. This codebase is a complete rewrite that supersedes that release; any future npm publication would ship as a new major version under AGPL-3.0-or-later.
+> Note: the `brane` name on npm previously carried unrelated MIT-licensed packages (0.0.x in 2015, 0.1.1 in 2020). This codebase is a complete rewrite under AGPL-3.0-or-later, first published as 0.3.0.

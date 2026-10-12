@@ -5,6 +5,8 @@ import type Database from "better-sqlite3";
 import { getDaemonAddress, openDatabase } from "../db/schema.js";
 import { getTailscaleHost } from "../tailscale.js";
 import { connectionFragment } from "../shared/view-url.js";
+import { CONFIG_DEFAULTS, getConfig, resolveAppHost } from "./config.js";
+import { cleanAppHost } from "../shared/app-origin.js";
 import { UNUSED_TOKEN_LAPSE_MS } from "../daemon/token-ring.js";
 import {
   daemonRequest,
@@ -55,8 +57,10 @@ export interface MeldUrlOptions {
   path?: string;
   /** Override host (default: Tailscale DNS > 127.0.0.1) */
   host?: string;
-  /** Force direct daemon URL instead of brane.organelle.dev */
+  /** Force a direct daemon URL instead of the shared app's. */
   local?: boolean;
+  /** The shared app's host to point at, instead of the `app_domain` config. */
+  app?: string;
   /** Inject the detected Tailscale hostname instead of shelling out to
    *  `tailscale status` — used by tests to make this function deterministic.
    *  When the key is present (even as `undefined`) the live lookup is skipped. */
@@ -68,6 +72,9 @@ export interface MeldUrlResult {
   daemonHost: string;
   scheme: "http" | "https";
   useLocal: boolean;
+  /** The shared app's host the URL opens, when not `useLocal`: `--app`, else
+   *  the daemon's `app_domain` config. */
+  appHost: string;
   isLoopbackFallback: boolean;
   /** Tailscale is up and we're advertising its hostname, but no TLS cert is
    *  available — so this URL silently falls back to plain HTTP. */
@@ -113,21 +120,29 @@ export function buildMeldUrl(opts: MeldUrlOptions): MeldUrlResult {
   let path = opts.path ?? "/";
   if (!path.startsWith("/")) path = "/" + path;
 
-  const url = meldLink({ daemonHost, scheme, useLocal }, token, path);
-  return { url, daemonHost, scheme, useLocal, isLoopbackFallback, tlsDegraded };
+  // Where the shared app lives is config, never a literal: a fork sets its
+  // own default (CONFIG_DEFAULTS), an operator sets `app_domain`, and a
+  // one-off `--app` wins over both. The daemon trusts none of them — the
+  // token is the credential — so this only decides which copy of the app
+  // the phone loads.
+  const appHost = resolveAppHost(opts.app ?? getConfig("app_domain", db));
+
+  const url = meldLink({ daemonHost, scheme, useLocal, appHost }, token, path);
+  return { url, daemonHost, scheme, useLocal, appHost, isLoopbackFallback, tlsDegraded };
 }
+
 
 /** Where a meld URL points, without its token: what `brane meld
  *  --connection` prints, so `brane meld --remote` can put a token minted on
  *  the operator's machine into a URL for a daemon on another. */
-export type MeldConnection = Omit<MeldUrlResult, "url">;
+export type MeldConnection = Omit<MeldUrlResult, "url" | "appHost"> & Partial<Pick<MeldUrlResult, "appHost">>;
 
 /** The one line `brane meld --connection` prints. */
 export type MeldConnectionReply = ({ ready: true } & MeldConnection) | { ready: false; reason: string };
 
 /** A meld URL for `token`, at the daemon `parts` describes. */
 export function meldLink(
-  parts: Pick<MeldUrlResult, "daemonHost" | "scheme" | "useLocal">,
+  parts: Pick<MeldUrlResult, "daemonHost" | "scheme" | "useLocal"> & Partial<Pick<MeldUrlResult, "appHost">>,
   token: string,
   path = "/",
 ): string {
@@ -137,9 +152,12 @@ export function meldLink(
   // the daemon's own request log does not record it. The app reads it from
   // `location.hash` and strips it once it has been used.
   const conn = { host: parts.daemonHost, token };
+  // A remote brane from before `appHost` was part of the connection reply
+  // (readMeldReply) names no shell; this install's default stands in.
+  const appHost = parts.appHost ?? CONFIG_DEFAULTS.app_domain;
   return parts.useLocal
     ? `${parts.scheme}://${parts.daemonHost}${path}${connectionFragment(conn, false)}`
-    : `https://brane.organelle.dev${path}${connectionFragment(conn, true)}`;
+    : `https://${appHost}${path}${connectionFragment(conn, true)}`;
 }
 
 /** Ask this machine's daemon for a device token for a daemon on another
@@ -176,8 +194,16 @@ export function readMeldReply(
     if (r.ready !== true) continue;
     if (typeof r.daemonHost !== "string" || (r.scheme !== "http" && r.scheme !== "https") || typeof r.useLocal !== "boolean") continue;
     if (r.isLoopbackFallback) return { kind: "wait", reason: "the remote machine has no Tailscale name yet" };
-    const { ready: _ready, ...connection } = r;
-    return { kind: "address", connection: connection as unknown as MeldConnection };
+    const { ready: _ready, appHost, ...connection } = r;
+    // A remote that names its shell does so as a string; anything else is
+    // treated as unnamed, and meldLink falls back to this install's default.
+    return {
+      kind: "address",
+      connection: {
+        ...(connection as unknown as Omit<MeldConnection, "appHost">),
+        ...(typeof appHost === "string" && appHost ? { appHost: cleanAppHost(appHost) } : {}),
+      } as MeldConnection,
+    };
   }
   return { kind: "old" };
 }
@@ -215,7 +241,7 @@ export function refusesRemoteMeld(env: NodeJS.ProcessEnv = process.env): string 
  *  this machine's daemon, behind its presence prompt; `--send` hands the
  *  remote only its hash, and `--ask` reads back only its address. Nothing
  *  here knows which host it is. */
-async function meldRemote(args: { send?: string; ask?: string; small?: boolean }): Promise<void> {
+async function meldRemote(args: { send?: string; ask?: string; small?: boolean; app?: string }): Promise<void> {
   const refusal = refusesRemoteMeld();
   if (refusal) {
     console.error(refusal);
@@ -278,13 +304,16 @@ async function meldRemote(args: { send?: string; ask?: string; small?: boolean }
     process.exit(1);
   }
 
-  const url = meldLink(connection, token);
+  // The remote daemon's `app_domain` names the shell, unless --app does.
+  const link = args.app ? { ...connection, appHost: cleanAppHost(args.app) } : connection;
+  const url = meldLink(link, token);
   console.log(`\nScan this QR code to meld:\n`);
   qrcode.generate(url, { small: args.small ?? true }, (code: string) => {
     console.log(code);
   });
   console.log(`\n${url}\n`);
   console.log(`Daemon: ${connection.daemonHost} (${connection.scheme})`);
+  if (!connection.useLocal) console.log(`App: ${link.appHost ?? CONFIG_DEFAULTS.app_domain}`);
   // The clock started with the remote daemon's restart, not now.
   console.log(`This QR is valid for ${UNUSED_TOKEN_LAPSE_MS / 60_000} minutes from the remote daemon's start; once scanned, the device stays signed in until revoked.`);
   if (connection.tlsDegraded) {
@@ -308,7 +337,11 @@ export const meldCommand = defineCommand({
     },
     local: {
       type: "boolean",
-      description: "Generate direct daemon URL instead of brane.organelle.dev",
+      description: "Generate a direct daemon URL instead of the shared app's (see --app)",
+    },
+    app: {
+      type: "string",
+      description: "The shared app's host to point the QR at (default: the `app_domain` config, brane.organelle.dev unless set)",
     },
     connection: {
       type: "boolean",
@@ -342,7 +375,7 @@ export const meldCommand = defineCommand({
         const address = getDaemonAddress(db);
         const reply: MeldConnectionReply = address
           ? (({ url: _url, ...connection }) => ({ ready: true as const, ...connection }))(
-              buildMeldUrl({ db, daemon: { port: address.port, token: "" }, host: args.host, local: args.local }),
+              buildMeldUrl({ db, daemon: { port: address.port, token: "" }, host: args.host, local: args.local, app: args.app }),
             )
           : { ready: false, reason: "no daemon is running yet" };
         console.log(JSON.stringify(reply));
@@ -364,11 +397,12 @@ export const meldCommand = defineCommand({
     const daemon = { port: endpoint.port, token };
 
     const db = openDatabase();
-    const { url, daemonHost, scheme, useLocal, isLoopbackFallback, tlsDegraded } = buildMeldUrl({
+    const { url, daemonHost, scheme, useLocal, appHost, isLoopbackFallback, tlsDegraded } = buildMeldUrl({
       db,
       daemon,
       host: args.host,
       local: args.local,
+      app: args.app,
     });
     db.close();
 
@@ -379,7 +413,7 @@ export const meldCommand = defineCommand({
     console.log(`\n${url}\n`);
     console.log(`Daemon: ${daemonHost} (${scheme})`);
     if (!useLocal) {
-      console.log(`App: brane.organelle.dev`);
+      console.log(`App: ${appHost}`);
     }
     console.log(meldLapseNote());
     if (isLoopbackFallback) {

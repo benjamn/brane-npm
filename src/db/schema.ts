@@ -466,6 +466,16 @@ export function applyMigrations(db: Database.Database): void {
   if (!tokenCols.has("owner_nid")) {
     db.exec("ALTER TABLE tokens ADD COLUMN owner_nid TEXT");
   }
+  // The `Origin` a token was first presented from, and the latest: which
+  // copy of the app a device runs (a hosted one, or a daemon's own). The
+  // origin is reported, never gated — the token is the credential — so this
+  // is what lets the Devices list say "via main.brane.organelle.dev".
+  if (!tokenCols.has("app_origin")) {
+    db.exec("ALTER TABLE tokens ADD COLUMN app_origin TEXT");
+  }
+  if (!tokenCols.has("last_app_origin")) {
+    db.exec("ALTER TABLE tokens ADD COLUMN last_app_origin TEXT");
+  }
   // Which token's request last launched a narrative's process (spawn, run or
   // revive), so revoking a device can say which agents it started. Recorded
   // from now on; there is nothing to backfill it from.

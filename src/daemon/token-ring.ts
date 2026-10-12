@@ -105,6 +105,11 @@ export interface TokenRecord {
 export interface TokenSighting {
   userAgent?: string | null;
   remoteAddr?: string | null;
+  /** The request's `Origin`: which copy of the app the device runs, a
+   *  hosted one or a daemon's own. Browsers omit it on same-origin GETs, so
+   *  a store records the first one it is given for a row, whichever request
+   *  carries it (in practice the control socket's upgrade). */
+  origin?: string | null;
 }
 
 /** Where token hashes live. The daemon's is the `tokens` table; the suite

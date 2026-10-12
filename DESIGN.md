@@ -282,10 +282,13 @@ a manual escape hatch for forcing an immediate re-provision.
 
 ### CORS
 
-The daemon allows cross-origin requests from:
-- `http://localhost:*` — any port, for local dev
-- `https://*.organelle.dev` — production domains
-- Configurable `app_domain` via config
+The daemon answers any origin with `Access-Control-Allow-Origin: *` and no
+credentials. There is no allowlist: every API request and WebSocket upgrade
+must present a token, so a page holding none gets a 401 whatever its origin,
+and the hostname the app is served from (`brane.organelle.dev`, a staging
+host, a fork's deployment, the daemon's own bundle, `localhost` in dev) is
+not a trust decision. The origin each device runs the app from is recorded
+on its token for the Devices list instead (`SECURITY.md`, Authentication).
 
 ## Web App (Expo)
 

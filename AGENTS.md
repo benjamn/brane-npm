@@ -22,7 +22,7 @@ Brane is a TypeScript reimagining of the [organelle](https://github.com/benjamn/
 - **Terminal mirroring** of tmux sessions with keyboard input
 - The **LIVE loop** protocol for cursor-based agent communication
 - A **semantic memory** system with embeddings and full-text search
-- **Multi-agent support** with session resumption across 6 agent types
+- **Multi-agent support** across 8 agent types, with session resumption where the agent offers it
 
 ## Golden Rule
 
@@ -66,7 +66,7 @@ brane/
 │   ├── components/            # MacroMenu, TerminalPane, TerminalKeyboard
 │   ├── lib/                   # api.ts, terminal.ts, connection.ts, registry.ts
 │   └── dist/                  # Built web bundle (served by daemon)
-├── worker/                    # Cloudflare Workers deployment (serves expo/dist as SPA)
+├── worker/                    # Cloudflare Workers deployment (serves the latest release's expo/dist as SPA)
 ├── protocols/
 │   ├── LIVE_loop.md           # Core agent communication protocol
 │   ├── digest.md              # /digest protocol for activity summaries
@@ -113,8 +113,11 @@ non-executable files) while `node dist/cli.js` keeps working.
 
 Publishing to npm is done by `.github/workflows/release.yml`, triggered by a
 published GitHub release, and only by it. **Agents never run `npm publish`.**
-The version bump, tag rule, dist-tag choice and why there is no provenance
-attestation are in [docs/releasing.md](docs/releasing.md).
+The shared web app ships with it: a release deploys its tarball's
+`expo/dist`, and a merge to `main` deploys nothing (staging is Isolate on a
+daemon running `main`). The version bump, tag rule, dist-tag choice, app
+deploy and rollback, and why 0.3.0 has no provenance attestation are in
+[docs/releasing.md](docs/releasing.md).
 
 ## CLI Commands
 
@@ -125,7 +128,7 @@ attestation are in [docs/releasing.md](docs/releasing.md).
 | `attach` | Attach to a tmux session |
 | `list` | List narratives grouped by brane (`--brane`, `--archived`, `--limit`) — reads `GET /api/narratives` + `GET /api/branes` |
 | `fold` | Register directories as spawn points (`--brane` to associate with a brane) — delegates to `POST /api/folds` |
-| `meld` | Generate QR code for mobile access (defaults to `brane.organelle.dev`, `--local` for direct); waits for Touch ID at this machine — see [Presence Check](docs/presence.md#the-gate). `--remote --send … --ask …` melds a daemon on another machine (a Fly machine: /fly) with a token minted here, and refuses in an agent's session |
+| `meld` | Generate QR code for mobile access (points at the `app_domain` config, `brane.organelle.dev` unless set; `--app <host>` for one QR, `--local` for a direct daemon URL); waits for Touch ID at this machine — see [Presence Check](docs/presence.md#the-gate). `--remote --send … --ask …` melds a daemon on another machine (a Fly machine: /fly) with a token minted here, and refuses in an agent's session |
 | `mcp` | MCP stdio server (used internally by agent sessions) |
 | `revive` | Restart dead agent sessions (`--prompt`, `--no-prompt`, `--agent`) — delegates to `POST /api/revive/:nid` |
 | `config` | Get/set brane configuration (git-config style: `--list`, `--unset`) |
@@ -170,6 +173,8 @@ Brane supports multiple agent types with session resumption. Each agent has an a
 | `codex` | `resume <session_id>` | Subcommand-based resumption |
 | `amp` | (none) | Uses thread references `@T-<id>` in prompt |
 | `copilot` | `--session-id <session_id>` | Daemon-pinned UUID resumes the exact local session |
+| `cline` | (none) | Each revive starts a fresh session; brane captures its id for cost |
+| `crush` | (none) | Each revive starts a fresh session; brane captures its id for cost |
 
 Spawning a session generates agent-specific MCP config. This happens in `doSpawn()`, which always runs in the daemon — `brane spawn` gets it by delegating to `POST /api/spawn`, not by writing these files itself:
 - **Claude**: `.mcp.json` in fold directory
@@ -187,7 +192,7 @@ See `SECURITY.md` for full details. Key features:
 - **Atomic daemon startup** — `BEGIN EXCLUSIVE` SQLite transaction prevents race conditions
 - **Version checking** — daemon stores version for CLI compatibility detection
 - **Payload security** — path traversal protection, 50MB size limits, immutable cached URLs
-- **Origin checking** — WebSocket upgrade validates Origin header
+- **The token is the only credential** — no origin allowlist: CORS answers `*` without credentials, the WebSocket upgrade checks the token and nothing else, and the `Origin` a device runs the app from is recorded on its token for the Devices list (`SECURITY.md`, Authentication)
 
 ## Rules for Every Change
 
@@ -345,7 +350,7 @@ read at runtime).
 - **The mirror sends text; everything else is explicit**: the pane's cursor is the only thing about a terminal that isn't in its text, so it rides the same tmux round trip as the capture — and gets its own message when it moves and the text doesn't
 - **The chat never scrolls itself**: after landing, only the operator moves the chat. It is a `column-reverse` scroller (`CHAT_SCROLLER_STYLE`, `expo/app/[nid].tsx`), not a virtualized `FlatList`, so scroll position is measured from the bottom: it opens on the latest message without a scroll, an arrival is followed only when the view is already exactly at the bottom, a page of older history lands at the far end and moves nothing, and no row is ever swapped for an estimated spacer mid-scroll. The one scroll the code writes is landing on `?scrollToSeq=` / `?scrollTo=`, plus the ↑/↓ tab button the operator taps. Sending doesn't scroll, and vertical scroll is never disabled, not even under a horizontal pane swipe. Measured in Chromium and WebKit against a sandbox daemon: the message under the viewport moves 0 px on arrival, on send and on each page loaded
 - **A tap should cost what it changed**: the chat's selection lives in a store with per-seq subscriptions, so selecting a message wakes that bubble, the header's count and the composer — not the screen, not `renderItem`, not the other two hundred rows; the same store is what makes two taps in one frame both land
-- **The URL carries the view**: anything that must survive an origin hop (Isolate) or a device hop (Meld) goes in the query string, built through `src/shared/view-url.ts` — `sessionStorage` is origin-scoped and does not travel
+- **The URL carries the view**: anything that must survive an origin hop (Isolate) or a device hop (Meld) goes in the query string, built through `src/shared/view-url.ts` — `sessionStorage` is origin-scoped and does not travel. The app names no host: "isolated" is `location.host` equal to the connection's host, and the way out is the daemon's `app_domain` from `/api/status`; `src/test/app-host-literal.test.ts` keeps it that way
 - **Back undoes a jump, never a view change**: a different narrative or any `nid:seq` link (even into the narrative you're reading) is a `router.push`; a tab, pin, file or selection change is `router.setParams`, which replaces. Screens behind the top stay mounted, so Back restores them whole, and narrative subscriptions are refcounted because two of them can watch the same narrative — see [View URLs](docs/view-urls.md)
 - **`shared/` is the publication unit**: a fold's `wiki/shared/` is what other folds — and the npm tarball — can see; everything directly under `wiki/` is fold-local, and the install directory is just another fold
 - **One renderer, two targets**: markdown features that must survive export (code highlighting, math) render server-side or through shared code, never through a script the exported file carries

@@ -19,6 +19,19 @@ export interface TerminalCursor {
   col: number;
 }
 
+/**
+ * The grid this device's terminal pane last measured, or null before any pane
+ * has. Spawn and run send it, so a new session starts at the size it will be
+ * watched at rather than at whatever another viewer last resized something to:
+ * every resize after launch makes a TUI redraw, and the frames it leaves behind
+ * at the old width sit in scrollback for the mirror to show.
+ */
+let lastMeasuredSize: { cols: number; rows: number } | null = null;
+
+export function lastTerminalSize(): { cols: number; rows: number } | null {
+  return lastMeasuredSize;
+}
+
 export type TerminalFrame =
   | { type: "frame"; data: string; totalLines: number; alternate_on?: boolean; cursor?: TerminalCursor | null }
   | { type: "append"; data: string; lineOffset: number; totalLines: number; alternate_on?: boolean; cursor?: TerminalCursor | null }
@@ -123,6 +136,7 @@ export function createTerminalChannel(opts: TerminalChannelOptions) {
 
   function resize(cols: number, rows: number) {
     pendingResize = { cols, rows };
+    lastMeasuredSize = { cols, rows };
     if (ws?.readyState === WebSocket.OPEN) {
       ws.send(JSON.stringify({ type: "resize", cols, rows }));
     }
@@ -157,6 +171,14 @@ export function createTerminalChannel(opts: TerminalChannelOptions) {
     }
   }
 
+  /** Drop the pane's tmux scrollback (the live screen stays). The daemon
+   *  sends the shorter frame as soon as tmux has done it. */
+  function clearHistory() {
+    if (ws?.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ type: "clear_history" }));
+    }
+  }
+
   function refresh() {
     if (ws?.readyState === WebSocket.OPEN) {
       ws.send(JSON.stringify({ type: "refresh" }));
@@ -172,7 +194,7 @@ export function createTerminalChannel(opts: TerminalChannelOptions) {
 
   connect();
 
-  return { start, stop, resize, sendKeys, sendPaste, sendMouse, close, refresh };
+  return { start, stop, resize, sendKeys, sendPaste, sendMouse, close, refresh, clearHistory };
 }
 
 /**

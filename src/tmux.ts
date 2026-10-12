@@ -192,6 +192,17 @@ export function tmuxQuote(word: string): string {
   return `'${word.replace(/'/g, `'\\''`)}'`;
 }
 
+/** A request's `terminal_size`, if it is a usable grid: the size the
+ *  requesting viewer's pane last measured, which a new session should start
+ *  at. Anything else — absent, non-integer, out of range — is null, and the
+ *  caller falls back to the last size applied to any session. */
+export function parseTerminalSize(value: unknown): { cols: number; rows: number } | null {
+  if (!value || typeof value !== "object") return null;
+  const { cols, rows } = value as { cols?: unknown; rows?: unknown };
+  const ok = (n: unknown): n is number => Number.isInteger(n) && (n as number) >= 1 && (n as number) <= 10000;
+  return ok(cols) && ok(rows) ? { cols, rows } : null;
+}
+
 /** The `new-session` line `newTmuxSession` sends, as tmux will parse it. */
 export function newSessionLine(opts: {
   name: string;
