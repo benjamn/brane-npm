@@ -208,8 +208,10 @@ Cline's per-session files) meant no harness's plumbing had to change.
   nothing. A connected external client (no tmux session) is not adopted,
   and lands on a fresh `external-*` narrative once, at the upgrade.
   Adopted agent rows don't trigger the plaintext-token warning.
-- **Archiving revokes** a narrative's agent token when its session is not
-  running. Unarchiving brings nothing back; a revive mints a new one.
+- **Archiving revokes** a narrative's agent token. Only an ended narrative
+  can be archived (the daemon answers 409 otherwise; see
+  `src/daemon/archive-gate.ts`), so there is never a live session to cut
+  off. Unarchiving brings nothing back; a revive mints a new one.
 - **An external goes with its dialer, always.** An external's token
   records the token that dialed it (`minted_by`); it is that token's
   credential in another form, since one `/ws/mcp` dial mints it, so

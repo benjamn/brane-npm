@@ -56,6 +56,7 @@ import { getBraneId, getPayloadsDir, getTokenFilePath, fromPortablePath, toPorta
 import { TokenRing, type AuthResult, type TokenRecord } from "./token-ring.js";
 import { signalEventFields, signalStanding } from "./signal-source.js";
 import { AGENT_LOOPBACK_REFUSAL, AGENT_REVIVE_REFUSAL, agentRefusal, agentReviveRefusal } from "./agent-scope.js";
+import { archiveRefusal } from "./archive-gate.js";
 import { DbTokenStore, bootstrapTokens, legacyTokenWarning, parseTokenHashes, liveAgentTokenId, mintAgentToken, recordLauncher, settleAgentLaunch, verifyAgentToken } from "../db/tokens.js";
 import { closeSocketsOf, listTokensRoute, socketOwners, retireTokens } from "./token-routes.js";
 import { getConfig, resolveAppHost } from "../commands/config.js";
@@ -1518,16 +1519,34 @@ export async function startServer(config: DaemonConfig): Promise<void> {
       const narrativeId = archiveMatch[1];
       parseBody(req).then((body) => {
         const { archived } = JSON.parse(body);
+        // A running narrative can't be archived: hiding a live agent from the
+        // list is exactly what a rogue one would want. See archive-gate.ts.
+        if (archived) {
+          const row = db.prepare("SELECT status FROM narratives WHERE id = ?").get(narrativeId) as { status: string | null } | undefined;
+          if (!row) {
+            sendJson(res, 404, { error: `No narrative ${narrativeId}` });
+            return;
+          }
+          const refusal = archiveRefusal({
+            status: row.status,
+            mcpConnected: mcpConnectedNids(mcpClients).has(narrativeId),
+            tmuxLive: liveTmuxSessions().has(narrativeId),
+          });
+          if (refusal) {
+            sendJson(res, 409, { error: `Can't archive ${narrativeId}: ${refusal}. End it first.` });
+            return;
+          }
+        }
         db.prepare("UPDATE narratives SET archived = ? WHERE id = ?").run(archived ? 1 : 0, narrativeId);
         // An archived narrative's agent token is a credential nobody needs:
-        // revoke it, unless its session is still running (archiving is not a
-        // way to cut off a live agent; revoking from the Devices list is).
-        // Unarchiving brings nothing back; a revive mints a fresh token.
-        if (archived && !liveTmuxSessions().has(narrativeId)) {
+        // revoke it. Its session is over, or the gate above would have
+        // refused. Unarchiving brings nothing back; a revive mints a fresh
+        // token.
+        if (archived) {
           const agentRow = liveAgentTokenId(db, narrativeId);
           if (agentRow) {
             db.prepare("UPDATE tokens SET revoked_at = ? WHERE kind = 'agent' AND owner_nid = ? AND revoked_at IS NULL").run(Date.now(), narrativeId);
-            // A connected external's bridge goes now, not at its next redial.
+            // Any socket still holding it goes now, not at its next redial.
             closeSocketsOf(viewerSockets, [agentRow]);
           }
         }

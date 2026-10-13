@@ -139,10 +139,13 @@ export function narrativeMenuItems({
             ? { icon: "🐦‍🔥", label: "Revive", onPress: onRevive }
             : { icon: "🫠", label: "End", onPress: onEnd },
         ]),
-    {
-      icon: archived ? "📂" : "🗄️",
-      label: archived ? "Unarchive" : "Archive",
-      onPress: onArchiveToggle,
-    },
+    // Archive puts away a narrative that is over, so it waits for the session
+    // to end, by the same test that offers Revive. Unarchive is offered on any
+    // archived narrative, whatever its state.
+    ...(archived
+      ? [{ icon: "📂", label: "Unarchive", onPress: onArchiveToggle }]
+      : isEnded
+        ? [{ icon: "🗄️", label: "Archive", onPress: onArchiveToggle }]
+        : []),
   ];
 }

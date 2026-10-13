@@ -27,7 +27,7 @@ until someone lists it. An agent also may not revive or prompt a
 | `GET` | `/api/status` | Daemon status (brane_id, hostname, username, pid, port, uptime_ms, `tls: { state, expires_at, ... }`, `app_domain`: the shared app's host, where a daemon's own bundle hops out to on Isolate — see [View URLs](view-urls.md)) |
 | `GET` | `/api/narratives?archived=1` | List narratives (excludes archived by default) |
 | `GET` | `/api/narratives/recent?since=&search=&status=&fold=&limit=&archived=1&brane_ids=` | Recently active narratives — the browse half of the `narrative_info` MCP tool; every brane unless `brane_ids` scopes it |
-| `PATCH` | `/api/narratives/:id/archive` | Archive/unarchive a narrative |
+| `PATCH` | `/api/narratives/:id/archive` | Archive/unarchive a narrative; archiving a running one is a 409 (`src/daemon/archive-gate.ts`) |
 | `GET` | `/api/narratives/:id/events?after=N&before=S&tail=T` | Fetch events with cursor-based query |
 | `POST` | `/api/narratives/:id/signal` | Send operator signal (supports payloads). `source` is stamped from the token (`web` for a device, `local` for this account); a `source` in the body is ignored, and an agent's token is refused (`src/daemon/signal-source.ts`) |
 | `GET` | `/api/narratives/:id/export?format=html[&palette=N][&seqs=A,B,C][&seqs_mode=except]` | Conversation as a standalone HTML document; `palette` is the device's 🎨 Recolor salt, so foreign speakers wear the hues the operator sees, `seqs` is the chat's message selection, and `seqs_mode=except` exports its complement — see [Export Scope](export-scope.md) |

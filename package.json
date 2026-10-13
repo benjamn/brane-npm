@@ -1,6 +1,6 @@
 {
   "name": "brane",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "description": "Userspace daemon and CLI for narrative agent sessions",
   "keywords": [
     "agents",

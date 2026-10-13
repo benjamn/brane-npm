@@ -57,7 +57,12 @@ since the stack did not grow. So the URL keeps that state and Back returns to
 it, but it never costs an extra Back: browsing ten files is one entry, not ten.
 A bare link to the narrative you are in, with no seq, goes nowhere. The list
 is a jump too: **All narratives** in the switcher pushes it, so Back returns
-to the narrative, whether or not a list was already beneath. The header has no
+to the narrative, whether or not a list was already beneath. So does a
+swipe down on the narrative's header card, which dismisses it. So does
+**Archive** in the narrative's 🦠 menu, once the daemon has confirmed it (the
+pushed list fetches on mount, and nothing is broadcast to correct a fetch that
+raced the archive); Back returns to the archived narrative. Archiving from the
+list's own menu just drops the row and goes nowhere. The header has no
 ← of its own; Back is the browser's.
 
 Back is instant and complete because the Stack keeps the screens behind the

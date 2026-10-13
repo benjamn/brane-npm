@@ -89,7 +89,6 @@ describe("narrativeMenuItems", () => {
       "Recolor",
       "Twin",
       "End",
-      "Archive",
     ]);
   });
 
@@ -118,8 +117,28 @@ describe("narrativeMenuItems", () => {
   });
 
   it("flips the archive item both ways", () => {
-    assert.ok(labels({ archived: false }).includes("Archive"));
-    assert.ok(labels({ archived: true }).includes("Unarchive"));
+    assert.ok(labels({ status: "ended", archived: false }).includes("Archive"));
+    assert.ok(labels({ status: "ended", archived: true }).includes("Unarchive"));
+  });
+
+  it("offers Archive only once the session has ended", () => {
+    const running = labels({ status: "active", mcpConnected: true });
+    assert.ok(!running.includes("Archive") && !running.includes("Unarchive"));
+    // The same stale-row test as Revive: an ended row with an agent still on
+    // the bridge is running, and isn't archivable yet.
+    assert.ok(!labels({ status: "ended", mcpConnected: true }).includes("Archive"));
+    assert.ok(labels({ status: "ended" }).includes("Archive"));
+  });
+
+  it("always offers Unarchive on an archived narrative", () => {
+    for (const status of ["active", "ended", null]) {
+      for (const mcpConnected of [true, false]) {
+        assert.ok(
+          labels({ archived: true, status, mcpConnected }).includes("Unarchive"),
+          `status: ${status}, mcpConnected: ${mcpConnected}`,
+        );
+      }
+    }
   });
 
   it("flips isolate by where the app is served from", () => {

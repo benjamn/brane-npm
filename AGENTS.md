@@ -116,8 +116,8 @@ published GitHub release, and only by it. **Agents never run `npm publish`.**
 The shared web app ships with it: a release deploys its tarball's
 `expo/dist`, and a merge to `main` deploys nothing (staging is Isolate on a
 daemon running `main`). The version bump, tag rule, dist-tag choice, app
-deploy and rollback, and why 0.3.0 has no provenance attestation are in
-[docs/releasing.md](docs/releasing.md).
+deploy and rollback, and why 0.3.0 and 0.3.1 have no provenance
+attestation are in [docs/releasing.md](docs/releasing.md).
 
 ## CLI Commands
 

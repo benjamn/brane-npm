@@ -700,6 +700,8 @@ type NarrativeHeaderProps = {
    *  arrangement the store exists to make possible. */
   selection: MessageSelection;
   openSwitcher: () => void;
+  /** Swiping the card down puts the narrative away: the list, as a jump. */
+  onDismiss: () => void;
   onDownload: (scope: ExportScope) => void;
   onTerminate: () => void;
   onRevive: () => void;
@@ -729,6 +731,7 @@ const NarrativeHeader = memo(function NarrativeHeader({
   archived,
   selection,
   openSwitcher,
+  onDismiss,
   onDownload,
   onTerminate,
   onRevive,
@@ -746,9 +749,44 @@ const NarrativeHeader = memo(function NarrativeHeader({
   const glow = isAwaiting({ mcpConnected: narrativeMcpConnected, awaiting: narrativeAwaiting })
     ? awaitingGlow(glowHueFor(nid))
     : undefined;
+
+  // Swipe the card down to dismiss the narrative, judged on release as the
+  // pane swipe is: far enough down and mostly vertical. A sideways drag (the
+  // summary row scrolls) doesn't count, and neither does one under an open
+  // 🦠 menu.
+  const swipeStartRef = useRef<{ x: number; y: number } | null>(null);
+  const swipedRef = useRef(false);
+  const swipeHandlers = {
+    onTouchStart: (e: any) => {
+      swipedRef.current = false;
+      const touch = e.nativeEvent;
+      swipeStartRef.current = menuVisible ? null : { x: touch.pageX, y: touch.pageY };
+    },
+    onTouchEnd: (e: any) => {
+      const start = swipeStartRef.current;
+      swipeStartRef.current = null;
+      if (!start) return;
+      const touch = e.nativeEvent;
+      const dx = touch.pageX - start.x;
+      const dy = touch.pageY - start.y;
+      if (dy > 60 && dy > Math.abs(dx) * 1.5) {
+        swipedRef.current = true;
+        onDismiss();
+      }
+    },
+    onTouchCancel: () => { swipeStartRef.current = null; },
+  };
+
   return (
-    <View style={[styles.header, styles.glowTransition, glow ? ({ boxShadow: glow } as any) : null]}>
-      <Pressable style={styles.headerTitleContainer} onPress={openSwitcher}>
+    <View
+      style={[styles.header, styles.glowTransition, glow ? ({ boxShadow: glow } as any) : null]}
+      {...swipeHandlers}
+    >
+      <Pressable
+        style={styles.headerTitleContainer}
+        // A swipe is not also a tap, should the browser click after it.
+        onPress={() => { if (swipedRef.current) swipedRef.current = false; else openSwitcher(); }}
+      >
         <NarrativeIdentity
           id={nid}
           foldPath={narrativeFoldPath}
@@ -1968,8 +2006,18 @@ export default function ChatView() {
     } catch {
       setNarrativeArchived(!next);
       writeHeaderMeta(nid, { archived: !next });
+      return;
     }
-  }, [conn, nid, narrativeArchived]);
+    // Archiving puts the narrative away, so go to the list. A jump, so it
+    // pushes: Back returns to the archived narrative — see docs/view-urls.md.
+    // Only once the request has landed: archiving broadcasts nothing, and the
+    // list's fetch on mount would otherwise race it and still show the row.
+    if (next) router.push("/");
+  }, [conn, nid, narrativeArchived, router]);
+
+  // Swiping the header card down: the list, as a jump, so Back returns here —
+  // see docs/view-urls.md. Stable, because the header is memoized.
+  const dismissToList = useCallback(() => router.push("/"), [router]);
 
   const openSwitcher = useCallback(() => {
     if (!conn) return;
@@ -2023,6 +2071,7 @@ export default function ChatView() {
         archived={narrativeArchived}
         selection={selection}
         openSwitcher={openSwitcher}
+        onDismiss={dismissToList}
         onDownload={downloadConversation}
         onTerminate={() => { revealTerminal(); terminalPaneRef.current?.terminate(); }}
         onRevive={() => {

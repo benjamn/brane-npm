@@ -9,10 +9,12 @@ publishing](https://docs.npmjs.com/trusted-publishers)). **Agents never run
 `npm publish` is not passed `--provenance`, and needs no flag for it.
 Trusted publishing attests a build by itself when the repository is public
 and leaves attestation out when it is private, where `--provenance` would
-fail the publish on a 422. 0.3.0 was published while the repository was still
-private, so it is the one release with **no provenance attestation**; every
-release since the repository went public carries it, with no workflow
-change.
+fail the publish on a 422. 0.3.0 and 0.3.1 were published while the
+repository was still private, so they carry **no provenance attestation**;
+every release after the repository goes public will, with no workflow
+change. Check `gh repo view --json visibility` before a release's notes
+say which it is: the 0.3.1 CHANGELOG entry in its tarball claims
+provenance it does not have.
 
 The trigger is a **published GitHub release**, not a tag push, so the release
 notes and the publish are one act and a stray tag cannot publish anything.

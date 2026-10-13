@@ -66,4 +66,4 @@ Core tools available via MCP:
 
 Narratives have persistent `summary` and `title` columns. Agents set them via the `meta` parameter on `narrate`. The daemon broadcasts metadata changes over the control WebSocket as `type: "meta"` messages. The Expo app renders the summary as a subtitle below the narrative ID.
 
-Narratives can be **archived** via `PATCH /api/narratives/:id/archive`. Archived narratives are hidden from the default list but preserved in the database.
+Narratives can be **archived** via `PATCH /api/narratives/:id/archive`. Archived narratives are hidden from the default list but preserved in the database. Only a narrative whose session is over can be archived: the daemon answers 409 while its status isn't `ended`, an agent is on its bridge, or its tmux session is up (`src/daemon/archive-gate.ts`), so archiving can't hide a running agent. Unarchiving is never refused.

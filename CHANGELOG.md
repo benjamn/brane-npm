@@ -6,6 +6,22 @@ page, which is also what triggers its publish (see
 [docs/releasing.md](docs/releasing.md)). This file is the summary that
 travels in the npm tarball.
 
+## 0.3.2 - 2026-10-13
+
+- Archive is offered only once a narrative has ended, and the daemon
+  enforces it: `PATCH /api/narratives/:id/archive` answers 409 while the
+  narrative's status isn't `ended`, its agent is still connected, or its
+  tmux session is up. Unarchiving is never refused
+  ([#604](https://github.com/benjamn/brane/pull/604)).
+- Archiving from a narrative's own 🦠 menu goes to the narrative list,
+  and Back returns to the archived narrative
+  ([#603](https://github.com/benjamn/brane/pull/603)).
+- Swiping the narrative's header card down dismisses it to the list;
+  Back returns ([#604](https://github.com/benjamn/brane/pull/604)).
+
+Published while the repository is private, so like 0.3.0 and 0.3.1 it
+carries no npm provenance attestation.
+
 ## 0.3.1 - 2026-10-12
 
 - The shared web app ships with the release. It serves the `latest`
@@ -34,9 +50,12 @@ travels in the npm tarball.
   repoints the fold's hook config at the running daemon
   ([#594](https://github.com/benjamn/brane/pull/594)).
 - Vulnerabilities are reported through GitHub's private vulnerability
-  reporting (see `SECURITY.md`). This is the first release published
-  from the public repository, so it carries npm provenance; 0.3.0 has
-  none ([#597](https://github.com/benjamn/brane/pull/597)).
+  reporting (see `SECURITY.md`)
+  ([#597](https://github.com/benjamn/brane/pull/597)).
+
+Like 0.3.0, published while the repository was private, so it carries
+no npm provenance attestation. The copy of this entry in the 0.3.1
+tarball says otherwise; it is wrong.
 
 ## 0.3.0 - 2026-10-11
 
