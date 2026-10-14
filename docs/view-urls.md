@@ -56,15 +56,12 @@ pins, Files path and line, the `?scrollToSeq=` selection) goes through
 since the stack did not grow. So the URL keeps that state and Back returns to
 it, but it never costs an extra Back: browsing ten files is one entry, not ten.
 A bare link to the narrative you are in, with no seq, goes nowhere. The list
-is a jump too: a swipe down on the narrative's header card dismisses it to
-a pushed list, so Back returns to the narrative, whether or not a list was
-already beneath. **All narratives** in the switcher, in a browser, does not
-navigate this tab at all: it is a link that opens the list in a new one, on
-the same daemon (see "A new tab names its daemon" below). On native, and in
-the web app launched from the home screen, it pushes like the swipe: there is
-no tab to open, and on iOS a `_blank` link from a home-screen app lands in a
-browser view that shares none of its storage, so it would open on the meld
-screen. So does
+is a jump too: **All narratives** in the switcher pushes it, so Back returns
+to the narrative, whether or not a list was already beneath. It is an anchor
+like the prose links, so a ⌘-click opens the list in a new tab instead, on
+the same daemon (see "A new tab names its daemon" below). (In 0.3.3 every
+click opened a new tab; that was undone.) So does a swipe down on the
+narrative's header card, which dismisses it. So does
 **Archive** in the narrative's 🦠 menu, once the daemon has confirmed it (the
 pushed list fetches on mount, and nothing is broadcast to correct a fetch that
 raced the archive); Back returns to the archived narrative. Archiving from the
@@ -151,8 +148,8 @@ starts with none: ⌘-click, middle-click, long-press "Open in New Tab" and
 this browser's *default* daemon, which on a shared app with several melded
 need not be the one the link came from. So every in-app anchor names it:
 `inAppLinkProps` (the `@nid`, `nid:seq` and file links in prose, the narrate
-rows in tool groups) and `newTabLinkProps` (**All narratives**) render their
-href with `#daemon=<home brane_id>` (`DAEMON_PARAM`, `withDaemonFragment`),
+rows in tool groups, **All narratives**) renders its href with
+`#daemon=<home brane_id>` (`DAEMON_PARAM`, `withDaemonFragment`),
 while a plain click still navigates in place by the clean path. It goes in the
 fragment because it says which daemon, not what you are looking at: it is a
 connection param (`CONNECTION_PARAMS`), and like the token it never reaches the

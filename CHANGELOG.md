@@ -6,6 +6,17 @@ page, which is also what triggers its publish (see
 [docs/releasing.md](docs/releasing.md)). This file is the summary that
 travels in the npm tarball.
 
+## 0.3.4 - 2026-10-14
+
+- "All narratives" in the narrative switcher pushes the list in this tab
+  again, so Back returns to the narrative; 0.3.3 opened it in a new tab
+  on every click. It is still a link, so a ⌘-click opens a new tab, and
+  that tab lands on the same daemon
+  ([#611](https://github.com/benjamn/brane/pull/611)).
+
+Published while the repository is private, so like 0.3.0–0.3.3 it
+carries no npm provenance attestation.
+
 ## 0.3.3 - 2026-10-14
 
 - A fresh `npm install brane` audits clean. The math syntax extension

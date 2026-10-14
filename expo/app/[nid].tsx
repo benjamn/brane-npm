@@ -46,7 +46,7 @@ import { glowHueFor, recolorGlowHue } from "@/lib/glow-hues";
 import { NarrativeMetaLine, NarrativeIdentity } from "@/components/NarrativeMeta";
 import QrModal from "@/components/QrModal";
 import { MarkdownContent } from "@/components/Markdown";
-import { narrativeHref, fileHref, newTabLinkProps } from "@/lib/routes";
+import { narrativeHref, fileHref, inAppLinkProps } from "@/lib/routes";
 import { downloadUrl, downloadNameFor } from "@/lib/download";
 import FilesView, { parseRelLink, type FilesViewHandle } from "@/components/FilesView";
 import SpawnDialog from "@/components/SpawnDialog";
@@ -2276,22 +2276,19 @@ export default function ChatView() {
           <View style={styles.switcherContent}>
             <View style={styles.switcherTitleRow}>
               <Text style={styles.switcherTitle}>Switch narrative</Text>
-              {/* A way to the list, needed when a narrative was opened
-                  directly (Meld, Isolate) with nothing beneath it. In a browser
-                  it is a link that opens the list in a new tab, on this tab's
-                  daemon, and leaves this one where it is; native and the
-                  home-screen app have no tab to open, so there it pushes and
-                  Back returns here — see docs/view-urls.md. */}
+              {/* The one in-app route to the list, needed when a narrative
+                  was opened directly (Meld, Isolate) with nothing beneath it.
+                  A jump, so it pushes: Back returns here — see
+                  docs/view-urls.md. The list beneath, if any, stays mounted
+                  and keeps its activity stream: connection.ts refcounts it.
+                  An anchor like every in-app link, so ⌘-click still opens a
+                  new tab, on this tab's daemon. */}
               <Text
                 style={styles.switcherListLink}
-                {...newTabLinkProps(
-                  "/",
-                  () => setShowSwitcher(false),
-                  () => {
-                    setShowSwitcher(false);
-                    router.push("/");
-                  },
-                )}
+                {...inAppLinkProps("/", () => {
+                  setShowSwitcher(false);
+                  router.push("/");
+                })}
               >
                 All narratives
               </Text>

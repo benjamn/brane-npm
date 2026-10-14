@@ -52,38 +52,6 @@ export function inAppLinkProps(
   };
 }
 
-/** Whether the web app is running from the home screen (iOS "Add to Home
- *  Screen", an installed PWA) rather than in a browser tab. There a
- *  `target="_blank"` link leaves the app for a browser view, and on iOS that
- *  view does not share the app's storage: no melded daemons, so it opens on
- *  the meld screen whatever the link says. */
-function isStandaloneApp(): boolean {
-  if (typeof window === "undefined") return false;
-  return (
-    window.matchMedia?.("(display-mode: standalone)").matches === true ||
-    (window.navigator as { standalone?: boolean }).standalone === true
-  );
-}
-
-/** Props for a link that always opens in a new tab or window, on web: a real
- *  anchor with `target="_blank"`, naming this tab's daemon for the same reason
- *  `inAppLinkProps` does. Every click is the browser's, plain ones included;
- *  `onOpen` runs alongside (closing the menu the link sat in, say) and must not
- *  navigate. Native has no tabs, and a home-screen web app has none worth
- *  leaving for (`isStandaloneApp`), so in both it is `fallback`, pressed. */
-export function newTabLinkProps(
-  href: string,
-  onOpen: () => void,
-  fallback: () => void,
-): Record<string, unknown> {
-  if (!isWeb || isStandaloneApp()) return { onPress: fallback };
-  return {
-    href: withDaemonFragment(href, getActiveDaemonBraneId()),
-    hrefAttrs: { target: "_blank", rel: "noopener" },
-    onClick: onOpen,
-  };
-}
-
 /** A narrative, optionally scrolled to one event. */
 export function narrativeHref(nid: string, seq?: number): string {
   return seq ? `/${nid}?scrollToSeq=${seq}` : `/${nid}`;
