@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { MO_GLYPH_BOX, MO_GLYPH_PATH } from "../shared/mo-glyph.js";
+import { MO_GLYPH_BOX, MO_GLYPH_MARGIN, MO_GLYPH_PATH } from "../shared/mo-glyph.js";
 
 test("mo-glyph: closed subpaths, absolute commands only, every point inside the box", () => {
   assert.match(MO_GLYPH_PATH, /^M/);
@@ -19,4 +19,6 @@ test("mo-glyph: closed subpaths, absolute commands only, every point inside the 
   const mid = MO_GLYPH_BOX / 2;
   assert.ok(Math.abs(Math.min(...xs) + Math.max(...xs) - 2 * mid) < 2);
   assert.ok(Math.abs(Math.min(...ys) + Math.max(...ys) - 2 * mid) < 2);
+  // The caption under the glyph is spaced by this (MembraneEmpty.web.tsx).
+  assert.ok(Math.abs(Math.min(...ys) - MO_GLYPH_MARGIN) < 0.01, `ink top is ${Math.min(...ys)}`);
 });

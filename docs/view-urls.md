@@ -56,9 +56,15 @@ pins, Files path and line, the `?scrollToSeq=` selection) goes through
 since the stack did not grow. So the URL keeps that state and Back returns to
 it, but it never costs an extra Back: browsing ten files is one entry, not ten.
 A bare link to the narrative you are in, with no seq, goes nowhere. The list
-is a jump too: **All narratives** in the switcher pushes it, so Back returns
-to the narrative, whether or not a list was already beneath. So does a
-swipe down on the narrative's header card, which dismisses it. So does
+is a jump too: a swipe down on the narrative's header card dismisses it to
+a pushed list, so Back returns to the narrative, whether or not a list was
+already beneath. **All narratives** in the switcher, in a browser, does not
+navigate this tab at all: it is a link that opens the list in a new one, on
+the same daemon (see "A new tab names its daemon" below). On native, and in
+the web app launched from the home screen, it pushes like the swipe: there is
+no tab to open, and on iOS a `_blank` link from a home-screen app lands in a
+browser view that shares none of its storage, so it would open on the meld
+screen. So does
 **Archive** in the narrative's 🦠 menu, once the daemon has confirmed it (the
 pushed list fetches on mount, and nothing is broadcast to correct a fetch that
 raced the archive); Back returns to the archived narrative. Archiving from the
@@ -137,3 +143,30 @@ come back across an in-app card tap and two tab changes. So the module-level
 consume is what gets the credentials into storage early, `clearMeldUrl` is
 what actually clears the address bar, and `clearStoredConnection` still ends
 the flow.
+
+**A new tab names its daemon.** Which melded daemon a tab is on lives in that
+tab's `sessionStorage` (`expo/lib/registry.ts`), and a tab opened from a link
+starts with none: ⌘-click, middle-click, long-press "Open in New Tab" and
+`target="_blank"` are all `noopener`, which gets no copy. It falls back to
+this browser's *default* daemon, which on a shared app with several melded
+need not be the one the link came from. So every in-app anchor names it:
+`inAppLinkProps` (the `@nid`, `nid:seq` and file links in prose, the narrate
+rows in tool groups) and `newTabLinkProps` (**All narratives**) render their
+href with `#daemon=<home brane_id>` (`DAEMON_PARAM`, `withDaemonFragment`),
+while a plain click still navigates in place by the clean path. It goes in the
+fragment because it says which daemon, not what you are looking at: it is a
+connection param (`CONNECTION_PARAMS`), and like the token it never reaches the
+shared host's edge, a daemon's request log or a link unfurler. On arrival,
+`consumeConnectionFromLocation` in `expo/lib/api.ts` hands it to
+`adoptDaemonByBraneId` at module evaluation, before the root layout reads the
+registry, and cleans it off with the token. The rules are pure functions
+beside the param (`activeDaemonBraneId`, `daemonToAdopt`), tested in
+`src/test/view-url.test.ts`; `registry.ts` only reads and writes storage for
+them. Adoption fills only an **empty** slot. The router restores the initial fragment on its first URL write (see
+above), so the param can sit in the address bar after a daemon
+switched later in that tab, and a reload must not switch back; a tab that has
+a daemon, reloaded, restored or duplicated, keeps it. A brane_id this browser
+has not melded is ignored, and the default applies. It is `daemon`, not
+`brane`, because one daemon hosts several branes and the list already filters
+by one. It names a daemon and carries no credential, so it is safe to copy.
+Isolate and Meld never carry it: their token already picks the daemon.

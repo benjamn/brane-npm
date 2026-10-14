@@ -19,6 +19,11 @@
 /** Side of the square the path is laid out in, in path units. */
 export const MO_GLYPH_BOX = 1000;
 
+/** The empty band between the ink and the box's top or bottom edge, in path
+ *  units: the glyph is centered, so it is the same above and below. Whatever
+ *  sits under the glyph is that much farther from the ink than from the box. */
+export const MO_GLYPH_MARGIN = 92.79;
+
 /** SVG path data for 膜, y down, inside `[0, MO_GLYPH_BOX]²`. */
 export const MO_GLYPH_PATH =
   "M493.98 449.69L493.98 425.61L791.54 425.61L791.54 449.69L493.98 449.69ZM493.98 557.19L493.98 533.11" +

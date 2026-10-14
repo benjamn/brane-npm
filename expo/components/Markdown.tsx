@@ -98,6 +98,18 @@ export const systemMarkdownStyles: StyleMap = {
   text: { color: "#8a8a8e", fontSize: 15, lineHeight: 21 },
 };
 
+/** The line under the 膜 (MembraneEmpty): small, dim and centered, one
+ *  paragraph with no margin of its own. Links and code keep their color, so a
+ *  tip that points somewhere still looks like it does. */
+export const captionMarkdownStyles: StyleMap = {
+  ...darkMarkdownStyles,
+  root: {},
+  text: { color: "#666", fontSize: 13, lineHeight: 18 },
+  paragraph: { marginVertical: 0, width: "100%", textAlign: "center" },
+  strong: { color: "#888", fontWeight: "600" },
+  inlineCode: { ...darkMarkdownStyles.inlineCode, fontSize: 12 },
+};
+
 // GFM autolink literals: bare `https://…`, `www.…` and `me@example.com` become
 // real link nodes at parse time, with GFM's trailing-punctuation and
 // paren-balancing rules. Being parse-level is the point — a URL inside a code
@@ -209,6 +221,8 @@ export interface MarkdownContentProps {
   foreign?: boolean;
   /** Daemon-written lifecycle event — renders recessive (see systemMarkdownStyles). */
   system?: boolean;
+  /** The line under the 膜 (see captionMarkdownStyles). */
+  caption?: boolean;
   /** Link handling — `knownNarrativeIds`, `knownProtocols`, `onNarrativePress`,
    *  `onProtocolPress` — normally comes from the enclosing `MarkdownLinksProvider`;
    *  passing any of them here overrides it for this one renderer. */
@@ -231,6 +245,7 @@ export const MarkdownContent = memo(function MarkdownContent({
   content,
   foreign = false,
   system = false,
+  caption = false,
   onNarrativePress: ownNarrativePress,
   onProtocolPress: ownProtocolPress,
   onFilePress,
@@ -485,7 +500,7 @@ export const MarkdownContent = memo(function MarkdownContent({
   return (
     <MarkdownRenderer
       markdown={prepared}
-      styles={system ? systemMarkdownStyles : foreign ? foreignMarkdownStyles : darkMarkdownStyles}
+      styles={caption ? captionMarkdownStyles : system ? systemMarkdownStyles : foreign ? foreignMarkdownStyles : darkMarkdownStyles}
       mergeStyle={false}
       syntaxExtensions={gfmSyntaxExtensions}
       extensions={mdastExtensions}

@@ -1,12 +1,14 @@
-import React from "react";
+import React, { useState } from "react";
 import { StyleSheet, Text, View } from "react-native";
+import { QuipLoop } from "@shared/membrane-quips";
+import { MarkdownContent } from "./Markdown";
 import type { MembraneProps } from "./Membrane";
 
 // Native stub. The membrane itself — the 膜 glyph as a WebGL mask over a
 // thin-film surface — lives in Membrane.web.tsx, set as the list's floor by
 // MembraneEmpty.web.tsx; metro picks those for web and this for native, so no
 // shader or canvas code reaches a native bundle. Native gets the same words,
-// without the picture.
+// without the picture — and so without the tap that changes the caption.
 export type MembraneEmptyProps = MembraneProps & {
   /** The line that names the state — "No narratives yet". Omitted under a
    *  populated list, where the glyph is a footer rather than a state. */
@@ -17,10 +19,14 @@ export type MembraneEmptyProps = MembraneProps & {
 };
 
 export default function MembraneEmpty({ title, subtitle }: MembraneEmptyProps) {
+  const [caption] = useState(() => new QuipLoop().current());
   return (
     <View style={styles.center}>
       {title ? <Text style={styles.emptyText}>{title}</Text> : null}
       {subtitle ? <Text style={styles.emptySubtext}>{subtitle}</Text> : null}
+      <View style={styles.caption}>
+        <MarkdownContent content={caption} caption />
+      </View>
     </View>
   );
 }
@@ -41,5 +47,9 @@ const styles = StyleSheet.create({
     fontSize: 13,
     marginTop: 8,
     textAlign: "center",
+  },
+  caption: {
+    marginTop: 12,
+    alignSelf: "stretch",
   },
 });

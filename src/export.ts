@@ -5,7 +5,7 @@ import { micromark } from "micromark";
 import { gfmTable, gfmTableHtml } from "micromark-extension-gfm-table";
 import { gfmAutolinkLiteral, gfmAutolinkLiteralHtml } from "micromark-extension-gfm-autolink-literal";
 import { gfmTaskListItem, gfmTaskListItemHtml } from "micromark-extension-gfm-task-list-item";
-import { math } from "micromark-extension-math";
+import { math } from "./math-syntax.js";
 import { NID_PATTERN, NID_REF_PATTERN } from "./shared/markdown-nids.js";
 import { isInlinePayload, INLINE_PAYLOAD_MIME } from "./shared/payload-inline.js";
 import { readEvents, readEventsBySeqs } from "./db/events.js";

@@ -1538,6 +1538,17 @@ export default function NarrativeList() {
     }
   }, [visibleNarratives, openMenuNid]);
 
+  // What an empty list is hiding. The list loads no archived rows unless a
+  // brane is picked (and then loads them all), but every brane's
+  // narrative_count includes them; so when the list is empty, the counts of
+  // the branes in view are exactly the archived narratives. "No narratives
+  // yet" is only true when that is zero.
+  const archivedHidden = useMemo(() => {
+    if (narratives.length > 0) return 0;
+    const inView = activeBraneId ? branes.filter((b) => b.brane_id === activeBraneId) : branes;
+    return inView.reduce((sum, b) => sum + b.narrative_count, 0);
+  }, [narratives.length, branes, activeBraneId]);
+
   const totalEnded = useMemo(
     () => searchFiltered.filter((n) => n.status === "ended" && !n.mcp_connected).length,
     [searchFiltered],
@@ -1660,94 +1671,110 @@ export default function NarrativeList() {
           subtitle="Tap the daemon selector above to add one"
         />
       ) : (
-        <PullToRefresh
-          refreshing={refreshing}
-          onRefresh={handleRefresh}
-          scrollOffsetRef={scrollOffsetRef}
+        // The membrane's caption is markdown (src/shared/membrane-quips.ts):
+        // a /protocol in it opens the reader, a nid opens the narrative.
+        <MarkdownLinksProvider
+          knownNarrativeIds={knownNarrativeIds}
+          onNarrativePress={(nid, seq) => router.push(seq != null ? `/${nid}?scrollToSeq=${seq}` : `/${nid}`)}
+          onProtocolPress={(name) => setWikiReader({ source: "protocols", slug: name })}
         >
-          <FlatList
-            ref={listRef}
-            style={{ flex: 1 }}
-            data={searchQuery.trim() && narrativesCollapsed ? [] : visibleNarratives}
-            keyExtractor={(item) => item.id}
-            CellRendererComponent={NarrativeCell}
-            onScroll={(e) => {
-              scrollOffsetRef.current = e.nativeEvent.contentOffset.y;
-            }}
-            scrollEventThrottle={16}
-            ListHeaderComponent={
-              searchQuery.trim() ? (
-                <>
-                  <WikiResultsHeader
-                    results={wikiResults}
-                    query={searchQuery.trim()}
-                    collapsed={wikiCollapsed}
-                    onToggle={() => setWikiCollapsed((v) => !v)}
-                    onOpen={(source, slug, anchor) => setWikiReader({ source, slug, anchor })}
-                  />
-                  <View style={styles.wikiSection}>
-                    <SectionBar
-                      icon={"💬"}
-                      label="Narratives"
-                      count={visibleNarratives.length}
-                      collapsed={narrativesCollapsed}
-                      onToggle={() => setNarrativesCollapsed((v) => !v)}
-                      order={narrativesOrder}
-                      onToggleOrder={() =>
-                        setNarrativesOrder((o) => (o === "relevance" ? "recent" : "relevance"))
-                      }
+          <PullToRefresh
+            refreshing={refreshing}
+            onRefresh={handleRefresh}
+            scrollOffsetRef={scrollOffsetRef}
+          >
+            <FlatList
+              ref={listRef}
+              style={{ flex: 1 }}
+              data={searchQuery.trim() && narrativesCollapsed ? [] : visibleNarratives}
+              keyExtractor={(item) => item.id}
+              CellRendererComponent={NarrativeCell}
+              onScroll={(e) => {
+                scrollOffsetRef.current = e.nativeEvent.contentOffset.y;
+              }}
+              scrollEventThrottle={16}
+              ListHeaderComponent={
+                searchQuery.trim() ? (
+                  <>
+                    <WikiResultsHeader
+                      results={wikiResults}
+                      query={searchQuery.trim()}
+                      collapsed={wikiCollapsed}
+                      onToggle={() => setWikiCollapsed((v) => !v)}
+                      onOpen={(source, slug, anchor) => setWikiReader({ source, slug, anchor })}
                     />
-                  </View>
-                </>
-              ) : null
-            }
-            renderItem={({ item }) => (
-              <NarrativeCard
-                item={item}
-                conn={conn}
-                onPress={() => router.push(`/${item.id}`)}
-                onArchive={() => handleArchive(item.id, !!item.archived)}
-                onMeld={() => setMeldTarget(item)}
-                onTwin={() => setTwinTarget(item)}
-                onRevive={() => handleRevive(item)}
-                onEnd={() => handleEnd(item.id)}
-                menuVisible={openMenuNid === item.id}
-                setMenuVisible={(open) => setOpenMenuNid(open ? item.id : null)}
-                hits={hitsByNarrative.get(item.id)}
-                onHitPress={(nid, seq) => router.push(`/${nid}?scrollToSeq=${seq}`)}
-                isolated={isolated}
-                appHost={appHost}
-              />
-            )}
-            onEndReached={
-              !searchQuery.trim() && endedLimit < totalEnded ? handleLoadMoreEnded : undefined
-            }
-            onEndReachedThreshold={0.3}
-            // The membrane is the list's floor: under the last card when there
-            // are cards, and the centered empty state (below) when there are none.
-            ListFooterComponent={
-              visibleNarratives.length > 0 && !searchQuery.trim() ? (
-                <MembraneEmpty />
-              ) : null
-            }
-            // The empty state fills the viewport (flexGrow) so the membrane sits
-            // where the first card would not be, centered, rather than at the top.
-            contentContainerStyle={
-              visibleNarratives.length === 0 && !searchQuery.trim() ? styles.emptyFill : undefined
-            }
-            ListEmptyComponent={
-              searchQuery.trim() ? (
-                narrativesCollapsed ? null : (
-                  <View style={styles.center}>
-                    <Text style={styles.emptyText}>No narratives match</Text>
-                  </View>
+                    <View style={styles.wikiSection}>
+                      <SectionBar
+                        icon={"💬"}
+                        label="Narratives"
+                        count={visibleNarratives.length}
+                        collapsed={narrativesCollapsed}
+                        onToggle={() => setNarrativesCollapsed((v) => !v)}
+                        order={narrativesOrder}
+                        onToggleOrder={() =>
+                          setNarrativesOrder((o) => (o === "relevance" ? "recent" : "relevance"))
+                        }
+                      />
+                    </View>
+                  </>
+                ) : null
+              }
+              renderItem={({ item }) => (
+                <NarrativeCard
+                  item={item}
+                  conn={conn}
+                  onPress={() => router.push(`/${item.id}`)}
+                  onArchive={() => handleArchive(item.id, !!item.archived)}
+                  onMeld={() => setMeldTarget(item)}
+                  onTwin={() => setTwinTarget(item)}
+                  onRevive={() => handleRevive(item)}
+                  onEnd={() => handleEnd(item.id)}
+                  menuVisible={openMenuNid === item.id}
+                  setMenuVisible={(open) => setOpenMenuNid(open ? item.id : null)}
+                  hits={hitsByNarrative.get(item.id)}
+                  onHitPress={(nid, seq) => router.push(`/${nid}?scrollToSeq=${seq}`)}
+                  isolated={isolated}
+                  appHost={appHost}
+                />
+              )}
+              onEndReached={
+                !searchQuery.trim() && endedLimit < totalEnded ? handleLoadMoreEnded : undefined
+              }
+              onEndReachedThreshold={0.3}
+              // The membrane is the list's floor: under the last card when there
+              // are cards, and the centered empty state (below) when there are none.
+              ListFooterComponent={
+                visibleNarratives.length > 0 && !searchQuery.trim() ? (
+                  <MembraneEmpty />
+                ) : null
+              }
+              // The empty state fills the viewport (flexGrow) so the membrane sits
+              // where the first card would not be, centered, rather than at the top.
+              contentContainerStyle={
+                visibleNarratives.length === 0 && !searchQuery.trim() ? styles.emptyFill : undefined
+              }
+              ListEmptyComponent={
+                searchQuery.trim() ? (
+                  narrativesCollapsed ? null : (
+                    <View style={styles.center}>
+                      <Text style={styles.emptyText}>No narratives match</Text>
+                    </View>
+                  )
+                ) : (
+                  <MembraneEmpty
+                    title={
+                      archivedHidden === 0
+                        ? "No narratives yet"
+                        : archivedHidden === 1
+                          ? "The only narrative is archived"
+                          : `All ${archivedHidden} narratives are archived`
+                    }
+                  />
                 )
-              ) : (
-                <MembraneEmpty title="No narratives yet" />
-              )
-            }
-          />
-        </PullToRefresh>
+              }
+            />
+          </PullToRefresh>
+        </MarkdownLinksProvider>
       )}
 
       <SpawnDialog

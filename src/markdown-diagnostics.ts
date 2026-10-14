@@ -33,7 +33,7 @@ import { micromark } from "micromark";
 import { gfmTable, gfmTableHtml } from "micromark-extension-gfm-table";
 import { gfmAutolinkLiteral, gfmAutolinkLiteralHtml } from "micromark-extension-gfm-autolink-literal";
 import { gfmTaskListItem, gfmTaskListItemHtml } from "micromark-extension-gfm-task-list-item";
-import { math } from "micromark-extension-math";
+import { math } from "./math-syntax.js";
 import { mathHtmlExtension } from "./math.js";
 import { fromMarkdown } from "mdast-util-from-markdown";
 import { inspectDiagram } from "./diagram/index.js";

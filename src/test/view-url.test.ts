@@ -15,6 +15,10 @@ import {
   withoutConnectionHash,
   withoutConnectionParams,
   connectionFragment,
+  withDaemonFragment,
+  daemonFromHash,
+  activeDaemonBraneId,
+  daemonToAdopt,
 } from "../shared/view-url.js";
 
 // These pin the URL contract that the Isolate menu item depends on. It opens
@@ -267,6 +271,9 @@ describe("withoutConnectionHash", () => {
       ["#other=1&token=t", "#other=1"],
       ["host=h:1&token=t", ""],
       ["#token=a&token=b&x=1", "#x=1"],
+      // `daemon` names which daemon too, so it is consumed like the token.
+      ["#daemon=brane-f66d2b", ""],
+      ["#host=h:1&daemon=brane-f66d2b&token=t&x=1", "#x=1"],
     ];
     for (const [input, expected] of cases) {
       assert.equal(withoutConnectionHash(input), expected, JSON.stringify(input));
@@ -705,5 +712,123 @@ describe("terminalOnlyHref", () => {
     const url = new URL(terminalOnlyHref(NID), "https://example.test");
     assert.equal(parseActiveTab(url.searchParams.get("tab") ?? undefined), "terminal");
     assert.equal(parsePinnedTabs(url.searchParams.get("pinned") ?? undefined).size, 0);
+  });
+});
+
+describe("withDaemonFragment", () => {
+  // A link opened in a new tab arrives with no active daemon in that tab's
+  // sessionStorage; the fragment is how it finds the one the link was written
+  // from. So the question each case asks: is the daemon named, in the
+  // fragment, and is the view the href's query already described left exactly
+  // as it was?
+  const BRANE = "brane-f66d2b";
+
+  it("names the daemon in the fragment of a bare path", () => {
+    assert.equal(withDaemonFragment("/", BRANE), `/#daemon=${BRANE}`);
+    assert.equal(withDaemonFragment(`/${NID}`, BRANE), `/${NID}#daemon=${BRANE}`);
+  });
+
+  it("leaves the query, the view, exactly as it was", () => {
+    const href = `/${NID}?tab=files&path=src%2Fa.ts&line=10-20`;
+    const url = new URL(withDaemonFragment(href, BRANE), "https://example.test");
+    assert.equal(url.pathname + url.search, href);
+    assert.equal(url.searchParams.get("daemon"), null);
+    assert.equal(daemonFromHash(url.hash), BRANE);
+  });
+
+  it("replaces a daemon already there, and keeps any other fragment param", () => {
+    const url = new URL(withDaemonFragment(`/${NID}?scrollToSeq=4#x=1&daemon=old`, BRANE), "https://example.test");
+    const frag = new URLSearchParams(url.hash.slice(1));
+    assert.deepEqual(frag.getAll("daemon"), [BRANE]);
+    assert.equal(frag.get("x"), "1");
+    assert.equal(url.searchParams.get("scrollToSeq"), "4");
+  });
+
+  it("returns the href unchanged when the daemon is not known", () => {
+    for (const none of [null, undefined, ""]) {
+      assert.equal(withDaemonFragment(`/${NID}?scrollToSeq=4`, none), `/${NID}?scrollToSeq=4`);
+    }
+  });
+
+  it("reads back through daemonFromHash, and is what the fragment cleaner removes", () => {
+    const url = new URL(withDaemonFragment(`/${NID}?scrollToSeq=4`, BRANE), "https://example.test");
+    assert.equal(daemonFromHash(url.hash), BRANE);
+    assert.equal(daemonFromHash(url.hash.slice(1)), BRANE);
+    assert.equal(withoutConnectionHash(url.hash), "");
+    assert.equal(withoutConnectionParams(url.search), "?scrollToSeq=4");
+  });
+
+  it("is absent from daemonFromHash when missing or empty", () => {
+    assert.equal(daemonFromHash(""), null);
+    assert.equal(daemonFromHash("#"), null);
+    assert.equal(daemonFromHash("#daemon="), null);
+    assert.equal(daemonFromHash("#token=t"), null);
+  });
+
+  it("is not carried by Isolate or Meld, whose token already names the daemon", () => {
+    // Isolate and Meld seed from the page's search string; a stray `daemon`
+    // there (an old link) must not ride along in either half of the URL.
+    const opts = {
+      host: SHARED_SPA_HOST,
+      protocol: "https:",
+      search: `?scrollToSeq=4&daemon=${BRANE}`,
+      path: `/${NID}`,
+      conn: CONN,
+      view: viewParams("chat", new Set()),
+    };
+    for (const built of [buildIsolateUrl(opts)!, buildMeldUrl(opts)]) {
+      const { params, conn } = open(built);
+      assert.equal(params.get("daemon"), null, built);
+      assert.equal(conn.get("daemon"), null, built);
+      assert.equal(params.get("scrollToSeq"), "4", built);
+      assert.equal(conn.get("token"), CONN.token, built);
+    }
+  });
+});
+
+describe("the daemon a tab names, and the one it adopts", () => {
+  // The registry entries these read, as `expo/lib/registry.ts` stores them:
+  // `id` is the display key the tab's slot holds, `brane_id` what a link names.
+  const CHALK = { id: "ben@chalk", brane_id: "brane-aaaaaa" };
+  const SLATE = { id: "ben@slate", brane_id: "brane-bbbbbb" };
+  const BOTH = [CHALK, SLATE];
+
+  it("a link names the tab's active daemon", () => {
+    assert.equal(activeDaemonBraneId(BOTH, SLATE.id), SLATE.brane_id);
+    assert.equal(activeDaemonBraneId(BOTH, CHALK.id), CHALK.brane_id);
+  });
+
+  it("falls back to the first entry when the active id is missing or stale, as the layout connects", () => {
+    assert.equal(activeDaemonBraneId(BOTH, null), CHALK.brane_id);
+    assert.equal(activeDaemonBraneId(BOTH, "ben@gone"), CHALK.brane_id);
+  });
+
+  it("names nothing with nothing melded, so the link stays bare", () => {
+    assert.equal(activeDaemonBraneId([], null), null);
+    assert.equal(withDaemonFragment("/", activeDaemonBraneId([], null)), "/");
+  });
+
+  it("a new tab, whose slot is empty, adopts the daemon its link named", () => {
+    assert.equal(daemonToAdopt(BOTH, null, SLATE.brane_id), SLATE.id);
+  });
+
+  it("a tab that already has a daemon keeps it, so a reload never undoes a switch", () => {
+    // The router restores the initial fragment on its first URL write, so a
+    // tab opened on SLATE and later switched to CHALK can still say SLATE.
+    assert.equal(daemonToAdopt(BOTH, CHALK.id, SLATE.brane_id), null);
+    assert.equal(daemonToAdopt(BOTH, SLATE.id, SLATE.brane_id), null);
+  });
+
+  it("a daemon this browser has not melded is no instruction at all", () => {
+    assert.equal(daemonToAdopt(BOTH, null, "brane-cccccc"), null);
+    assert.equal(daemonToAdopt([], null, SLATE.brane_id), null);
+  });
+
+  it("round-trips: what one tab names, a fresh tab adopts", () => {
+    for (const from of BOTH) {
+      const href = withDaemonFragment(`/${NID}`, activeDaemonBraneId(BOTH, from.id));
+      const named = daemonFromHash(new URL(href, "https://example.test").hash)!;
+      assert.equal(daemonToAdopt(BOTH, null, named), from.id);
+    }
   });
 });

@@ -107,10 +107,86 @@ export function parseLineSpec(s: string | null | undefined): { line?: number; li
   return end !== undefined && end >= line ? { line, lineEnd: end } : { line };
 }
 
+/** Which melded daemon a same-origin link means, named by its home `brane_id`
+ *  (the registry's dedup key, and no secret), in the link's **fragment**:
+ *  `#daemon=brane-f66d2b`.
+ *
+ *  A tab's active daemon lives in its own `sessionStorage`, and a link opened in
+ *  a new tab (⌘-click, middle-click, `target="_blank"`) starts with none: it
+ *  falls back to this browser's *default* daemon, which on a shared app with
+ *  several melded need not be the one the link was written from. So in-app
+ *  hrefs carry this param, and an arriving tab whose slot is still empty
+ *  adopts it as its active daemon before anything connects (`expo/lib/api.ts`,
+ *  `adoptDaemonByBraneId`). A tab that already has one ignores it, which is
+ *  what keeps a reload from undoing a later switch. Plain clicks navigate
+ *  within the tab and never put it in the URL.
+ *
+ *  It says which daemon, not what you are looking at, so it rides where the
+ *  connection does (`connectionFragment`): a fragment reaches no server, and
+ *  the shared host's edge, a daemon's request log and a link unfurler never
+ *  see it. It is not `brane`, because a daemon hosts several branes and the
+ *  list already filters by one; this names the daemon. A brane_id this browser
+ *  has not melded is ignored, and the default applies as before. */
+export const DAEMON_PARAM = "daemon";
+
 /** The params that describe *which daemon*, as opposed to what you are looking
  *  at. They are origin-scoped: meaningful to the page that received them, never
- *  to be carried onward. */
-export const CONNECTION_PARAMS = ["host", "token"] as const;
+ *  to be carried onward. `daemon` is one of them: cleaned on arrival like the
+ *  token, and dropped by Isolate and Meld, whose token already says. */
+export const CONNECTION_PARAMS = ["host", "token", DAEMON_PARAM] as const;
+
+/** An in-app href (path, optional query, optional fragment) with `daemon` set
+ *  to `braneId` in its fragment, replacing any already there and leaving the
+ *  query, which is the view, untouched. Without a `braneId` the href comes
+ *  back unchanged, so a caller that does not know its daemon yet still gets a
+ *  working link. */
+export function withDaemonFragment(href: string, braneId: string | null | undefined): string {
+  if (!braneId) return href;
+  const hashAt = href.indexOf("#");
+  const beforeHash = hashAt === -1 ? href : href.slice(0, hashAt);
+  const params = new URLSearchParams(hashAt === -1 ? "" : href.slice(hashAt + 1));
+  params.set(DAEMON_PARAM, braneId);
+  return `${beforeHash}#${params.toString()}`;
+}
+
+/** The `daemon` param from a location hash (with or without its `#`), or null
+ *  when absent or empty. */
+export function daemonFromHash(hash: string): string | null {
+  return new URLSearchParams(hash.startsWith("#") ? hash.slice(1) : hash).get(DAEMON_PARAM) || null;
+}
+
+/** The two fields of a melded daemon's registry entry (`expo/lib/registry.ts`)
+ *  that the `daemon` param's rules read. */
+export interface DaemonRef {
+  id: string;
+  brane_id: string;
+}
+
+/** The brane_id an in-app link should name: the tab's active entry's, falling
+ *  back to the first entry when `activeId` is missing or stale, which is what
+ *  the root layout connects to in that case. Null with nothing melded. */
+export function activeDaemonBraneId(daemons: readonly DaemonRef[], activeId: string | null): string | null {
+  return (daemons.find((d) => d.id === activeId) ?? daemons[0])?.brane_id ?? null;
+}
+
+/** Which registry entry a page arriving with `#daemon=<braneId>` should make
+ *  this tab's active one, or null to leave things as they are.
+ *
+ *  Only an **empty** slot is filled (`tabActiveId` is the tab's own
+ *  sessionStorage value, not the cross-tab default it falls back to). A new
+ *  tab has none; a reloaded, restored or duplicated tab has one and keeps it.
+ *  That matters because the router puts the initial fragment back on its
+ *  first URL write, so `#daemon=` can outlive a daemon switched later in the
+ *  same tab, and a reload must not switch it back. A brane_id this browser
+ *  has not melded is no instruction at all. */
+export function daemonToAdopt(
+  daemons: readonly DaemonRef[],
+  tabActiveId: string | null,
+  braneId: string,
+): string | null {
+  if (tabActiveId !== null) return null;
+  return daemons.find((d) => d.brane_id === braneId)?.id ?? null;
+}
 
 /** A search string with the connection params removed and everything else left
  *  alone, ready to hand to `history.replaceState`.

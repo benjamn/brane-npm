@@ -6,6 +6,27 @@ page, which is also what triggers its publish (see
 [docs/releasing.md](docs/releasing.md)). This file is the summary that
 travels in the npm tarball.
 
+## 0.3.3 - 2026-10-14
+
+- A fresh `npm install brane` audits clean. The math syntax extension
+  is now vendored (`src/math-syntax.ts`) instead of depending on
+  `micromark-extension-math`, which pinned a second, older katex into
+  every install (GHSA-238p-pmpm-9mq7) and led `npm audit fix --force` to
+  propose brane@0.1.1 ([#608](https://github.com/benjamn/brane/pull/608)).
+- In the web app, "All narratives" opens the list in a new tab, and a
+  link opened in a new tab lands on the daemon it came from rather than
+  the browser's default one ([#607](https://github.com/benjamn/brane/pull/607)).
+- The 膜 glyph carries a caption — a quip or a tip about brane — that
+  changes on each tap and nothing else; the empty state's words move
+  above it, and it no longer says "No narratives yet" when they are all
+  archived ([#606](https://github.com/benjamn/brane/pull/606)).
+- The README, which is also the npm page, opens with a new
+  introduction: what brane is for, the LIVE loop, and terminal
+  mirroring ([#610](https://github.com/benjamn/brane/pull/610)).
+
+Published while the repository is private, so like 0.3.0–0.3.2 it
+carries no npm provenance attestation.
+
 ## 0.3.2 - 2026-10-13
 
 - Archive is offered only once a narrative has ended, and the daemon

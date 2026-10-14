@@ -1,7 +1,7 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { micromark } from "micromark";
-import { math } from "micromark-extension-math";
+import { math } from "../math-syntax.js";
 import { MATH_BLOCK_CSS, prepareMathMarkdown, isMathContent, renderMathHtml } from "../shared/markdown-math.js";
 import { mathHtmlExtension, katexStyleFor } from "../math.js";
 import { readFileSync } from "node:fs";

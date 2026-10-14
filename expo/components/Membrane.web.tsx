@@ -471,9 +471,10 @@ function hexToRgb(hex: string): [number, number, number] {
 /**
  * Everything imperative: GL setup, the mask texture, and the frame loop.
  * Returns null when WebGL is unavailable or the shader will not build, in
- * which case the caller shows the static outline instead.
+ * which case the caller shows the static outline instead. `onTap` hears each
+ * tap after the film has taken it — never a hold or a drag.
  */
-function createEngine(canvas: HTMLCanvasElement, host: HTMLElement, motion: MembraneMotion): Engine | null {
+function createEngine(canvas: HTMLCanvasElement, host: HTMLElement, motion: MembraneMotion, onTap: () => void): Engine | null {
   const ctx = canvas.getContext("webgl", { antialias: false, alpha: false, premultipliedAlpha: false });
   if (!ctx) return null;
   const gl: WebGLRenderingContext = ctx; // narrowed once, so the closures below see it non-null
@@ -837,7 +838,7 @@ function createEngine(canvas: HTMLCanvasElement, host: HTMLElement, motion: Memb
     if (!press || e.pointerId !== press.id) return;
     const isTap = !press.moved && performance.now() - press.at < TAP_MS;
     endPress();
-    if (isTap) touch(...glyphAt(e.clientX, e.clientY));
+    if (isTap) { touch(...glyphAt(e.clientX, e.clientY)); onTap(); }
   };
   const onPointerCancel = (e: PointerEvent) => {
     if (press && e.pointerId === press.id) endPress();
@@ -913,7 +914,11 @@ function createEngine(canvas: HTMLCanvasElement, host: HTMLElement, motion: Memb
   };
 }
 
-export default function Membrane({ voice, lift, sway, churn }: MembraneProps) {
+/** The glyph's side: a square, as large as it can be without crowding a
+ *  phone (60vw), a short window (38vh), or a desktop (360px). */
+export const MEMBRANE_SIDE = "min(60vw, 38vh, 360px)";
+
+export default function Membrane({ voice, lift, sway, churn, onTap }: MembraneProps) {
   const hostRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const engineRef = useRef<Engine | null>(null);
@@ -924,17 +929,21 @@ export default function Membrane({ voice, lift, sway, churn }: MembraneProps) {
   const motion = membraneMotion(voice, { lift, sway, churn });
   const motionRef = useRef(motion);
   motionRef.current = motion;
+  // Read at tap time, so a new callback never rebuilds the engine.
+  const onTapRef = useRef(onTap);
+  onTapRef.current = onTap;
 
   useEffect(() => {
     const host = hostRef.current, canvas = canvasRef.current;
     if (!host || !canvas) return;
-    let engine = createEngine(canvas, host, motionRef.current);
+    const tapped = () => onTapRef.current?.();
+    let engine = createEngine(canvas, host, motionRef.current, tapped);
     if (!engine) { setGlOk(false); return; }
     engineRef.current = engine;
 
     // A lost context (GPU reset, backgrounded iOS tab) is rebuilt on restore.
     const onLost = (e: Event) => { e.preventDefault(); engine?.destroy(); engine = null; engineRef.current = null; };
-    const onRestored = () => { engine = createEngine(canvas, host, motionRef.current); engineRef.current = engine; };
+    const onRestored = () => { engine = createEngine(canvas, host, motionRef.current, tapped); engineRef.current = engine; };
     canvas.addEventListener("webglcontextlost", onLost);
     canvas.addEventListener("webglcontextrestored", onRestored);
     return () => {
@@ -950,10 +959,16 @@ export default function Membrane({ voice, lift, sway, churn }: MembraneProps) {
   }, [motion.lift, motion.sway, motion.churn]);
 
   // Pointer handling is the engine's (it needs the hold and the drag as well
-  // as the tap); the keyboard touches the glyph's middle.
+  // as the tap); the keyboard touches the glyph's middle. Without WebGL there
+  // is no engine and nothing to drag, so a click on the outline is the tap.
   const onKeyDown = useCallback((e: React.KeyboardEvent<HTMLDivElement>) => {
-    if (e.key === "Enter" || e.key === " ") { e.preventDefault(); engineRef.current?.touch(0, 0); }
+    if (e.key === "Enter" || e.key === " ") {
+      e.preventDefault();
+      engineRef.current?.touch(0, 0);
+      onTapRef.current?.();
+    }
   }, []);
+  const onOutlineClick = useCallback(() => onTapRef.current?.(), []);
 
   return (
     <div
@@ -963,7 +978,7 @@ export default function Membrane({ voice, lift, sway, churn }: MembraneProps) {
       aria-label="Change the colors"
       onKeyDown={onKeyDown}
       style={{
-        width: "min(60vw, 38vh, 360px)",
+        width: MEMBRANE_SIDE,
         aspectRatio: "1 / 1",
         maxWidth: "100%",
         position: "relative",
@@ -985,7 +1000,7 @@ export default function Membrane({ voice, lift, sway, churn }: MembraneProps) {
           style={{ width: "100%", height: "100%", display: "block", background: GROUND }}
         />
       ) : (
-        <svg viewBox={`0 0 ${MO_GLYPH_BOX} ${MO_GLYPH_BOX}`} width="100%" height="100%" aria-hidden>
+        <svg viewBox={`0 0 ${MO_GLYPH_BOX} ${MO_GLYPH_BOX}`} width="100%" height="100%" aria-hidden onClick={onOutlineClick}>
           <path d={MO_GLYPH_PATH} fill="#3a3a42" />
         </svg>
       )}

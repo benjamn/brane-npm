@@ -11,6 +11,9 @@ export type MembraneProps = {
   lift?: number;
   sway?: number;
   churn?: number;
+  /** Called on each tap of the glyph (or Enter/Space on it) — not a hold, not
+   *  a drag. The caption under it cycles on this (MembraneEmpty.web.tsx). */
+  onTap?: () => void;
 };
 
 export default function Membrane(_props: MembraneProps) {

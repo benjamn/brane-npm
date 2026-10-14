@@ -53,7 +53,7 @@ export function createControlChannel(opts: ControlChannelOptions) {
   // How many mounted screens are on the brane-wide activity stream (one
   // subscription, not one per card), re-sent on reconnect alongside the
   // per-narrative subscriptions. A count, not a flag, for the same reason as
-  // subscriberCounts: the switcher's All narratives pushes a list over a
+  // subscriberCounts: dismissing or archiving a narrative pushes a list over a
   // narrative that may already have one beneath it, and the top list's
   // unmount must not silence the one Back returns to.
   let activitySubscribers = 0;

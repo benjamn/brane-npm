@@ -15,9 +15,10 @@ import {
   retryDelayMs,
   withToken,
 } from "@shared/api-request";
-import { withoutConnectionHash, withoutConnectionParams } from "@shared/view-url";
+import { daemonFromHash, withoutConnectionHash, withoutConnectionParams } from "@shared/view-url";
 import { formatSeqModeParam, formatSeqParam, type SeqSelectionMode } from "@shared/export-selection";
 import { lastTerminalSize } from "./terminal";
+import { adoptDaemonByBraneId } from "./registry";
 
 export interface ConnectionParams {
   host: string; // "hostname:port" or empty for same-origin
@@ -176,9 +177,18 @@ export function parseConnectionParams(): ConnectionParams | null {
  */
 function consumeConnectionFromLocation(): void {
   if (typeof window === "undefined" || !window.history?.replaceState) return;
+  // `#daemon=` (an in-app link opened in a new tab) names which melded daemon
+  // the link was written from. A new tab's sessionStorage has no active daemon
+  // yet, so adopting it here, before the root layout reads the registry, is
+  // the whole job (a tab that has one keeps it); the param then goes the way
+  // of the token. See DAEMON_PARAM.
+  const daemon = daemonFromHash(window.location.hash);
+  if (daemon) adoptDaemonByBraneId(daemon);
   const conn = connFromLocation();
-  if (!conn) return;
-  try { sessionStorage.setItem(STORAGE_KEY, JSON.stringify(conn)); } catch { return; }
+  if (!conn && !daemon) return;
+  if (conn) {
+    try { sessionStorage.setItem(STORAGE_KEY, JSON.stringify(conn)); } catch { return; }
+  }
   const clean =
     window.location.pathname +
     withoutConnectionParams(window.location.search) +

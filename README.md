@@ -1,6 +1,12 @@
 # brane
 
-A TypeScript CLI and userspace daemon for managing narrative agent sessions.
+Brane provides a [web-based remote management interface](https://brane.organelle.dev/) for running long-lived Terminal UI (TUI) applications on any remote machine, securely and directly, without a central server, supporting not only full shells like `zsh` and `fish` and utilities like `lazygit` or `htop`, but also most of the popular _agentic_ TUI commands: `claude`, `codex`, `gemini`, `crush`, `copilot`, `goose`, and so on.
+
+The "intelligent" TUI applications demonstrate their intelligence by using brane's local MCP tools: `whoami`, `narrate`, `listen` and the rest, to implement a protocol for ongoing, purposeful conversation (the "LIVE loop") recorded automatically to a permanent, fully agent-searchable record that remains completely private to the host machine.
+
+Unlike a lot of other remote-coding tools, which let you chat with your agents and accept/deny permissions prompts, brane also _mirrors the terminal of the running agent_, so you can effortlessly observe your agents working from any mobile device, with the full power of a software keyboard and touch inputs for interacting with the terminal from afar, whenever you need that level of control.
+
+## Etymology and economics
 
 "Brane" is short for **membrane**, evoking a [_eukaryotic_](https://en.wikipedia.org/wiki/Eukaryote) metaphor for agent management, inherited from [organelle](https://github.com/benjamn/organelle): the daemon is the nucleus (which has a membrane), agents are organelles (which in turn have their own membranes), and narrative event logs trace everything each organelle has encountered and done (biologically implausible, but very useful).
 
@@ -11,24 +17,6 @@ You can use brane from any web-capable device, anywhere in the world, but you mu
 If you find brane useful, perhaps because your tastes align with mine and I have aligned brane relentlessly to my tastes, please consider supporting brane's development so it may remain unencumbered by centralization, surveillance, or required payment:
 
 [![Sponsor](https://img.shields.io/badge/Sponsor-%E2%9D%A4-ea4aaa?logo=githubsponsors)](https://github.com/sponsors/benjamn)
-
-## What it does
-
-Brane runs long-lived coding agents (Claude Code, Codex, Gemini, Goose and
-others, or any command) in tmux on your own machine, keeps everything they
-say and hear in one SQLite database, and lets you read, steer and search
-them from a phone or any browser on your tailnet.
-
-Four ideas cover most of it:
-
-- **Fold**: a directory you've registered as a place agents may be spawned.
-- **Narrative**: one agent session's append-only log of everything it said
-  and everything said to it. Every message has a stable address
-  (`claude-4c7289d1:42`) you can link to from anywhere.
-- **The LIVE loop**: the protocol agents follow to talk to you through an
-  MCP server brane injects into each session: listen, interpret, vocalize,
-  execute.
-- **Meld**: a QR code that signs a phone or browser into your daemon.
 
 ## Quick start
 

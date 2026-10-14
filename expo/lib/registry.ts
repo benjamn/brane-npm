@@ -8,6 +8,8 @@
  * a daemon in one tab no longer clobbers other tabs' selections.
  */
 
+import { activeDaemonBraneId, daemonToAdopt } from "@shared/view-url";
+
 export interface DaemonEntry {
   id: string;          // "user@hostname" for display
   host: string;        // "hostname:port" for connections
@@ -100,6 +102,25 @@ export function getActiveDaemonId(): string | null {
   } catch {
     return null;
   }
+}
+
+/** The home brane_id of the daemon this tab is on: what an in-app link writes
+ *  as `#daemon=` so a new tab opened from it lands on the same daemon. The
+ *  rule is `activeDaemonBraneId` (`@shared/view-url`); this is its storage. */
+export function getActiveDaemonBraneId(): string | null {
+  return activeDaemonBraneId(loadDaemons(), getActiveDaemonId());
+}
+
+/** Make the melded daemon with this home brane_id this tab's active one, for a
+ *  page that arrived with `#daemon=`, when `daemonToAdopt` says to: only into
+ *  an empty slot, and only a daemon this browser has melded. Only this tab,
+ *  too: the cross-tab default changes on an explicit switch, never on a URL.
+ *  True when it adopted. */
+export function adoptDaemonByBraneId(braneId: string): boolean {
+  const id = daemonToAdopt(loadDaemons(), getActiveDaemonIdRaw(), braneId);
+  if (id === null) return false;
+  setActiveDaemonId(id);
+  return true;
 }
 
 // Raw read used by removeDaemon to decide whether to clear sessionStorage.
