@@ -148,6 +148,7 @@ Single SQLite database at `~/.brane/brane.db` (WAL mode). Key tables:
 | `meta` | Instance ID, daemon port/pid/version/tls/http_port/socket, config |
 | `tokens` | Daemon bearer tokens as SHA-256 hashes only (`local`: one row for this machine's CLI, which no token opens; `device` per meld, `agent` per narrative session, handed to it as `BRANE_NARRATIVE_SECRET`), revoked never deleted — see [Token Rotation](docs/token-rotation.md) |
 | `folds` | Registered spawn directories (path, brane_id, created_at) |
+| `branes` | Archived branes (brane_id, archived, archived_at), written lazily, never deleted — see [Multi-Brane](docs/multi-brane.md#archived-branes) |
 | `narratives` | Agent sessions (id, brane_id, agent_type, role, status, fold_path, title, summary, archived, agent_session_id) |
 | `events` | Append-only event log: (narrative_id, seq, time, type, content, content_type, source, re, payloads, meta) |
 | `memory_chunks` | Event chunks for embeddings |

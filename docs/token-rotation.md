@@ -379,6 +379,16 @@ revoke), the **requester's own** token (409; "Sign
 out other devices" keeps this one and signs out the rest), and an id that
 is **not live** (404, which the app treats as done).
 
+A device that does mean to sign itself out uses `POST /api/token/forget`
+(`forgetSelfRoute`, `src/daemon/token-routes.ts`). It is what the app's
+**Delete permanently** on a daemon sends before forgetting it, so deleting
+a daemon from a device leaves no live token on the daemon that nobody
+holds. It is bodiless, revokes the requester's token and the externals it
+dialed in (the devices it added stay), closes its sockets, and is refused
+to anything but a device token. If the daemon can't be reached, the app
+says so and offers to forget it anyway; the token then waits in another
+device's Devices list for a Revoke.
+
 **A revoke can take the devices it added** (`?also=a,b`, in the query
 string so the request stays bodiless; `brane token revoke --cascade`). The
 first thing a stolen token's holder does is mint a spare, and a spare's

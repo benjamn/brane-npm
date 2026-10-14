@@ -62,6 +62,10 @@ export interface BraneInfo {
   absorbed_count: number;
   last_activity: number;
   is_home: boolean;
+  /** Hidden by the operator (src/db/branes.ts): listed only when asked for
+   *  with `includeArchived`, and its ended narratives stay out of All branes.
+   *  Absent from daemons older than this app, which read as not archived. */
+  archived?: boolean;
   /** Running metered cost, one entry per unit (never summed across units),
    *  over every narrative in the brane including archived ones. A list-price
    *  estimate of main-model turns — not a bill. `metered` is how many
@@ -659,13 +663,27 @@ export async function archiveFold(
 
 export async function fetchBranes(
   conn: ConnectionParams,
+  includeArchived = false,
 ): Promise<BraneInfo[]> {
-  const res = await fetchWithTimeout(apiUrl(conn, "/api/branes"), {
+  const res = await fetchWithTimeout(apiUrl(conn, includeArchived ? "/api/branes?archived=1" : "/api/branes"), {
     headers: NO_HEADERS,
   });
   if (!res.ok) throw new Error(`Branes ${res.status}`);
   const data = await res.json();
   return data.branes;
+}
+
+/** Archive or unarchive a brane. The daemon refuses its home brane and the
+ *  last brane not archived, with a reason, which this throws. */
+export async function archiveBrane(conn: ConnectionParams, braneId: string, archived: boolean): Promise<void> {
+  const res = await fetchWithTimeout(apiUrl(conn, "/api/branes/archive"), {
+    method: "PATCH",
+    headers: JSON_HEADERS,
+    body: JSON.stringify({ brane_id: braneId, archived }),
+  });
+  if (res.ok) return;
+  const data = await res.json().catch(() => ({}));
+  throw new Error(data.error ?? `Archive ${res.status}`);
 }
 
 export async function reviveNarrative(
@@ -1204,6 +1222,21 @@ export async function revokeDeviceToken(
   if (res.ok || res.status === 404) return;
   const data = await res.json().catch(() => ({}));
   throw new Error(data.error ?? `Revoke ${res.status}`);
+}
+
+/** This device signs itself out of a daemon: its token is revoked there, for
+ *  "Delete permanently". Bodiless, so no preflight. A 401 means the token was
+ *  already dead (revoked from elsewhere, or rotated away), which is the
+ *  outcome asked for, so it resolves; a network failure rejects, and the
+ *  caller decides whether to forget the daemon anyway. */
+export async function forgetDeviceToken(conn: ConnectionParams): Promise<void> {
+  const res = await fetchWithTimeout(apiUrl(conn, "/api/token/forget"), {
+    method: "POST",
+    headers: NO_HEADERS,
+  });
+  if (res.ok || res.status === 401) return;
+  const data = await res.json().catch(() => ({}));
+  throw new Error(data.error ?? `Sign out ${res.status}`);
 }
 
 /** Probe a daemon and return its status for registry use */

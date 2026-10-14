@@ -6,6 +6,31 @@ page, which is also what triggers its publish (see
 [docs/releasing.md](docs/releasing.md)). This file is the summary that
 travels in the npm tarball.
 
+## 0.3.5 - 2026-10-14
+
+- A browser holds daemons from one tailnet only. A meld link or "+ Add
+  Daemon" entry for a host on another tailnet is refused before anything
+  is sent to it, so a stranger's daemon (behind Tailscale Funnel, say)
+  can't be melded into a browser that holds yours. To use another
+  tailnet, use another browser, or remove this one's daemons first
+  ([#613](https://github.com/benjamn/brane/pull/613)).
+- A browser's first meld gets a warning card: continue only if you
+  installed brane and ran `brane meld` yourself, and cancel a link
+  someone sent you. A loopback daemon is accepted beside a tailnet and
+  never decides one
+  ([#615](https://github.com/benjamn/brane/pull/615)).
+- Every row of the brane switcher has a ⋯. A daemon can be archived on
+  this device, keeping its token so it is one tap from Reconnect, or
+  deleted, which first signs this device out of it
+  (`POST /api/token/forget`). A brane can be archived on the daemon, for
+  every device: its ended narratives leave All branes, and its running
+  ones never do. The home brane and the last brane showing can't be
+  archived. The long-press that silently removed a daemon is gone
+  ([#614](https://github.com/benjamn/brane/pull/614)).
+
+Published while the repository is private, so like 0.3.0–0.3.4 it
+carries no npm provenance attestation.
+
 ## 0.3.4 - 2026-10-14
 
 - "All narratives" in the narrative switcher pushes the list in this tab

@@ -46,6 +46,17 @@ A stranger who photographs your QR from across the coffee shop gets a token they
 
 To opt in to LAN reach on a trusted home network, pass `brane meld --host <lan-ip>` paired with a matching `--bind`. That is an explicit choice — the over-the-shoulder threat reappears for the duration of that session, but only because the operator asked for it.
 
+## One tailnet per browser
+
+The QR's safety is about the link *you* show. The reverse case is a link someone sends *you*: a meld link to a daemon they run. Anyone can stand one up behind Tailscale Funnel, which gives it a public `*.ts.net` name and a valid certificate, and the meld card's **Daemon** and **Brane** rows are whatever that daemon says about itself, so it can claim to be `you@your-mac`. A browser keeps every melded daemon's token in one origin's `localStorage`. Any script that runs in that origin, through a renderer bug fed by the hostile daemon, can read every one of them. Your browser is on your tailnet, so the script can then use those tokens against your own daemons directly. Tapping **Meld** on such a link must cost nothing, whatever bugs the renderer has.
+
+So a browser origin holds daemons from **one trust domain** only (`src/shared/tailnet.ts`). The domain is read from the host the browser connects to, never from anything the daemon reports. For a MagicDNS name, which is what `brane meld` writes, it is the tailnet: `tail1234.ts.net` for `mac.tail1234.ts.net`. Only Tailscale issues names and certificates under a tailnet's domain. Any other host is a domain of just itself. Loopback is no domain at all: only this machine can serve a loopback daemon, so one is accepted beside any tailnet and never decides one. A browser holding only loopback daemons still has its domain to pick. The first meld of anything else sets it. After that, a meld link or an **+ Add Daemon** entry for a host in another domain is refused **before anything is sent to it**, not even the status probe that would tell its owner the link was opened. The card names both domains. To use another tailnet, open the link in another browser or profile, or remove this browser's daemons first.
+
+What this does not cover:
+- **A hostile member of your own tailnet** passes. On a tailnet shared with other people, that person is inside the trust boundary, as they are for every other tailnet service.
+- **A browser with no domain yet** (no daemons, or only loopback ones) takes whatever it is sent first, which is why that meld gets its own card. It says to continue only if you installed brane and ran `brane meld` yourself, and to cancel if someone sent you the link. It also names the tailnet the browser will be held to. Connecting to a stranger's daemon is already the loss: it sees everything you do in the app. So the defense is at that tap, not after it. Your own daemon is refused afterwards, which is how you would find out.
+- **A browser melded before this rule may already hold two domains.** It can add daemons to either, but not to a third.
+
 ## Authentication
 
 Every API and WebSocket request over TCP requires a 128-bit UUID bearer token, passed via `Authorization: Bearer` header or query parameter. Brute-forcing 128 bits of entropy is not feasible. The one exception is a request over the daemon's Unix socket, which needs no token and acts as this machine's account (below).
@@ -193,6 +204,7 @@ Surfacing mentions on the recipient's own timeline — so a transcript reader ca
 - An attacker with root on your machine (nothing can)
 - A process running as your Unix account, agents included: it can reach `daemon.sock` and act as this machine, or use tmux directly (see [Who the operator is](#who-the-operator-is)). An agent token's narrower scope stops an agent that follows the rules, not one that goes around it
 - A compromised Tailscale account (same as any tailnet service)
+- A hostile member of your own tailnet: a browser accepts daemons from its tailnet, and only from its tailnet (see [One tailnet per browser](#one-tailnet-per-browser))
 - A compromised brane.organelle.dev deployment (use `--local` to eliminate this)
 - Independent auditing of the upstream `tmux` build (the pinned SHA-256 guarantees you receive exactly the bytes brane vetted, not that those bytes were audited beyond trust-on-first-use)
 

@@ -174,6 +174,7 @@ const serverSource = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "
 const CLOSED_TO_AGENTS = new Set([
   "GET /api/absorb/survey",
   "POST /api/absorb",
+  "PATCH /api/branes/archive",
   "POST /api/cost/backfill",
   "POST /api/cost/reprice",
   "POST /api/folds",
@@ -182,6 +183,7 @@ const CLOSED_TO_AGENTS = new Set([
   "POST /api/narratives/:/signal",
   "POST /api/presence/cancel",
   "POST /api/run",
+  "POST /api/token/forget",
   "POST /api/token/rotate",
   "GET /api/tokens",
   "POST /api/tokens",

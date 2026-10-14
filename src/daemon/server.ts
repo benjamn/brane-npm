@@ -58,7 +58,7 @@ import { signalEventFields, signalStanding } from "./signal-source.js";
 import { AGENT_LOOPBACK_REFUSAL, AGENT_REVIVE_REFUSAL, agentRefusal, agentReviveRefusal } from "./agent-scope.js";
 import { archiveRefusal } from "./archive-gate.js";
 import { DbTokenStore, bootstrapTokens, legacyTokenWarning, parseTokenHashes, liveAgentTokenId, mintAgentToken, recordLauncher, settleAgentLaunch, verifyAgentToken } from "../db/tokens.js";
-import { closeSocketsOf, listTokensRoute, socketOwners, retireTokens } from "./token-routes.js";
+import { closeSocketsOf, forgetSelfRoute, listTokensRoute, socketOwners, retireTokens } from "./token-routes.js";
 import { getConfig, resolveAppHost } from "../commands/config.js";
 import { doSpawn, buildGooseExtensionArg, reestablishMcpConfigArgs, braneTmuxEnv, ensureHookConfig, resolveAgentCommand, LIVE_LOOP_PROMPT } from "../commands/spawn.js";
 import { ensureSessionAffinityConfig } from "../session-affinity.js";
@@ -80,6 +80,7 @@ import { parseDuration, timeSince } from "../commands/memory.js";
 import { getTlsCertPath, getTlsKeyPath } from "../commands/certify.js";
 import { getTailscaleIps, getTailscaleIpsAsync } from "../tailscale.js";
 import { addressesToBind, nextProbeDelay, TAILSCALE_PROBE_MAX_MS } from "./tailscale-rebind.js";
+import { archivedBraneIds, braneArchiveRefusal, setBraneArchived, visibleUnscopedClause } from "../db/branes.js";
 import { CertManager, type CertStatus } from "./cert-manager.js";
 import { KeepAwake } from "./keep-awake.js";
 import { resolveTmux, ensureTmux, newTmuxSession, parseTerminalSize } from "../tmux.js";
@@ -1433,6 +1434,12 @@ export async function startServer(config: DaemonConfig): Promise<void> {
       if (braneIds.length > 0) {
         where.push(`brane_id IN (${braneIds.map(() => "?").join(",")})`);
         params.push(...braneIds);
+      } else {
+        // All branes: an archived brane's ended narratives stay out of it
+        // (src/db/branes.ts). Naming the brane still lists them.
+        const visible = visibleUnscopedClause(connectedNids);
+        where.push(visible.sql);
+        params.push(...visible.params);
       }
       // last_activity = time of the most recent event, so the UI can show a
       // recency timestamp on each card (more meaningful than created_at for
@@ -1994,8 +2001,12 @@ export async function startServer(config: DaemonConfig): Promise<void> {
       return;
     }
 
-    // Route: GET /api/branes
+    // Route: GET /api/branes?archived=1
+    // Archived branes (src/db/branes.ts) are left out unless archived=1, which
+    // the switcher's "Show N archived" asks for; each row says which it is.
     if (path === "/api/branes" && req.method === "GET") {
+      const includeArchived = url.searchParams.get("archived") === "1";
+      const hidden = archivedBraneIds(db);
       const rows = db.prepare(
         `SELECT brane_id,
                 COUNT(*) as narrative_count,
@@ -2030,12 +2041,49 @@ export async function startServer(config: DaemonConfig): Promise<void> {
         list.push({ unit: c.unit, amount: Math.round(c.amount * 100) / 100, metered: c.metered });
         costByBrane.set(c.brane_id, list);
       }
-      const branes = rows.map((r) => ({
-        ...r,
-        is_home: r.brane_id === braneId,
-        cost: costByBrane.get(r.brane_id) ?? [],
-      }));
+      const branes = rows
+        .filter((r) => includeArchived || !hidden.has(r.brane_id))
+        .map((r) => ({
+          ...r,
+          is_home: r.brane_id === braneId,
+          archived: hidden.has(r.brane_id),
+          cost: costByBrane.get(r.brane_id) ?? [],
+        }));
       sendJson(res, 200, { branes });
+      return;
+    }
+
+    // Route: PATCH /api/branes/archive  { brane_id, archived }
+    // Hide a brane, or bring it back. Refused for the home brane and for the
+    // last brane not already archived (src/db/branes.ts). The operator's act:
+    // not in AGENT_ROUTES.
+    if (path === "/api/branes/archive" && req.method === "PATCH") {
+      parseBody(req).then((body) => {
+        let target: unknown, archived: unknown;
+        try {
+          ({ brane_id: target, archived } = JSON.parse(body));
+        } catch {
+          sendJson(res, 400, { error: "invalid JSON body" });
+          return;
+        }
+        if (typeof target !== "string" || target.trim() === "") {
+          sendJson(res, 400, { error: "brane_id is required" });
+          return;
+        }
+        if (typeof archived !== "boolean") {
+          sendJson(res, 400, { error: "archived must be true or false" });
+          return;
+        }
+        const refusal = braneArchiveRefusal(db, target, archived, braneId);
+        if (refusal) {
+          sendJson(res, refusal.status, { error: refusal.error });
+          return;
+        }
+        setBraneArchived(db, target, archived);
+        sendJson(res, 200, { brane_id: target, archived });
+      }).catch((err) => {
+        sendJson(res, 400, { error: String(err) });
+      });
       return;
     }
 
@@ -2362,6 +2410,23 @@ export async function startServer(config: DaemonConfig): Promise<void> {
       return;
     }
 
+
+    // Route: POST /api/token/forget — this device signs itself out, for the
+    // app's "Delete permanently" (src/daemon/token-routes.ts). Bodiless. Its
+    // sockets close after the answer is on its way.
+    if (path === "/api/token/forget" && req.method === "POST") {
+      const answer = forgetSelfRoute(tokenStore, tokenRing, auth.record);
+      sendJson(res, answer.status, answer.body);
+      if (answer.status === 200) {
+        const closed = closeSocketsOf(viewerSockets, answer.body.ids);
+        console.log(
+          `[token] device "${answer.body.label}" signed itself out from ${connectionLabel(req.socket) ?? "?"}; ` +
+            `closed ${closed} viewer socket(s)` +
+            (answer.body.abandonedRotation ? "; abandoned the rotation it had begun" : ""),
+        );
+      }
+      return;
+    }
 
     // Route: POST /api/token/rotate — "sign out other devices". For a device
     // it mints a pending token and returns it; nothing else changes until a
@@ -6374,6 +6439,12 @@ function handleNarrativeInfo(
   if (braneIds.length > 0) {
     sql += ` AND n.brane_id IN (${braneIds.map(() => "?").join(", ")})`;
     params.push(...braneIds);
+  } else {
+    // Every brane, as `brane memory log` asks: archived branes' ended
+    // narratives stay out, as they do from All branes (src/db/branes.ts).
+    const visible = visibleUnscopedClause(connectedNids, "n");
+    sql += ` AND ${visible.sql}`;
+    params.push(...visible.params);
   }
 
   if (!args.archived) {
@@ -6515,6 +6586,11 @@ function handleListBranes(
     last_activity: number;
   }>;
 
+  // Archived branes are listed too, flagged, so an agent can still reach one
+  // on purpose (src/db/branes.ts).
+  const hidden = archivedBraneIds(db);
+  const flag = (id: string) => (hidden.has(id) ? { archived: true } : {});
+
   // Insert caller's home brane entry first so iteration order surfaces it,
   // then everything else in last_activity DESC order.
   const result: Record<string, unknown> = {};
@@ -6523,13 +6599,13 @@ function handleListBranes(
     const homeRow = rows.find((r) => r.brane_id === homeBraneId);
     if (homeRow) {
       const { brane_id, ...rest } = homeRow;
-      result[brane_id] = rest;
+      result[brane_id] = { ...rest, ...flag(brane_id) };
     }
   }
   for (const r of rows) {
     if (r.brane_id === homeBraneId) continue;
     const { brane_id, ...rest } = r;
-    result[brane_id] = rest;
+    result[brane_id] = { ...rest, ...flag(brane_id) };
   }
   return result;
 }

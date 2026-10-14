@@ -1,11 +1,19 @@
 import { Modal, Pressable, Text, View, StyleSheet } from "react-native";
 import type { DaemonStatus } from "@/lib/api";
+import { LOOPBACK } from "@shared/tailnet";
 
 export interface MeldConfirmInfo {
   status: DaemonStatus;
   host: string;
   // Whether this brane_id was already in the registry (token rotation case).
   isUpdate: boolean;
+  /** This browser holds no daemon at all yet, or this meld picks the one
+   *  tailnet it will accept from then on (src/shared/tailnet.ts). That is the
+   *  one meld the rule can't screen, so it gets a warning: a stranger's link
+   *  opened here is the whole attack. */
+  firstMeld?: boolean;
+  /** The trust domain the link's host belongs to (`tail1234.ts.net`). */
+  domain?: string;
 }
 
 interface MeldConfirmModalProps {
@@ -21,6 +29,9 @@ export default function MeldConfirmModal({
 }: MeldConfirmModalProps) {
   const visible = pending !== null;
   const id = pending ? `${pending.status.username}@${pending.status.hostname}` : "";
+  if (pending?.firstMeld) {
+    return <FirstMeld pending={pending} id={id} onConfirm={onConfirm} onCancel={onCancel} />;
+  }
   return (
     <Modal
       visible={visible}
@@ -62,6 +73,101 @@ export default function MeldConfirmModal({
               <Text style={styles.confirmText}>
                 {pending?.isUpdate ? "Update" : "Meld"}
               </Text>
+            </Pressable>
+          </View>
+        </Pressable>
+      </Pressable>
+    </Modal>
+  );
+}
+
+/** The first meld in a browser: the routine card's details, under a warning
+ *  that says who should be pressing the button. Everything it names about
+ *  the daemon except the address is what the daemon says about itself. */
+function FirstMeld({
+  pending,
+  id,
+  onConfirm,
+  onCancel,
+}: {
+  pending: MeldConfirmInfo;
+  id: string;
+  onConfirm: () => void;
+  onCancel: () => void;
+}) {
+  // A loopback daemon decides nothing (src/shared/tailnet.ts), so its card
+  // promises nothing about what comes after.
+  const where = pending.domain && pending.domain !== LOOPBACK ? pending.domain : null;
+  return (
+    <Modal visible transparent animationType="fade" onRequestClose={onCancel}>
+      <Pressable style={styles.backdrop} onPress={onCancel}>
+        <Pressable style={styles.card} onPress={(e) => e.stopPropagation()}>
+          <Text style={styles.title}>Connect this browser to brane?</Text>
+          <View style={styles.warning}>
+            <Text style={styles.warningText}>
+              Only continue if you installed brane yourself and just ran{" "}
+              <Text style={styles.warningCode}>brane meld</Text> on your own machine. If someone
+              sent you this link, cancel: whoever runs that daemon could be trying to trick you.
+            </Text>
+          </View>
+          {where && (
+            <Text style={styles.body}>
+              This browser will then accept daemons on {where} only. Using a daemon elsewhere takes
+              another browser, or removing this one's daemons first.
+            </Text>
+          )}
+          {pending.isUpdate && (
+            <Text style={styles.body}>
+              It replaces the daemon this browser already holds for the same brane.
+            </Text>
+          )}
+          <View style={styles.detailsBlock}>
+            <DetailRow label="Daemon" value={id} />
+            <DetailRow label="Address" value={pending.host} />
+            <DetailRow label="Brane" value={pending.status.brane_id} mono />
+          </View>
+          <View style={styles.buttonRow}>
+            <Pressable style={[styles.button, styles.cancelButton]} onPress={onCancel}>
+              <Text style={styles.cancelText}>Cancel</Text>
+            </Pressable>
+            <Pressable style={[styles.button, styles.cautionButton]} onPress={onConfirm}>
+              <Text style={styles.confirmText}>I asked for this</Text>
+            </Pressable>
+          </View>
+        </Pressable>
+      </Pressable>
+    </Modal>
+  );
+}
+
+export interface MeldRefusal {
+  /** The address the link (or the add-daemon form) named. */
+  host: string;
+  message: string;
+}
+
+/** The meld that was refused before anything was sent to its host: the
+ *  daemon is on another tailnet than this browser's (src/shared/tailnet.ts).
+ *  There is nothing to confirm, so there is one button. */
+export function MeldRefusedModal({
+  refusal,
+  onClose,
+}: {
+  refusal: MeldRefusal | null;
+  onClose: () => void;
+}) {
+  return (
+    <Modal visible={refusal !== null} transparent animationType="fade" onRequestClose={onClose}>
+      <Pressable style={styles.backdrop} onPress={onClose}>
+        <Pressable style={styles.card} onPress={(e) => e.stopPropagation()}>
+          <Text style={styles.title}>Not this browser's tailnet</Text>
+          <Text style={styles.body}>{refusal?.message ?? ""}</Text>
+          <View style={styles.detailsBlock}>
+            <DetailRow label="Address" value={refusal?.host ?? ""} />
+          </View>
+          <View style={styles.buttonRow}>
+            <Pressable style={[styles.button, styles.cancelButton]} onPress={onClose}>
+              <Text style={styles.cancelText}>Close</Text>
             </Pressable>
           </View>
         </Pressable>
@@ -152,6 +258,26 @@ const styles = StyleSheet.create({
   },
   confirmButton: {
     backgroundColor: "#2e7d32",
+  },
+  cautionButton: {
+    backgroundColor: "#a65f2a",
+  },
+  warning: {
+    backgroundColor: "#3a2a1a",
+    borderColor: "#a65f2a",
+    borderWidth: 1,
+    borderRadius: 8,
+    padding: 12,
+    marginBottom: 12,
+  },
+  warningText: {
+    color: "#f0c8a0",
+    fontSize: 13,
+    lineHeight: 19,
+  },
+  warningCode: {
+    fontFamily: "monospace",
+    color: "#ffe0c0",
   },
   confirmText: {
     color: "#fff",

@@ -14,7 +14,7 @@ import { useRouter, Stack } from "expo-router";
 import { useIsFocused } from "@react-navigation/native";
 import { Platform } from "react-native";
 import { useBrane } from "./_layout";
-import ContextMenu from "@/components/ContextMenu";
+import ContextMenu, { type ContextMenuItem } from "@/components/ContextMenu";
 import { narrativeMenuItems, openNarrativeExport, revivesAsTwin } from "@/components/NarrativeMenu";
 import { bumpRecolorSalt } from "@/lib/recolor";
 import { glowHueFor, recolorGlowHue } from "@/lib/glow-hues";
@@ -24,6 +24,7 @@ import {
   fetchNarratives,
   fetchFolds,
   fetchBranes,
+  archiveBrane,
   fetchSpawnHistory,
   spawnAgent,
   archiveNarrative,
@@ -531,6 +532,35 @@ function braneCostLine(cost?: BraneCost | null): string | null {
   return cost.map((c) => `${nb(formatCost(c.amount, c.unit))}${NBSP}(${c.metered})`).join(" + ");
 }
 
+/** A switcher row's ⋯: the same trigger and menu as a fold row's in the
+ *  spawn dialog. `id` names the row; one menu is open at a time. */
+function RowMenu({
+  id,
+  openId,
+  setOpenId,
+  items,
+  label,
+}: {
+  id: string;
+  openId: string | null;
+  setOpenId: (id: string | null) => void;
+  items: ContextMenuItem[];
+  label: string;
+}) {
+  return (
+    <div style={{ position: "relative", display: "flex" }}>
+      <Pressable
+        style={styles.rowMenuButton}
+        onPress={() => setOpenId(openId === id ? null : id)}
+        accessibilityLabel={label}
+      >
+        <Text style={styles.rowMenuIcon}>⋯</Text>
+      </Pressable>
+      {openId === id && <ContextMenu items={items} onClose={() => setOpenId(null)} align="beside" />}
+    </div>
+  );
+}
+
 function BraneSwitcher({
   branes,
   activeBraneId,
@@ -540,7 +570,10 @@ function BraneSwitcher({
   onSwitchBrane,
   onSwitchDaemon,
   onAdd,
-  onRemove,
+  onArchiveDaemon,
+  onReconnectDaemon,
+  onForgetDaemon,
+  onArchiveBrane,
   onSignOutOthers,
   conn,
 }: {
@@ -552,7 +585,10 @@ function BraneSwitcher({
   onSwitchBrane: (braneId: string | null) => void;
   onSwitchDaemon: (id: string) => void;
   onAdd: (host: string, token: string) => Promise<void>;
-  onRemove: (id: string) => void;
+  onArchiveDaemon: (id: string) => void;
+  onReconnectDaemon: (id: string) => void;
+  onForgetDaemon: (id: string, opts: { revoke: boolean }) => Promise<void>;
+  onArchiveBrane: (braneId: string, archived: boolean) => Promise<void>;
   onSignOutOthers: () => Promise<void>;
   conn: ConnectionParams | null;
 }) {
@@ -571,6 +607,16 @@ function BraneSwitcher({
   const [addError, setAddError] = useState<string | null>(null);
   const [signOutError, setSignOutError] = useState<string | null>(null);
   const [signedOutOthers, setSignedOutOthers] = useState(false);
+  // Archiving. Daemons are archived on this device (the registry), branes on
+  // the daemon (src/db/branes.ts); both are listed behind "Show N archived".
+  // Deleting a daemon is the one step with a confirm, since it signs this
+  // device out of it and only a fresh meld undoes that.
+  const [menuFor, setMenuFor] = useState<string | null>(null);
+  const [showArchived, setShowArchived] = useState(false);
+  const [archiveError, setArchiveError] = useState<string | null>(null);
+  const [confirmForget, setConfirmForget] = useState<DaemonEntry | null>(null);
+  const [forgetting, setForgetting] = useState(false);
+  const [forgetError, setForgetError] = useState<string | null>(null);
   const closeDropdown = () => {
     setShowDropdown(false);
     setShowAddForm(false);
@@ -578,6 +624,36 @@ function BraneSwitcher({
     setShowDevices(false);
     setSignOutError(null);
     setSignedOutOthers(false);
+    setMenuFor(null);
+    setArchiveError(null);
+  };
+  const cancelForget = () => {
+    if (forgetting) return;
+    setConfirmForget(null);
+    setForgetError(null);
+  };
+  const handleForget = async () => {
+    if (!confirmForget) return;
+    setForgetting(true);
+    try {
+      // After a failed revoke the button reads "Forget anyway": the second
+      // press forgets without telling the daemon.
+      await onForgetDaemon(confirmForget.id, { revoke: forgetError === null });
+      setConfirmForget(null);
+      setForgetError(null);
+    } catch (err) {
+      setForgetError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setForgetting(false);
+    }
+  };
+  const archiveBrane = (b: BraneInfo, archived: boolean) => {
+    setMenuFor(null);
+    setArchiveError(null);
+    if (archived && b.brane_id === activeBraneId) onSwitchBrane(null);
+    onArchiveBrane(b.brane_id, archived).catch((err) =>
+      setArchiveError(err instanceof Error ? err.message : String(err)),
+    );
   };
   // The add-daemon form and the sign-out confirm are each their own modal
   // *layer* over the switcher, not panels inside its card. That is what
@@ -621,14 +697,21 @@ function BraneSwitcher({
       setNewHost("");
       setNewToken("");
     } catch (err) {
-      setAddError(String(err));
+      setAddError(err instanceof Error ? err.message : String(err));
     } finally {
       setAdding(false);
     }
   };
 
-  // Every brane's totals folded together, still one entry per unit.
-  const allBranesCost = useMemo(() => sumBraneCosts(branes), [branes]);
+  const visibleBranes = useMemo(() => branes.filter((b) => !b.archived), [branes]);
+  const archivedBranes = useMemo(() => branes.filter((b) => b.archived), [branes]);
+  const otherDaemons = daemons.filter((d) => d.id !== activeDaemon?.id && !d.archived);
+  const archivedDaemons = daemons.filter((d) => d.archived);
+  const archivedCount = archivedBranes.length + archivedDaemons.length;
+
+  // Every brane's totals folded together, still one entry per unit. All
+  // branes leaves archived ones out, so its total does too.
+  const allBranesCost = useMemo(() => sumBraneCosts(visibleBranes), [visibleBranes]);
 
   // Chip label: active brane or "All branes"
   const chipLabel = activeBraneId
@@ -669,12 +752,20 @@ function BraneSwitcher({
             <Text style={styles.modalTitle}>Branes</Text>
 
             <ScrollView style={{ flexGrow: 0 }}>
-            {/* "All" option */}
-            <Pressable
+            {archiveError && <Text style={styles.addError}>{archiveError}</Text>}
+            {/* "All" option: the active daemon's own row, so its ⋯ is where
+                the active daemon is archived. */}
+            {activeDaemon && (
+            <View
               style={[
                 styles.daemonOption,
+                styles.switcherRow,
                 activeBraneId === null && styles.daemonOptionActive,
+                menuFor === "active" && styles.rowMenuOpen,
               ]}
+            >
+            <Pressable
+              style={styles.switcherRowMain}
               onPress={() => {
                 onSwitchBrane(null);
                 setShowDropdown(false);
@@ -689,22 +780,41 @@ function BraneSwitcher({
                 />
                 <View style={{ flex: 1 }}>
                   <Text style={styles.daemonName}>All branes</Text>
-                  <Text style={styles.daemonHost}>{activeDaemon?.id}</Text>
+                  <Text style={styles.daemonHost}>{activeDaemon.id}</Text>
                   {braneCostLine(allBranesCost) && (
                     <Text style={styles.daemonCost}>{braneCostLine(allBranesCost)}</Text>
                   )}
                 </View>
               </View>
             </Pressable>
+            <RowMenu
+              id="active"
+              openId={menuFor}
+              setOpenId={setMenuFor}
+              label={`Actions for ${activeDaemon.id}`}
+              items={[{
+                label: "Archive this daemon",
+                icon: "🗄️",
+                onPress: () => { setMenuFor(null); onArchiveDaemon(activeDaemon.id); },
+              }]}
+            />
+            </View>
+            )}
 
-            {/* Branes from current daemon */}
-            {branes.map((b) => (
-              <Pressable
+            {/* Branes from current daemon. The home brane, and the last one
+                showing, have no Archive: the daemon refuses both. */}
+            {visibleBranes.map((b) => (
+              <View
                 key={b.brane_id}
                 style={[
                   styles.daemonOption,
+                  styles.switcherRow,
                   b.brane_id === activeBraneId && styles.daemonOptionActive,
+                  menuFor === `brane:${b.brane_id}` && styles.rowMenuOpen,
                 ]}
+              >
+              <Pressable
+                style={styles.switcherRowMain}
                 onPress={() => {
                   onSwitchBrane(b.brane_id);
                   setShowDropdown(false);
@@ -734,6 +844,16 @@ function BraneSwitcher({
                   </View>
                 </View>
               </Pressable>
+              {!b.is_home && visibleBranes.length > 1 && (
+                <RowMenu
+                  id={`brane:${b.brane_id}`}
+                  openId={menuFor}
+                  setOpenId={setMenuFor}
+                  label={`Actions for ${b.brane_id}`}
+                  items={[{ label: "Archive", icon: "🗄️", onPress: () => archiveBrane(b, true) }]}
+                />
+              )}
+              </View>
             ))}
 
             {branes.length === 0 && daemons.length === 0 && (
@@ -741,15 +861,17 @@ function BraneSwitcher({
             )}
 
             {/* Other daemons (not currently active) */}
-            {daemons.filter((d) => d.id !== activeDaemon?.id).map((d) => (
-              <Pressable
+            {otherDaemons.map((d) => (
+              <View
                 key={d.id}
-                style={styles.daemonOption}
+                style={[styles.daemonOption, styles.switcherRow, menuFor === `daemon:${d.id}` && styles.rowMenuOpen]}
+              >
+              <Pressable
+                style={styles.switcherRowMain}
                 onPress={() => {
                   onSwitchDaemon(d.id);
                   setShowDropdown(false);
                 }}
-                onLongPress={() => onRemove(d.id)}
               >
                 <View style={styles.daemonOptionRow}>
                   <View style={[styles.daemonDot, { backgroundColor: "#555" }]} />
@@ -759,7 +881,66 @@ function BraneSwitcher({
                   </View>
                 </View>
               </Pressable>
+              <RowMenu
+                id={`daemon:${d.id}`}
+                openId={menuFor}
+                setOpenId={setMenuFor}
+                label={`Actions for ${d.id}`}
+                items={[{
+                  label: "Archive",
+                  icon: "🗄️",
+                  onPress: () => { setMenuFor(null); onArchiveDaemon(d.id); },
+                }]}
+              />
+              </View>
             ))}
+
+            {/* Archived: this daemon's hidden branes, then this device's
+                archived daemons. Kept, never shown unasked. */}
+            {showArchived && archivedBranes.map((b) => (
+              <View key={b.brane_id} style={[styles.daemonOption, styles.switcherRow, styles.switcherRowArchived]}>
+                <View style={styles.switcherRowMain}>
+                  <Text style={styles.daemonName}>{b.brane_id}</Text>
+                  <Text style={styles.daemonHost}>
+                    archived brane, {b.narrative_count} narrative{b.narrative_count === 1 ? "" : "s"}
+                  </Text>
+                </View>
+                <View style={styles.archivedActions}>
+                  <Pressable style={styles.archivedAction} onPress={() => archiveBrane(b, false)}>
+                    <Text style={styles.archivedActionText}>Unarchive</Text>
+                  </Pressable>
+                </View>
+              </View>
+            ))}
+            {showArchived && archivedDaemons.map((d) => (
+              <View key={d.id} style={[styles.daemonOption, styles.switcherRow, styles.switcherRowArchived]}>
+                <View style={styles.switcherRowMain}>
+                  <Text style={styles.daemonName}>{d.id}</Text>
+                  <Text style={styles.daemonHost}>{d.host}{d.revoked ? " (signed out)" : ""}</Text>
+                </View>
+                <View style={styles.archivedActions}>
+                  <Pressable
+                    style={styles.archivedAction}
+                    onPress={() => {
+                      onReconnectDaemon(d.id);
+                      setShowDropdown(false);
+                    }}
+                  >
+                    <Text style={styles.archivedActionText}>Reconnect</Text>
+                  </Pressable>
+                  <Pressable style={styles.archivedAction} onPress={() => setConfirmForget(d)}>
+                    <Text style={[styles.archivedActionText, styles.archivedActionDanger]}>Delete…</Text>
+                  </Pressable>
+                </View>
+              </View>
+            ))}
+            {archivedCount > 0 && (
+              <Pressable onPress={() => setShowArchived((v) => !v)} style={styles.archivedToggle}>
+                <Text style={styles.archivedToggleText}>
+                  {showArchived ? "Hide archived" : `Show ${archivedCount} archived`}
+                </Text>
+              </Pressable>
+            )}
             </ScrollView>
 
             <Pressable
@@ -894,6 +1075,46 @@ function BraneSwitcher({
                   <ActivityIndicator size="small" color="#111" />
                 ) : (
                   <Text style={styles.addButtonText}>Sign out other devices</Text>
+                )}
+              </Pressable>
+            </View>
+          </Pressable>
+        </Pressable>
+      </Modal>
+
+      {/* Delete-a-daemon layer. */}
+      <Modal
+        visible={showDropdown && confirmForget !== null}
+        transparent
+        animationType="fade"
+        onRequestClose={cancelForget}
+      >
+        <Pressable style={styles.modalOverlay} onPress={cancelForget}>
+          <Pressable style={styles.layerCard} onPress={(e) => e.stopPropagation()}>
+            <Text style={styles.layerTitle}>Delete {confirmForget?.id}?</Text>
+            <Text style={styles.signOutBody}>
+              {forgetError === null
+                ? "This browser signs itself out of it, so its token stops working on the daemon, and then forgets it. To use it here again, scan a fresh Meld QR."
+                : "It could not be reached to sign this browser out, so its token still works. Forget it anyway? The token can be revoked later from the Devices list on another device."}
+            </Text>
+            {forgetError && <Text style={styles.addError}>{forgetError}</Text>}
+            <View style={styles.layerButtonRow}>
+              <Pressable
+                style={[styles.layerCancel, forgetting && { opacity: 0.5 }]}
+                onPress={cancelForget}
+                disabled={forgetting}
+              >
+                <Text style={styles.layerCancelText}>Cancel</Text>
+              </Pressable>
+              <Pressable
+                style={[styles.signOutButton, styles.layerConfirm, forgetting && { opacity: 0.5 }]}
+                onPress={handleForget}
+                disabled={forgetting}
+              >
+                {forgetting ? (
+                  <ActivityIndicator size="small" color="#111" />
+                ) : (
+                  <Text style={styles.addButtonText}>{forgetError === null ? "Delete" : "Forget anyway"}</Text>
                 )}
               </Pressable>
             </View>
@@ -1109,7 +1330,9 @@ export default function NarrativeList() {
     switchDaemon,
     switchBrane,
     addDaemon,
-    removeDaemon,
+    archiveDaemon,
+    reconnectDaemon,
+    forgetDaemon,
     rotateActiveToken,
     onStatus,
     onMeta,
@@ -1211,7 +1434,7 @@ export default function NarrativeList() {
       const [narrs, flds, brns] = await Promise.all([
         fetchNarratives(conn, narrativeOpts),
         fetchFolds(conn),
-        fetchBranes(conn).catch(() => [] as BraneInfo[]),
+        fetchBranes(conn, true).catch(() => [] as BraneInfo[]),
       ]);
       setNarratives(sortNarratives(narrs));
       setFolds(flds);
@@ -1340,6 +1563,14 @@ export default function NarrativeList() {
     await addDaemon(host, token);
   }, [addDaemon]);
 
+  // Archiving a brane changes what All branes lists, so the narratives are
+  // read again with the branes.
+  const handleArchiveBrane = useCallback(async (braneId: string, archived: boolean) => {
+    if (!conn) return;
+    await archiveBrane(conn, braneId, archived);
+    await loadData();
+  }, [conn, loadData]);
+
   // Live status updates from control WebSocket
   useEffect(() => {
     return onStatus((nid, status) => {
@@ -1368,7 +1599,7 @@ export default function NarrativeList() {
         if (braneRefetchTimer.current) clearTimeout(braneRefetchTimer.current);
         braneRefetchTimer.current = setTimeout(() => {
           braneRefetchTimer.current = null;
-          fetchBranes(conn).then(setBranes).catch(() => {});
+          fetchBranes(conn, true).then(setBranes).catch(() => {});
         }, 2000);
       }
       setNarratives((prev) =>
@@ -1545,7 +1776,7 @@ export default function NarrativeList() {
   // yet" is only true when that is zero.
   const archivedHidden = useMemo(() => {
     if (narratives.length > 0) return 0;
-    const inView = activeBraneId ? branes.filter((b) => b.brane_id === activeBraneId) : branes;
+    const inView = activeBraneId ? branes.filter((b) => b.brane_id === activeBraneId) : branes.filter((b) => !b.archived);
     return inView.reduce((sum, b) => sum + b.narrative_count, 0);
   }, [narratives.length, branes, activeBraneId]);
 
@@ -1610,7 +1841,10 @@ export default function NarrativeList() {
                   onSwitchBrane={switchBrane}
                   onSwitchDaemon={switchDaemon}
                   onAdd={handleAddDaemon}
-                  onRemove={removeDaemon}
+                  onArchiveDaemon={archiveDaemon}
+                  onReconnectDaemon={reconnectDaemon}
+                  onForgetDaemon={forgetDaemon}
+                  onArchiveBrane={handleArchiveBrane}
                   onSignOutOthers={rotateActiveToken}
                   conn={conn}
                 />
@@ -1885,6 +2119,61 @@ const styles = StyleSheet.create({
   daemonOptionRow: {
     flexDirection: "row",
     alignItems: "center",
+  },
+  // A switcher row with a ⋯ or actions on its right: the box is the row, and
+  // the part that selects is padded inside it.
+  switcherRow: {
+    flexDirection: "row",
+    alignItems: "stretch",
+    paddingVertical: 0,
+    paddingHorizontal: 0,
+  },
+  switcherRowMain: {
+    flex: 1,
+    paddingVertical: 12,
+    paddingLeft: 12,
+    paddingRight: 4,
+  },
+  switcherRowArchived: {
+    opacity: 0.7,
+    backgroundColor: "#222228",
+  },
+  // Lift the row with an open menu above the rows after it.
+  rowMenuOpen: {
+    zIndex: 100,
+  },
+  rowMenuButton: {
+    paddingHorizontal: 12,
+    justifyContent: "center",
+  },
+  rowMenuIcon: {
+    color: "#aaa",
+    fontSize: 15,
+  },
+  archivedActions: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingRight: 8,
+    gap: 4,
+  },
+  archivedAction: {
+    paddingVertical: 8,
+    paddingHorizontal: 8,
+  },
+  archivedActionText: {
+    color: "#8fd4b4",
+    fontSize: 13,
+  },
+  archivedActionDanger: {
+    color: "#e0a070",
+  },
+  archivedToggle: {
+    paddingVertical: 8,
+    alignItems: "center",
+  },
+  archivedToggleText: {
+    color: "#8a8a93",
+    fontSize: 13,
   },
   daemonDot: {
     width: 8,

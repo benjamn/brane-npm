@@ -262,3 +262,29 @@ export function revokeTokenRoute(
   for (const x of ids) abandonedRotation = ring.abandonRotationBy(x) || abandonedRotation;
   return { status: 200, body: { revoked: row.id, kind: row.kind, label: row.label, also: extra, ids, abandonedRotation } };
 }
+
+/** `POST /api/token/forget`: a device signs itself out — the app's "Delete
+ *  permanently" on a daemon it no longer wants, so no live token is left
+ *  behind on the daemon that nobody holds. Bodiless, like the revoke. The
+ *  per-device revoke refuses the requester's own token because "Sign out
+ *  other devices" is usually what was meant; here stranding itself is the
+ *  point. Only a device token can ask: this machine's account holds no token,
+ *  and an agent's is not offered the route. The externals it dialed in go
+ *  with it, as they do with any revoke; devices it added stay. */
+export function forgetSelfRoute(
+  store: Pick<DbTokenStore, "revoke" | "externalsOf">,
+  ring: Pick<TokenRing, "abandonRotationBy">,
+  requester: TokenRecord,
+  now: number = Date.now(),
+):
+  | { status: 200; body: { revoked: string; label: string; ids: string[]; abandonedRotation: boolean } }
+  | { status: 400; body: { error: string } } {
+  if (requester.kind !== "device") {
+    return { status: 400, body: { error: `Only a device's token can sign itself out; this is a ${requester.kind} token` } };
+  }
+  const ids = [requester.id, ...store.externalsOf([requester.id]).filter((x) => x !== requester.id)];
+  store.revoke(ids, now);
+  let abandonedRotation = false;
+  for (const x of ids) abandonedRotation = ring.abandonRotationBy(x) || abandonedRotation;
+  return { status: 200, body: { revoked: requester.id, label: requester.label, ids, abandonedRotation } };
+}

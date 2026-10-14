@@ -483,6 +483,17 @@ export function applyMigrations(db: Database.Database): void {
   if (!launchCols.has("launched_by")) {
     db.exec("ALTER TABLE narratives ADD COLUMN launched_by TEXT");
   }
+  // Which branes the operator has hidden (src/db/branes.ts). A brane has no
+  // row of its own anywhere else — it is the brane_id its narratives share —
+  // so a row here is written lazily by the first archive and never deleted;
+  // unarchiving clears the flag.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS branes (
+      brane_id    TEXT PRIMARY KEY,
+      archived    INTEGER NOT NULL DEFAULT 0,
+      archived_at INTEGER
+    )
+  `);
 }
 
 /** Carry provider-only `absorb_messages` / `absorb_files` rows (the shape

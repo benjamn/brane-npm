@@ -23,6 +23,16 @@ export interface DaemonEntry {
    *  were signed out of. A fresh meld of the same brane replaces the entry
    *  wholesale (addDaemon), which clears it. */
   revoked?: boolean;
+  /** Put away by the operator: not connected to, listed under the switcher's
+   *  "Show N archived", and one tap from coming back, since the token is kept.
+   *  An archived entry still counts toward this browser's tailnet, because it
+   *  still holds a token. A fresh meld of the same brane clears it. */
+  archived?: boolean;
+}
+
+/** The entries this browser connects to: everything not archived. */
+export function usableDaemons(daemons: readonly DaemonEntry[]): DaemonEntry[] {
+  return daemons.filter((d) => !d.archived);
 }
 
 export const DAEMONS_KEY = "brane_daemons";
@@ -83,15 +93,24 @@ export function updateDaemon(id: string, patch: Partial<DaemonEntry>): DaemonEnt
 export function removeDaemon(id: string): DaemonEntry[] {
   const daemons = loadDaemons().filter((d) => d.id !== id);
   saveDaemons(daemons);
-  // If the removed daemon was the cross-tab default, promote the next.
-  if (getDefaultDaemonId() === id) {
-    setDefaultDaemonId(daemons[0]?.id ?? null);
-  }
-  // Clear this tab's active if it was removed.
-  if (getActiveDaemonIdRaw() === id) {
-    setActiveDaemonId(daemons[0]?.id ?? null);
-  }
+  moveOffDaemon(id, daemons);
   return daemons;
+}
+
+/** Archive an entry, or bring it back. Archiving the default or this tab's
+ *  active daemon moves each to the next usable entry, as removing does. */
+export function setDaemonArchived(id: string, archived: boolean): DaemonEntry[] {
+  const daemons = updateDaemon(id, { archived });
+  if (archived) moveOffDaemon(id, daemons);
+  return daemons;
+}
+
+/** Point the cross-tab default and this tab's active daemon at the next
+ *  usable entry, wherever either pointed at `id`. */
+function moveOffDaemon(id: string, daemons: readonly DaemonEntry[]): void {
+  const next = usableDaemons(daemons).find((d) => d.id !== id)?.id ?? null;
+  if (getDefaultDaemonId() === id) setDefaultDaemonId(next);
+  if (getActiveDaemonIdRaw() === id) setActiveDaemonId(next);
 }
 
 // Per-tab active daemon, with localStorage default as fallback for fresh tabs.
@@ -117,7 +136,7 @@ export function getActiveDaemonBraneId(): string | null {
  *  too: the cross-tab default changes on an explicit switch, never on a URL.
  *  True when it adopted. */
 export function adoptDaemonByBraneId(braneId: string): boolean {
-  const id = daemonToAdopt(loadDaemons(), getActiveDaemonIdRaw(), braneId);
+  const id = daemonToAdopt(usableDaemons(loadDaemons()), getActiveDaemonIdRaw(), braneId);
   if (id === null) return false;
   setActiveDaemonId(id);
   return true;

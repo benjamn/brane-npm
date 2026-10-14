@@ -8,6 +8,7 @@ import {
   clearStoredConnection,
   listProtocols,
   rotateToken,
+  forgetDeviceToken,
   setUnauthorizedListener,
   type ConnectionParams,
   type ToolUse,
@@ -23,13 +24,20 @@ import {
   addDaemon as registryAddDaemon,
   removeDaemon as registryRemoveDaemon,
   updateDaemon as registryUpdateDaemon,
+  setDaemonArchived as registrySetDaemonArchived,
+  usableDaemons,
   DAEMONS_KEY,
   getActiveDaemonId,
   setActiveDaemonId,
   setDefaultDaemonId,
   type DaemonEntry,
 } from "@/lib/registry";
-import MeldConfirmModal, { type MeldConfirmInfo } from "@/components/MeldConfirmModal";
+import MeldConfirmModal, {
+  MeldRefusedModal,
+  type MeldConfirmInfo,
+  type MeldRefusal,
+} from "@/components/MeldConfirmModal";
+import { checkMeldHost, isFirstMeld, meldRefusalMessage } from "@shared/tailnet";
 import { installNoPan } from "@/lib/noPan";
 
 // Before the first tap: iOS must never move the page under the app, whether
@@ -46,6 +54,16 @@ interface BraneContextValue {
   switchBrane: (braneId: string | null) => void;
   addDaemon: (host: string, token: string) => Promise<DaemonEntry>;
   removeDaemon: (id: string) => void;
+  /** Put a daemon away (or bring it back): it keeps its token, but this
+   *  browser stops connecting to it. Archiving the active one switches to
+   *  the next usable daemon, or to none. */
+  archiveDaemon: (id: string) => void;
+  /** Unarchive a daemon and switch to it. */
+  reconnectDaemon: (id: string) => void;
+  /** "Delete permanently": sign this device out of the daemon (its token is
+   *  revoked there), then forget it. Rejects, forgetting nothing, when the
+   *  daemon could not be told; `revoke: false` forgets it regardless. */
+  forgetDaemon: (id: string, opts: { revoke: boolean }) => Promise<void>;
   /** Rotate the active daemon's token, keeping this device signed in and
    *  signing every other one out. Resolves once the new token is stored and
    *  the control channel is back on it; rejects — with the old credentials
@@ -101,6 +119,9 @@ const BraneContext = createContext<BraneContextValue>({
   switchBrane: () => {},
   addDaemon: () => Promise.reject(new Error("no context")),
   removeDaemon: () => {},
+  archiveDaemon: () => {},
+  reconnectDaemon: () => {},
+  forgetDaemon: () => Promise.reject(new Error("no context")),
   rotateActiveToken: () => Promise.reject(new Error("no context")),
   subscribe: () => {},
   unsubscribe: () => {},
@@ -237,18 +258,23 @@ export default function RootLayout() {
   // us drop the values cleanly on cancel.
   const pendingTokenRef = useRef<{ host: string; token: string } | null>(null);
   const [pendingMeld, setPendingMeld] = useState<MeldConfirmInfo | null>(null);
+  const [meldRefusal, setMeldRefusal] = useState<MeldRefusal | null>(null);
 
   const activateStored = useCallback(() => {
     const stored = loadDaemons();
     const storedActiveId = getActiveDaemonId();
     if (stored.length === 0) return;
     setDaemons(stored);
-    const activeId = storedActiveId && stored.find((d) => d.id === storedActiveId)
+    // An archived daemon is never connected to on its own: only Reconnect
+    // brings one back. With nothing else, the switcher is where to go.
+    const usable = usableDaemons(stored);
+    if (usable.length === 0) return;
+    const activeId = storedActiveId && usable.find((d) => d.id === storedActiveId)
       ? storedActiveId
-      : stored[0].id;
+      : usable[0].id;
     setActiveId(activeId);
     setActiveDaemonId(activeId);
-    const daemon = stored.find((d) => d.id === activeId)!;
+    const daemon = usable.find((d) => d.id === activeId)!;
     connectChannel({ host: daemon.host, token: daemon.token });
   }, [connectChannel]);
 
@@ -282,6 +308,15 @@ export default function RootLayout() {
       // Connect any stored daemon immediately so the UI isn't empty while
       // the user decides. The meld will replace the active daemon on confirm.
       activateStored();
+      // One tailnet per browser (src/shared/tailnet.ts): a link to a daemon
+      // on another tailnet is refused before anything is sent to its host —
+      // not even the probe, which would tell its owner the link was opened.
+      const verdict = checkMeldHost(urlParams.host, loadDaemons().map((d) => d.host));
+      if (!verdict.ok) {
+        setMeldRefusal({ host: urlParams.host, message: meldRefusalMessage(urlParams.host, verdict) });
+        clearMeldUrl();
+        return;
+      }
       probeDaemon(urlParams.host, urlParams.token)
         .then((status) => {
           const existing = loadDaemons().find((d) => d.brane_id === status.brane_id);
@@ -292,12 +327,15 @@ export default function RootLayout() {
             // authoritative than whatever we cached. Update the entry's host
             // before reconnecting; otherwise we attempt to connect to a port
             // the daemon has since moved off of.
+            // Opening its link again is asking for it, so an archived
+            // entry comes back.
             const entry: DaemonEntry = {
               ...existing,
               host: urlParams.host,
               addedAt: existing.addedAt,
+              archived: false,
             };
-            if (entry.host !== existing.host) {
+            if (entry.host !== existing.host || existing.archived) {
               registryAddDaemon(entry);
               setDaemons(loadDaemons());
             }
@@ -312,6 +350,15 @@ export default function RootLayout() {
             status,
             host: urlParams.host,
             isUpdate: existing !== undefined,
+            // The one meld the tailnet rule can't screen: nothing melded here
+            // yet (archived included), or this link picks the tailnet.
+            firstMeld: isFirstMeld(
+              loadDaemons().map((d) => d.host),
+              verdict,
+              urlParams.host,
+              window.location.host,
+            ),
+            domain: verdict.domain,
           });
         })
         .catch(() => {
@@ -387,6 +434,8 @@ export default function RootLayout() {
 
   const handleAddDaemon = useCallback(
     async (host: string, token: string): Promise<DaemonEntry> => {
+      const verdict = checkMeldHost(host, loadDaemons().map((d) => d.host));
+      if (!verdict.ok) throw new Error(meldRefusalMessage(host, verdict));
       const status = await probeDaemon(host, token);
       const entry: DaemonEntry = {
         id: `${status.username}@${status.hostname}`,
@@ -408,24 +457,71 @@ export default function RootLayout() {
     [connectChannel],
   );
 
+  /** Leave `id` if it is the active daemon: on to the next usable one, or
+   *  disconnected when there is none. */
+  const leaveDaemon = useCallback(
+    (id: string, updated: DaemonEntry[]) => {
+      if (activeDaemonId !== id) return;
+      const next = usableDaemons(updated).find((d) => d.id !== id) ?? null;
+      setActiveId(next?.id ?? null);
+      setActiveDaemonId(next?.id ?? null);
+      setActiveBraneId(null);
+      if (next) {
+        connectChannel({ host: next.host, token: next.token });
+      } else {
+        channelRef.current?.close();
+        channelRef.current = null;
+        channelParamsRef.current = null;
+        setConnected(false);
+      }
+    },
+    [activeDaemonId, connectChannel],
+  );
+
   const handleRemoveDaemon = useCallback(
     (id: string) => {
       const updated = registryRemoveDaemon(id);
       setDaemons(updated);
-      if (activeDaemonId === id) {
-        const next = updated[0] ?? null;
-        setActiveId(next?.id ?? null);
-        setActiveDaemonId(next?.id ?? null);
-        if (next) {
-          connectChannel({ host: next.host, token: next.token });
-        } else {
-          channelRef.current?.close();
-          channelRef.current = null;
-          setConnected(false);
-        }
-      }
+      leaveDaemon(id, updated);
     },
-    [activeDaemonId, connectChannel],
+    [leaveDaemon],
+  );
+
+  const handleArchiveDaemon = useCallback(
+    (id: string) => {
+      const updated = registrySetDaemonArchived(id, true);
+      setDaemons(updated);
+      leaveDaemon(id, updated);
+    },
+    [leaveDaemon],
+  );
+
+  const handleReconnectDaemon = useCallback(
+    (id: string) => {
+      const updated = registrySetDaemonArchived(id, false);
+      setDaemons(updated);
+      const daemon = updated.find((d) => d.id === id);
+      if (!daemon) return;
+      setActiveId(id);
+      setActiveDaemonId(id);
+      setDefaultDaemonId(id);
+      setActiveBraneId(null);
+      connectChannel({ host: daemon.host, token: daemon.token });
+    },
+    [connectChannel],
+  );
+
+  const handleForgetDaemon = useCallback(
+    async (id: string, { revoke }: { revoke: boolean }) => {
+      const daemon = loadDaemons().find((d) => d.id === id);
+      if (!daemon) return;
+      // A token the daemon already refused has nothing left to revoke.
+      if (revoke && !daemon.revoked) {
+        await forgetDeviceToken({ host: daemon.host, token: daemon.token });
+      }
+      handleRemoveDaemon(id);
+    },
+    [handleRemoveDaemon],
   );
 
   const handleRotateToken = useCallback(async () => {
@@ -555,6 +651,9 @@ export default function RootLayout() {
     switchBrane,
     addDaemon: handleAddDaemon,
     removeDaemon: handleRemoveDaemon,
+    archiveDaemon: handleArchiveDaemon,
+    reconnectDaemon: handleReconnectDaemon,
+    forgetDaemon: handleForgetDaemon,
     rotateActiveToken: handleRotateToken,
     subscribe,
     unsubscribe,
@@ -567,7 +666,7 @@ export default function RootLayout() {
     onToolUses,
     protocols,
     narrativeIds,
-  }), [conn, connected, daemons, activeDaemon, activeBraneId, switchDaemon, switchBrane, handleAddDaemon, handleRemoveDaemon, handleRotateToken, subscribe, unsubscribe, subscribeActivity, unsubscribeActivity, onActivity, onHint, onStatus, onMeta, onToolUses, protocols]);
+  }), [conn, connected, daemons, activeDaemon, activeBraneId, switchDaemon, switchBrane, handleAddDaemon, handleRemoveDaemon, handleArchiveDaemon, handleReconnectDaemon, handleForgetDaemon, handleRotateToken, subscribe, unsubscribe, subscribeActivity, unsubscribeActivity, onActivity, onHint, onStatus, onMeta, onToolUses, protocols]);
 
   return (
     <BraneContext.Provider value={contextValue}>
@@ -598,6 +697,7 @@ export default function RootLayout() {
         onConfirm={confirmMeld}
         onCancel={cancelMeld}
       />
+      <MeldRefusedModal refusal={meldRefusal} onClose={() => setMeldRefusal(null)} />
     </BraneContext.Provider>
   );
 }
