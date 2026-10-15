@@ -15,6 +15,7 @@ function options(over: Partial<NarrativeMenuOptions> = {}): NarrativeMenuOptions
     onExport: () => {},
     onRecolor: () => {},
     onTwin: () => {},
+    onUtility: () => {},
     onRevive: () => {},
     onEnd: () => {},
     onArchiveToggle: () => {},
@@ -88,8 +89,24 @@ describe("narrativeMenuItems", () => {
       "Export",
       "Recolor",
       "Twin",
+      "Utility",
       "End",
     ]);
+  });
+
+  it("offers Utility on every narrative, beside Twin", () => {
+    // A shell in an agent's fold is wanted while it runs and after it ends,
+    // and an external session's fold is as good a place to open one as any.
+    for (const over of [
+      { status: "active", mcpConnected: true },
+      { status: "ended" },
+      { status: "ended", archived: true },
+      { role: "external", status: "ended" },
+      { role: "absorbed", status: "ended" },
+    ]) {
+      const l = labels(over);
+      assert.equal(l[l.indexOf("Twin") + 1], "Utility", JSON.stringify(over));
+    }
   });
 
   it("swaps End for Revive once the session is over", () => {
@@ -156,12 +173,13 @@ describe("narrativeMenuItems", () => {
         onExport: () => fired.push("export"),
         onRecolor: () => fired.push("recolor"),
         onTwin: () => fired.push("twin"),
+        onUtility: () => fired.push("utility"),
         onRevive: () => fired.push("revive"),
         onArchiveToggle: () => fired.push("archive"),
       }),
     );
     for (const item of items) item.onPress();
-    assert.deepEqual(fired, ["meld", "isolate", "export", "recolor", "twin", "revive", "archive"]);
+    assert.deepEqual(fired, ["meld", "isolate", "export", "recolor", "twin", "utility", "revive", "archive"]);
   });
 
   it("gives every item an icon and a unique label", () => {

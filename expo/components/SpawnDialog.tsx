@@ -8,6 +8,8 @@ import {
   ScrollView,
   ActivityIndicator,
   StyleSheet,
+  type StyleProp,
+  type TextStyle,
 } from "react-native";
 import {
   fetchSpawnHistory,
@@ -34,7 +36,7 @@ const OTHER_UTILITY = "";
  *  `brane spawn <agent>` takes. Empty, which no entry in AGENT_TYPES is. */
 const OTHER_AGENT = "";
 
-type SpawnMode = "agent" | "utility";
+export type SpawnMode = "agent" | "utility";
 
 const nativeSelectChevron =
   "url(\"data:image/svg+xml;utf8," +
@@ -82,6 +84,12 @@ export interface SpawnDialogProps {
    * or not currently registered.
    */
   defaultFoldPath?: string | null;
+  /**
+   * Which side of the Agent ↔ Utility switch the dialog opens on (default
+   * "agent"). The 🦠 menu's 🐚 Utility opens on "utility", where the newest
+   * run-history entry is already the default pick. Ignored in twin mode.
+   */
+  initialMode?: SpawnMode;
   onClose: () => void;
   onSpawned: (narrative: NarrativeInfo) => void;
 }
@@ -92,7 +100,7 @@ export interface SpawnDialogProps {
  * state and the spawn call. Canceling simply closes it, leaving the host screen
  * exactly as it was — so twinning from a narrative returns to that narrative.
  */
-export default function SpawnDialog({ visible, conn, re, defaultFoldPath, onClose, onSpawned }: SpawnDialogProps) {
+export default function SpawnDialog({ visible, conn, re, defaultFoldPath, initialMode = "agent", onClose, onSpawned }: SpawnDialogProps) {
   const [mode, setMode] = useState<SpawnMode>("agent");
   const [selectedAgent, setSelectedAgent] = useState<string>("claude");
   const [otherAgent, setOtherAgent] = useState<string>("");
@@ -159,7 +167,7 @@ export default function SpawnDialog({ visible, conn, re, defaultFoldPath, onClos
     if (wasVisible.current) return; // already initialized for this open
     wasVisible.current = true;
     setRole(re ? "twin" : "worker");
-    setMode("agent");
+    setMode(initialMode);
     setSelectedAgent("claude");
     setOtherAgent("");
     setSpawnError(null);
@@ -193,7 +201,7 @@ export default function SpawnDialog({ visible, conn, re, defaultFoldPath, onClos
         })
         .catch(() => setUtilities([]));
     }
-  }, [visible, re, conn, defaultFoldPath, pickFold]);
+  }, [visible, re, conn, defaultFoldPath, initialMode, pickFold]);
 
   const handleAddFold = useCallback(async () => {
     if (!conn || addingFold) return;
@@ -469,12 +477,7 @@ export default function SpawnDialog({ visible, conn, re, defaultFoldPath, onClos
                     onPress={() => setFoldPath(fold.path)}
                   >
                     <Text style={styles.foldRowDot}>{selected ? "●" : "○"}</Text>
-                    <Text
-                      style={[styles.foldRowText, selected && styles.foldRowTextSelected]}
-                      numberOfLines={1}
-                    >
-                      {fold.path}
-                    </Text>
+                    <FoldPath path={fold.path} selected={selected} />
                   </Pressable>
                   <div style={{ position: "relative" }}>
                     <Pressable
@@ -513,9 +516,7 @@ export default function SpawnDialog({ visible, conn, re, defaultFoldPath, onClos
                   ]}
                 >
                   <View style={styles.foldRowSelect}>
-                    <Text style={styles.foldRowText} numberOfLines={1}>
-                      {fold.path}
-                    </Text>
+                    <FoldPath path={fold.path} />
                   </View>
                   <div style={{ position: "relative" }}>
                     <Pressable
@@ -620,7 +621,7 @@ export default function SpawnDialog({ visible, conn, re, defaultFoldPath, onClos
               : "Restore this fold to the spawn list."}
           </Text>
           {confirmFold && (
-            <Text style={styles.confirmPath} numberOfLines={1}>{confirmFold.fold.path}</Text>
+            <FoldPath path={confirmFold.fold.path} textStyle={styles.confirmPath} />
           )}
           <Pressable
             style={[styles.addButton, { marginTop: 16 }]}
@@ -640,6 +641,40 @@ export default function SpawnDialog({ visible, conn, re, defaultFoldPath, onClos
       </Pressable>
     </Modal>
     </>
+  );
+}
+
+// Fold paths are long and their tails tell them apart, so a path that
+// overflows scrolls sideways under a fade instead of ending in an ellipsis.
+// The fade is a mask, as in the narrative list's summaries; the padding is
+// the fade's width, so scrolling to the end brings the last characters fully
+// clear of it.
+const FOLD_PATH_FADE = 40;
+
+function FoldPath({ path, selected, textStyle = styles.foldRowText }: {
+  path: string;
+  selected?: boolean;
+  textStyle?: StyleProp<TextStyle>;
+}) {
+  return (
+    <div className="no-scrollbar" style={{
+      flex: 1,
+      minWidth: 0,
+      overflowX: "auto",
+      overflowY: "hidden",
+      scrollbarWidth: "none",
+      WebkitOverflowScrolling: "touch",
+      maskImage: `linear-gradient(to right, #000 calc(100% - ${FOLD_PATH_FADE}px), transparent)`,
+      WebkitMaskImage: `linear-gradient(to right, #000 calc(100% - ${FOLD_PATH_FADE}px), transparent)`,
+    }}>
+      <Text style={[textStyle, selected && styles.foldRowTextSelected, {
+        flex: undefined,
+        whiteSpace: "nowrap",
+        paddingRight: FOLD_PATH_FADE,
+      } as TextStyle]}>
+        {path}
+      </Text>
+    </div>
   );
 }
 

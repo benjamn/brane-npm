@@ -6,6 +6,21 @@ page, which is also what triggers its publish (see
 [docs/releasing.md](docs/releasing.md)). This file is the summary that
 travels in the npm tarball.
 
+## 0.3.6 - 2026-10-15
+
+- The 🦠 menu has a 🐚 Utility item, beside 🧬 Twin, that opens the
+  Spawn dialog on its Utility side, in that narrative's fold, with the
+  last utility run already picked: a `zsh` next to an agent is 🦠 → 🐚
+  → Run. The list card's status-badge menu offers it too
+  ([#618](https://github.com/benjamn/brane/pull/618)).
+- Long fold paths in the Spawn dialog scroll sideways under a fade
+  instead of ending in an ellipsis, so the tail that tells similar
+  folds apart can be read
+  ([#617](https://github.com/benjamn/brane/pull/617)).
+
+Published while the repository is private, so like 0.3.0–0.3.5 it
+carries no npm provenance attestation.
+
 ## 0.3.5 - 2026-10-14
 
 - A browser holds daemons from one tailnet only. A meld link or "+ Add

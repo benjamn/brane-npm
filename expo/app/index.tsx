@@ -80,6 +80,7 @@ function NarrativeCard({
   onArchive,
   onMeld,
   onTwin,
+  onUtility,
   onRevive,
   onEnd,
   menuVisible,
@@ -93,11 +94,12 @@ function NarrativeCard({
   conn: ConnectionParams | null;
   onPress: () => void;
   onArchive: () => void;
-  /** Meld, Twin, Revive and End all end somewhere the screen has to take you
-   *  (a modal, or the narrative's terminal), so they live up there; Isolate
-   *  and Export stay here because they end where they started. */
+  /** Meld, Twin, Utility, Revive and End all end somewhere the screen has to
+   *  take you (a modal, or the narrative's terminal), so they live up there;
+   *  Isolate and Export stay here because they end where they started. */
   onMeld: () => void;
   onTwin: () => void;
+  onUtility: () => void;
   onRevive: () => void;
   onEnd: () => void;
   /** Whether this card's status menu is open. Owned by the screen, not the
@@ -240,6 +242,7 @@ function NarrativeCard({
                   // gap among the other glows.
                   onRecolor: () => { setMenuVisible(false); bumpRecolorSalt(item.id); recolorGlowHue(item.id); setRecolors((n) => n + 1); },
                   onTwin: () => { setMenuVisible(false); onTwin(); },
+                  onUtility: () => { setMenuVisible(false); onUtility(); },
                   onRevive: () => { setMenuVisible(false); onRevive(); },
                   onEnd: () => { setMenuVisible(false); onEnd(); },
                   onArchiveToggle: () => { setMenuVisible(false); onArchive(); },
@@ -1352,11 +1355,12 @@ export default function NarrativeList() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [showSpawn, setShowSpawn] = useState(false);
-  // Meld and Twin from a list row: the target narrative, or null when closed.
+  // Meld, Twin and Utility from a list row: the target narrative, or null when closed.
   // Which card's status menu is open, by nid — see NarrativeCard's props.
   const [openMenuNid, setOpenMenuNid] = useState<string | null>(null);
   const [meldTarget, setMeldTarget] = useState<NarrativeInfo | null>(null);
   const [twinTarget, setTwinTarget] = useState<NarrativeInfo | null>(null);
+  const [utilityTarget, setUtilityTarget] = useState<NarrativeInfo | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [endedLimit, setEndedLimit] = useState(ENDED_PAGE_SIZE);
   const [showSearch, setShowSearch] = useState(false);
@@ -1961,6 +1965,7 @@ export default function NarrativeList() {
                   onArchive={() => handleArchive(item.id, !!item.archived)}
                   onMeld={() => setMeldTarget(item)}
                   onTwin={() => setTwinTarget(item)}
+                  onUtility={() => setUtilityTarget(item)}
                   onRevive={() => handleRevive(item)}
                   onEnd={() => handleEnd(item.id)}
                   menuVisible={openMenuNid === item.id}
@@ -2036,6 +2041,15 @@ export default function NarrativeList() {
         re={twinTarget?.id}
         defaultFoldPath={twinTarget?.fold_path}
         onClose={() => setTwinTarget(null)}
+        onSpawned={handleSpawned}
+      />
+
+      <SpawnDialog
+        visible={utilityTarget !== null}
+        conn={conn}
+        initialMode="utility"
+        defaultFoldPath={utilityTarget?.fold_path}
+        onClose={() => setUtilityTarget(null)}
         onSpawned={handleSpawned}
       />
 

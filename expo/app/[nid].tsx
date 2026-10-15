@@ -706,6 +706,7 @@ type NarrativeHeaderProps = {
   onTerminate: () => void;
   onRevive: () => void;
   onTwin: () => void;
+  onUtility: () => void;
   onArchiveToggle: () => void;
   onRecolor: () => void;
   onShowQr: () => void;
@@ -736,6 +737,7 @@ const NarrativeHeader = memo(function NarrativeHeader({
   onTerminate,
   onRevive,
   onTwin,
+  onUtility,
   onArchiveToggle,
   onRecolor,
   onShowQr,
@@ -845,6 +847,7 @@ const NarrativeHeader = memo(function NarrativeHeader({
               onExport: (scope) => { setMenuVisible(false); onDownload(scope); },
               onRecolor: () => { setMenuVisible(false); onRecolor(); },
               onTwin: () => { setMenuVisible(false); onTwin(); },
+              onUtility: () => { setMenuVisible(false); onUtility(); },
               onRevive: () => { setMenuVisible(false); onRevive(); },
               onEnd: () => { setMenuVisible(false); onTerminate(); },
               onArchiveToggle: () => { setMenuVisible(false); onArchiveToggle(); },
@@ -1104,6 +1107,8 @@ export default function ChatView() {
   // Twin dialog opens in place over this narrative — canceling returns here,
   // not to the list.
   const [showTwin, setShowTwin] = useState(false);
+  // 🐚 Utility: the same dialog on its Utility side, in this narrative's fold.
+  const [showUtility, setShowUtility] = useState(false);
   // Lazy init reads the cached value for the current nid on mount. The effect
   // below re-syncs on nid change in case expo-router reuses the ChatView
   // instance across routes instead of remounting (e.g. when the nid param
@@ -2081,6 +2086,7 @@ export default function ChatView() {
           terminalPaneRef.current?.revive();
         }}
         onTwin={() => setShowTwin(true)}
+        onUtility={() => setShowUtility(true)}
         onArchiveToggle={handleArchiveToggle}
         onRecolor={handleRecolor}
         onShowQr={() => setQrVisible(true)}
@@ -2236,7 +2242,7 @@ export default function ChatView() {
             conn={conn}
             nid={nid}
             active={visibleTabs.includes("terminal")}
-            keyboardActive={activeTab === "terminal" && !showSwitcher && !showTwin && lightboxUrl === null}
+            keyboardActive={activeTab === "terminal" && !showSwitcher && !showTwin && !showUtility && lightboxUrl === null}
             agentType={narrativeAgentType}
             role={narrativeRole}
             onAtBottomChange={setTermAtBottom}
@@ -2386,6 +2392,15 @@ export default function ChatView() {
         defaultFoldPath={narrativeFoldPath}
         onClose={() => setShowTwin(false)}
         onSpawned={(narrative) => { setShowTwin(false); router.push(`/${narrative.id}`); }}
+      />
+      <SpawnDialog
+        visible={showUtility}
+        conn={conn}
+        initialMode="utility"
+        defaultFoldPath={narrativeFoldPath}
+        onClose={() => setShowUtility(false)}
+        // A utility session has no chat to read — its whole life is the terminal.
+        onSpawned={(narrative) => { setShowUtility(false); router.push(`/${narrative.id}?tab=terminal`); }}
       />
       <Modal
         visible={lightboxUrl !== null}

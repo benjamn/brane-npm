@@ -64,6 +64,9 @@ export interface NarrativeMenuOptions {
    *  preference kept on this device, not a change to the narrative. */
   onRecolor: () => void;
   onTwin: () => void;
+  /** Open the Spawn dialog in Utility mode, in this narrative's fold, with the
+   *  last utility run already picked — a `zsh` beside an agent is two taps. */
+  onUtility: () => void;
   onRevive: () => void;
   onEnd: () => void;
   onArchiveToggle: () => void;
@@ -82,6 +85,7 @@ export function narrativeMenuItems({
   onExport,
   onRecolor,
   onTwin,
+  onUtility,
   onRevive,
   onEnd,
   onArchiveToggle,
@@ -132,6 +136,12 @@ export function narrativeMenuItems({
     // like its neighbors; the /twin protocol syntax belongs to the dialog the
     // press opens and to the line the resulting narrative starts with.
     { icon: "🧬", label: "Twin", onPress: onTwin },
+    // Utility beside Twin: both open the Spawn dialog in this narrative's fold,
+    // one for an agent that continues it, one for a command that sits beside
+    // it. Offered on every narrative — the fold is still there when the
+    // session isn't, and the dialog falls back to the newest fold when a
+    // narrative has none.
+    { icon: "🐚", label: "Utility", onPress: onUtility },
     ...(isExternal
       ? []
       : [
