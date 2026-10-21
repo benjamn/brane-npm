@@ -476,6 +476,18 @@ export function applyMigrations(db: Database.Database): void {
   if (!tokenCols.has("last_app_origin")) {
     db.exec("ALTER TABLE tokens ADD COLUMN last_app_origin TEXT");
   }
+  // Operator verification (docs/passkeys.md): until when a device token is
+  // verified, until when its last proof counts as fresh, and what proved it.
+  // Null means never. Read on every act by the verification gate.
+  for (const [col, type] of [
+    ["verified_until", "INTEGER"],
+    ["fresh_until", "INTEGER"],
+    ["verified_at", "INTEGER"],
+    ["verified_by", "TEXT"],
+    ["verified_method", "TEXT"],
+  ] as const) {
+    if (!tokenCols.has(col)) db.exec(`ALTER TABLE tokens ADD COLUMN ${col} ${type}`);
+  }
   // Which token's request last launched a narrative's process (spawn, run or
   // revive), so revoking a device can say which agents it started. Recorded
   // from now on; there is nothing to backfill it from.
@@ -492,6 +504,33 @@ export function applyMigrations(db: Database.Database): void {
       brane_id    TEXT PRIMARY KEY,
       archived    INTEGER NOT NULL DEFAULT 0,
       archived_at INTEGER
+    )
+  `);
+  // The operator's enrolled WebAuthn credentials (src/db/credentials.ts,
+  // docs/passkeys.md): any live one satisfies the verification gate. A
+  // public key and what the daemon was told about the authenticator, never
+  // a secret. Revoked, never deleted, as tokens are.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS credentials (
+      id               TEXT PRIMARY KEY,
+      credential_id    BLOB NOT NULL UNIQUE,
+      rp_id            TEXT NOT NULL,
+      public_key       BLOB NOT NULL,
+      alg              INTEGER NOT NULL,
+      transports       TEXT,
+      aaguid           TEXT,
+      sign_count       INTEGER NOT NULL DEFAULT 0,
+      backup_eligible  INTEGER NOT NULL DEFAULT 0,
+      backed_up        INTEGER NOT NULL DEFAULT 0,
+      attested         INTEGER NOT NULL DEFAULT 0,
+      attestation_fmt  TEXT,
+      attestation_root TEXT,
+      label            TEXT NOT NULL,
+      enrolled_at      INTEGER NOT NULL,
+      enrolled_by      TEXT NOT NULL,
+      enrolled_via     TEXT,
+      last_used_at     INTEGER,
+      revoked_at       INTEGER
     )
   `);
 }

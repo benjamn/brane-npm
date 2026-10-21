@@ -47,6 +47,9 @@ import { RECYCLE_STEP, RecycleGlyph, useDetentSpin } from "@/components/RecycleS
 import SpawnDialog from "@/components/SpawnDialog";
 import MembraneEmpty from "@/components/MembraneEmpty";
 import QrModal from "@/components/QrModal";
+import NowPlayingDial from "@/components/NowPlayingDial";
+import type { JukeboxTrack } from "@shared/now-playing";
+import { fileHref } from "@/lib/routes";
 import DevicesLayer from "@/components/DevicesLayer";
 import { buildIsolateUrl, isIsolated, terminalOnlyHref } from "@shared/view-url";
 import { useAppHost } from "@/lib/appHost";
@@ -81,6 +84,7 @@ function NarrativeCard({
   onMeld,
   onTwin,
   onUtility,
+  onOpenTrack,
   onRevive,
   onEnd,
   menuVisible,
@@ -100,6 +104,8 @@ function NarrativeCard({
   onMeld: () => void;
   onTwin: () => void;
   onUtility: () => void;
+  /** A long-press on the card's dial: the track's file, in its narrative. */
+  onOpenTrack: (track: JukeboxTrack) => void;
   onRevive: () => void;
   onEnd: () => void;
   /** Whether this card's status menu is open. Owned by the screen, not the
@@ -206,6 +212,18 @@ function NarrativeCard({
             >
               {statusText}
             </button>
+            {/* The jukebox's dial for this narrative's track, while it holds
+                one, hung under the status word and out of the flow: the card
+                is where you find what's playing from anywhere, and it grows
+                by nothing. Tap plays or pauses, a drag scrubs, a long-press
+                opens the file; stop is on the Files card. Above the rows
+                beneath it, under the menu. */}
+            <NowPlayingDial
+              nid={item.id}
+              size={22}
+              onOpen={onOpenTrack}
+              style={{ position: "absolute", right: -1, top: "100%", marginTop: 5, zIndex: 1 }}
+            />
             {menuVisible && (
               <ContextMenu
                 hue={menuHue}
@@ -1966,6 +1984,7 @@ export default function NarrativeList() {
                   onMeld={() => setMeldTarget(item)}
                   onTwin={() => setTwinTarget(item)}
                   onUtility={() => setUtilityTarget(item)}
+                  onOpenTrack={(t) => router.push(fileHref(t.nid, t.path))}
                   onRevive={() => handleRevive(item)}
                   onEnd={() => handleEnd(item.id)}
                   menuVisible={openMenuNid === item.id}

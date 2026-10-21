@@ -24,7 +24,7 @@ until someone lists it. An agent also may not revive or prompt a
 
 | Method | Path | Purpose |
 |--------|------|---------|
-| `GET` | `/api/status` | Daemon status (brane_id, hostname, username, pid, port, uptime_ms, `tls: { state, expires_at, ... }`, `app_domain`: the shared app's host, where a daemon's own bundle hops out to on Isolate — see [View URLs](view-urls.md)) |
+| `GET` | `/api/status` | Daemon status (brane_id, hostname, username, pid, port, uptime_ms, `tls: { state, expires_at, ... }`, `app_domain`: the shared app's host, where a daemon's own bundle hops out to on Isolate — see [View URLs](view-urls.md); `verification: { mode, window_minutes, fresh }`, the posture — see [Operator Verification](passkeys.md)) |
 | `GET` | `/api/narratives?archived=1&brane_ids=` | List narratives (excludes archived by default). Without `brane_ids`, an archived brane's ended narratives are left out too |
 | `GET` | `/api/narratives/recent?since=&search=&status=&fold=&limit=&archived=1&brane_ids=` | Recently active narratives — the browse half of the `narrative_info` MCP tool; every brane unless `brane_ids` scopes it |
 | `PATCH` | `/api/narratives/:id/archive` | Archive/unarchive a narrative; archiving a running one is a 409 (`src/daemon/archive-gate.ts`) |
@@ -53,6 +53,14 @@ until someone lists it. An agent also may not revive or prompt a
 | `POST` | `/api/token/rotate` | From a device: mint a pending replacement token, returned as `{ token, expires_at, replaced }`; the old one is retired on the new one's first use — see [Token Rotation](token-rotation.md). From this machine's shell (no token, over `daemon.sock`): wait for the [presence check](presence.md#the-gate), then sign out every device in this one request, answering `{ signed_out, replaced }`. An agent's token gets 403 |
 | — | `BRANE_DEVICE_TOKEN_SHA256` | Not a route: comma-separated SHA-256 hashes in the daemon's environment, each adopted at startup as a device row unless ever seen before, then dropped from the environment. How `brane meld --remote` hands a remote daemon (a Fly machine, say) a token minted elsewhere — see [Presence Check](presence.md#the-gate) |
 | `POST` | `/api/presence/cancel` | Close the presence prompt that is up (`?id=` from the control socket's `presence` message, so a stale tap closes nothing) → `{ canceled }`. Device tokens only (403 otherwise); there is no approve |
+| `POST` | `/api/verify/end` | The app went to the background: this device's verification window ends now, bodiless → `{ ended }`. A no-op for anything but a device token. Every act route answers `403 { verification: "required" \| "fresh" }` to an unverified device while `verification` is on — see [Operator Verification](passkeys.md) |
+| `POST` | `/api/verify/begin` | From a device token, bodiless: `{ approval, url, expires_at }`, a single-use approval bound to the caller's own token and the `GET /verify` URL that carries it in the fragment. `409` without TLS |
+| `POST` | `/api/verify/challenge`, `/api/verify/webauthn` | The ceremony page's: with `{ approval }`, request options and a fresh challenge; with the approval and an assertion, verify the bound token (`{ verified, verified_until }`) and tell its control sockets `{ type: "verified" }`. Answered before the token check; `410` once the approval is spent or expired |
+| `POST` | `/api/credentials/begin` | The enroll act (fresh class), bodiless: an approval of purpose `enroll` |
+| `POST` | `/api/credentials/challenge`, `/api/credentials` | The enrollment page's: creation options, then the new credential, which waits on the presence check at the Mac unless its hardware attestation verified → `{ credential }` |
+| `GET` | `/api/credentials` | The enrolled credentials, no key material → `{ credentials }` |
+| `POST` | `/api/credentials/:id/revoke` | Revoke a credential (an act, fresh class); revoked, never deleted → `{ revoked }` |
+| `GET` | `/verify` | The ceremony page (not under `/api/`): self-contained, CSP-pinned, never framed — see [Operator Verification](passkeys.md#the-hop) |
 | `GET` | `/api/absorb/survey` | Every session store brane can look for under the daemon's HOME, with per-session `new / changed / unchanged / managed` counts for the readable ones and a found-flag for the rest; reads no content — see [Absorb](absorb.md) |
 | `POST` | `/api/absorb` | Import conversation history (`{ provider, path?, fold?, identity?, brane?, dry_run?, since?, session?, rebuild? }`); answers as an NDJSON progress stream — see [Absorb](absorb.md) |
 | `POST` | `/api/memory/index` | Run a memory indexing pass (`{ rebuild? }`), queued behind the daemon's own background pass; returns `IndexStats` |

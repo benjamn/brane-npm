@@ -182,6 +182,11 @@ const CLOSED_TO_AGENTS = new Set([
   "PATCH /api/narratives/:/archive",
   "POST /api/narratives/:/signal",
   "POST /api/presence/cancel",
+  "POST /api/verify/end",
+  "POST /api/verify/begin",
+  "POST /api/credentials/begin",
+  "GET /api/credentials",
+  "POST /api/credentials/:/revoke",
   "POST /api/run",
   "POST /api/token/forget",
   "POST /api/token/rotate",
@@ -193,6 +198,12 @@ const CLOSED_TO_AGENTS = new Set([
   "GET /ws/terminal/:",
   // Before authentication, with its own check (agent token, loopback only).
   "POST /api/hooks/tool-use",
+  // Before authentication too: the ceremony page's routes, which take an
+  // approval only `begin` hands out, and `begin` is closed to agents.
+  "POST /api/verify/challenge",
+  "POST /api/verify/webauthn",
+  "POST /api/credentials/challenge",
+  "POST /api/credentials",
 ]);
 
 /** `METHOD /path` with every parameter (`:id`, `*`) spelled `:`. */

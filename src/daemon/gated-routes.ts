@@ -34,6 +34,7 @@ const AGENT_REFUSALS: Readonly<Record<GatedAct, string>> = {
   "meld-remote": "An agent cannot add a device to a remote daemon; the operator runs `brane meld --remote` from a shell outside an agent session",
   "revoke-device": "An agent cannot sign out a device; the operator does, from a shell outside an agent session or from the app",
   rotate: "An agent's token is replaced by reviving its narrative, not rotated",
+  enroll: "An agent cannot enroll a credential; the operator does, from a signed-in device",
 };
 
 /** Null when `caller` may go on — a device, or a prompt approved — else the

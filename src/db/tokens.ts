@@ -6,6 +6,7 @@
  */
 
 import type Database from "better-sqlite3";
+import type { VerificationState } from "../daemon/verification-gate.js";
 import { randomUUID } from "node:crypto";
 import { chmodSync, readFileSync, writeFileSync } from "node:fs";
 import {
@@ -245,11 +246,14 @@ interface TokenRow {
   elsewhere_at: number | null;
   minted_by: string | null;
   owner_nid: string | null;
+  verified_until: number | null;
+  fresh_until: number | null;
 }
 
 const ROW_COLUMNS =
   "id, kind, label, origin, created_at, last_used_at, user_agent, remote_addr, " +
-  "last_user_agent, last_remote_addr, app_origin, last_app_origin, elsewhere_at, minted_by, owner_nid";
+  "last_user_agent, last_remote_addr, app_origin, last_app_origin, elsewhere_at, minted_by, owner_nid, " +
+  "verified_until, fresh_until";
 
 /** `ROW_COLUMNS` qualified as `t.`, plus what the minting token is, for the list. */
 const LISTING_COLUMNS =
@@ -339,6 +343,52 @@ export class DbTokenStore implements TokenStore {
       } catch {}
     }
     return { id: row.id, kind: row.kind, label: row.label, ...(row.owner_nid ? { ownerNid: row.owner_nid } : {}) };
+  }
+
+  /** A token's verification state, read each time the gate asks: a proof
+   *  can land between two messages on one socket. A revoked or unknown row
+   *  is never verified. */
+  verification(id: string, _now: number): VerificationState {
+    const row = this.db
+      .prepare("SELECT verified_until, fresh_until FROM tokens WHERE id = ? AND revoked_at IS NULL")
+      .get(id) as { verified_until: number | null; fresh_until: number | null } | undefined;
+    return { verifiedUntil: row?.verified_until ?? null, freshUntil: row?.fresh_until ?? null };
+  }
+
+  /** Record a proof of the operator on a live device token: verified for
+   *  `windowMs`, fresh for `freshMs`, and what proved it (a credential id,
+   *  or `oidc:<sub>`). Under a window of zero the proof is good for one act
+   *  within `freshMs`, and the gate spends it (`consume("all")`). False if
+   *  the row is not a live device token. Nothing calls this yet but the
+   *  suite; phase 3's verifiers will. */
+  verify(id: string, opts: { now: number; windowMs: number; freshMs: number; by: string; method: string }): boolean {
+    const until = opts.now + (opts.windowMs > 0 ? opts.windowMs : opts.freshMs);
+    const r = this.db
+      .prepare(
+        `UPDATE tokens SET verified_until = ?, fresh_until = ?, verified_at = ?, verified_by = ?, verified_method = ?
+         WHERE id = ? AND kind = 'device' AND revoked_at IS NULL`,
+      )
+      .run(until, opts.now + opts.freshMs, opts.now, opts.by, opts.method, id);
+    return r.changes === 1;
+  }
+
+  /** Spend a proof, in the one statement that also checks it is there to
+   *  spend: a fresh-class act its freshness, an act under a window of zero
+   *  the whole proof. True iff a live device token held one. */
+  spend(id: string, what: "fresh" | "all", now: number): boolean {
+    const sql = what === "all"
+      ? "UPDATE tokens SET verified_until = NULL, fresh_until = NULL WHERE id = ? AND kind = 'device' AND revoked_at IS NULL AND verified_until > ?"
+      : "UPDATE tokens SET fresh_until = NULL WHERE id = ? AND kind = 'device' AND revoked_at IS NULL AND fresh_until > ?";
+    return this.db.prepare(sql).run(id, now).changes === 1;
+  }
+
+  /** The app backgrounded, or the operator locked it: the window ends now.
+   *  What proved the last verification stays on the row for the record. */
+  endVerification(id: string): boolean {
+    const r = this.db
+      .prepare("UPDATE tokens SET verified_until = NULL, fresh_until = NULL WHERE id = ? AND revoked_at IS NULL")
+      .run(id);
+    return r.changes === 1;
   }
 
   /** Whether this hash has *ever* been a token, revoked or not — so a

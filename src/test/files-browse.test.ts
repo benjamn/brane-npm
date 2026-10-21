@@ -4,7 +4,7 @@ import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { brotliCompressSync, deflateRawSync, gzipSync } from "node:zlib";
-import { browseFold, parseOffsetParam, MAX_INLINE, type BrowseResult, type FilesJson } from "../files/browse.js";
+import { browseFold, parseOffsetParam, parseRangeHeader, respondWithSource, MAX_INLINE, type BrowseResult, type FilesJson } from "../files/browse.js";
 import { ReachError, streamSource } from "../files/bytes.js";
 import { Readable } from "node:stream";
 import { HEX_PAGE_BYTES, hexDumpRows, hexRowColumns, looksBinary } from "../shared/hex-dump.js";
@@ -138,8 +138,8 @@ function makeTar(entries: TarSpec[]): Buffer {
 // ── Fixture fold ────────────────────────────────────────────────────────────
 
 let fold: string;
-const MIME = { ".png": "image/png", ".pdf": "application/pdf" };
-const browse = (rel: string, opts: { raw?: boolean; offset?: number | null } = {}) =>
+const MIME = { ".png": "image/png", ".pdf": "application/pdf", ".mp3": "audio/mpeg" };
+const browse = (rel: string, opts: { raw?: boolean; offset?: number | null; range?: string } = {}) =>
   browseFold(fold, rel, { mimeTypes: MIME, ...opts });
 
 function json(r: BrowseResult): FilesJson {
@@ -165,12 +165,16 @@ async function rawBytes(r: BrowseResult): Promise<Buffer> {
 }
 
 const ELF = Buffer.concat([Buffer.from([0x7f, 0x45, 0x4c, 0x46, 2, 1, 1, 0]), Buffer.alloc(40000, 0xab)]);
+// An ID3 header and then bytes that differ by position, so a wrong window
+// can't pass by accident.
+const MP3 = Buffer.concat([Buffer.from("ID3\x04\x00\x00\x00\x00\x00\x00", "latin1"), Buffer.from(Array.from({ length: 2990 }, (_, i) => (i * 37) & 0xff))]);
 
 before(() => {
   fold = mkdtempSync(join(tmpdir(), "brane-files-"));
   mkdirSync(join(fold, "dir"));
   writeFileSync(join(fold, "dir", "hello.ts"), "export const x = 1;\n");
   writeFileSync(join(fold, "prog.bin"), ELF);
+  writeFileSync(join(fold, "song.mp3"), MP3);
   // Bigger than the inline limit, and binary: paged, never "too large".
   writeFileSync(join(fold, "huge.bin"), Buffer.concat([Buffer.from([0]), Buffer.alloc(MAX_INLINE + 10, 1)]));
   writeFileSync(join(fold, "pkg.zip"), makeZip([
@@ -296,6 +300,103 @@ describe("/api/files: plain files", () => {
 });
 
 // ── Zip ─────────────────────────────────────────────────────────────────────
+
+describe("/api/files: ranges and media", () => {
+  it("describes an audio file as rendering from its raw URL, not as hex", async () => {
+    const f = asFile(await browse("song.mp3"));
+    assert.equal(f.binary, true);
+    assert.equal(f.hex, undefined);
+    assert.equal(f.content, "");
+    assert.equal(f.size, MP3.length);
+  });
+
+  it("sends a whole file with its size, so the server can promise a length and offer ranges", async () => {
+    const r = await browse("song.mp3", { raw: true });
+    assert.ok("raw" in r);
+    assert.equal(r.status, 200);
+    assert.equal(r.raw.contentType, "audio/mpeg");
+    assert.equal(r.raw.size, MP3.length);
+    assert.equal(r.raw.range, undefined);
+    assert.deepEqual(await rawBytes(r), MP3);
+  });
+
+  it("serves one byte window as 206, closed, open-ended, or a suffix", async () => {
+    const closed = await browse("song.mp3", { raw: true, range: "bytes=10-19" });
+    assert.ok("raw" in closed);
+    assert.equal(closed.status, 206);
+    assert.deepEqual(closed.raw.range, { start: 10, end: 19 });
+    assert.equal(closed.raw.size, MP3.length);
+    assert.deepEqual(await rawBytes(closed), MP3.subarray(10, 20));
+
+    const open = await browse("song.mp3", { raw: true, range: "bytes=2990-" });
+    assert.ok("raw" in open);
+    assert.deepEqual(open.raw.range, { start: 2990, end: 2999 });
+    assert.deepEqual(await rawBytes(open), MP3.subarray(2990));
+
+    const suffix = await browse("song.mp3", { raw: true, range: "bytes=-5" });
+    assert.ok("raw" in suffix);
+    assert.deepEqual(suffix.raw.range, { start: 2995, end: 2999 });
+    assert.deepEqual(await rawBytes(suffix), MP3.subarray(2995));
+
+    // Safari's probe before it plays anything, and an end past the file.
+    const probe = await browse("song.mp3", { raw: true, range: "bytes=0-1" });
+    assert.ok("raw" in probe);
+    assert.deepEqual(await rawBytes(probe), MP3.subarray(0, 2));
+    const past = await browse("song.mp3", { raw: true, range: "bytes=2998-99999" });
+    assert.ok("raw" in past);
+    assert.deepEqual(past.raw.range, { start: 2998, end: 2999 });
+  });
+
+  it("refuses a window past the end, and sends the whole file for a header it doesn't understand", async () => {
+    const r = await browse("song.mp3", { raw: true, range: "bytes=3000-" });
+    assert.ok("json" in r);
+    assert.equal(r.status, 416);
+    for (const range of ["bytes=0-1,5-6", "items=0-1", "bytes=20-10", "bytes=-", "bytes=", "nonsense"]) {
+      const whole = await browse("song.mp3", { raw: true, range });
+      assert.ok("raw" in whole, range);
+      assert.equal(whole.status, 200, range);
+      assert.equal(whole.raw.range, undefined, range);
+      assert.deepEqual(await rawBytes(whole), MP3, range);
+    }
+  });
+
+  it("ranges a member of an archive, inflating only up to the window", async () => {
+    const r = await browse("pkg.zip/bin/tool", { raw: true, range: "bytes=8-15" });
+    assert.ok("raw" in r);
+    assert.equal(r.status, 206);
+    assert.equal(r.raw.size, ELF.length);
+    assert.deepEqual(await rawBytes(r), ELF.subarray(8, 16));
+  });
+
+  it("ranges a .gz as the file it is, since raw means the file itself", async () => {
+    const r = await browse("code.ts.gz", { raw: true, range: "bytes=0-1" });
+    assert.ok("raw" in r);
+    assert.equal(r.status, 206);
+    assert.equal(r.raw.size, gzipSync("let z = 3;\n").length);
+    assert.deepEqual(await rawBytes(r), Buffer.from([0x1f, 0x8b]));
+  });
+
+  it("sends a body of unknown size whole, Range or not", async () => {
+    const source = streamSource(() => Readable.from([Buffer.from("abc"), Buffer.from("def")]), null, 0);
+    const r = await respondWithSource(source, "x.mp3", "x.mp3", { raw: true, range: "bytes=0-1", mimeTypes: MIME });
+    assert.ok("raw" in r);
+    assert.equal(r.status, 200);
+    assert.equal(r.raw.size, null);
+    assert.equal(r.raw.range, undefined);
+    assert.equal((await rawBytes(r)).toString(), "abcdef");
+  });
+
+  it("parses Range headers the way a browser writes them", () => {
+    assert.deepEqual(parseRangeHeader("bytes=0-1", 100), { start: 0, end: 1 });
+    assert.deepEqual(parseRangeHeader(" bytes = 5 - ", 100), { start: 5, end: 99 });
+    assert.deepEqual(parseRangeHeader("bytes=-200", 100), { start: 0, end: 99 });
+    assert.equal(parseRangeHeader("bytes=-0", 100), "unsatisfiable");
+    assert.equal(parseRangeHeader("bytes=100-", 100), "unsatisfiable");
+    assert.equal(parseRangeHeader("bytes=0-", 0), "unsatisfiable");
+    assert.equal(parseRangeHeader(undefined, 100), "ignore");
+    assert.equal(parseRangeHeader("bytes=0-1, 2-3", 100), "ignore");
+  });
+});
 
 describe("/api/files: zip archives", () => {
   it("marks archives in a directory listing", async () => {

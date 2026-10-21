@@ -77,6 +77,7 @@ describe("who the gate holds", () => {
       "meld-remote": "add a device to brane on another machine",
       "revoke-device": "sign out a device from brane",
       rotate: "sign out every other device from brane",
+      enroll: "add a passkey or security key to brane",
     });
   });
 });

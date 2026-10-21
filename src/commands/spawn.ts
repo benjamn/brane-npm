@@ -793,9 +793,140 @@ export function modelArgs(agent: string, model?: string | null): string[] {
   }
 }
 
+/** Codex flags that set approval and sandbox policy together. When the
+ *  operator's passthrough names one, brane passes neither `-a` nor `-s`:
+ *  clap rejects `--dangerously-bypass-approvals-and-sandbox` alongside them,
+ *  and an operator who picks a whole policy means that one. A lone `-a` or
+ *  `-s` replaces only its own half. */
+const CODEX_COMBINED_POLICY_FLAGS = [
+  "--full-auto",
+  "--approve-for-me",
+  "--dangerously-bypass-approvals-and-sandbox",
+  "--yolo",
+];
+
+/** Whether the passthrough sets any of `flags`: bare, as `--flag=value`, or
+ *  as clap's attached short form (`-anever`). */
+function passesFlag(passthrough: readonly string[], flags: readonly string[]): boolean {
+  return passthrough.some((a) =>
+    flags.some((f) => a === f || a.startsWith(`${f}=`) || (/^-[a-z]$/i.test(f) && a.startsWith(f))),
+  );
+}
+
+/** The root flags every codex launch carries, spawn and revive alike: a
+ *  revive that built its own shorter line is how codex sessions came back
+ *  attached to codex's shared daemon (claude-q3m74dgm:34).
+ *
+ *  - `-a on-request -s workspace-write` is what `--full-auto` expanded to.
+ *    Codex 0.163 removed `--full-auto` and exits 2 on it before logging a
+ *    line, so every fresh spawn died and only a revive got through.
+ *  - `--no-daemon` keeps codex from attaching to its shared app-server
+ *    daemon, which launches MCP servers from *its* environment: every agent
+ *    after the first got the first one's `BRANE_NARRATIVE_*` and a 401
+ *    (claude-q3m74dgm:8). Embedded, `brane mcp` is the TUI's child and
+ *    inherits this pane's credentials. `noDaemon` says whether this codex
+ *    has the flag (`codexSupportsNoDaemon`); one too old to have it has no
+ *    shared daemon either.
+ *
+ *  Nothing the passthrough already sets is repeated. The passthrough itself
+ *  is the caller's to append. */
+export function codexLaunchArgs(opts: {
+  model?: string | null;
+  noDaemon: boolean;
+  passthrough?: readonly string[];
+}): string[] {
+  const passthrough = opts.passthrough ?? [];
+  const args: string[] = [];
+  if (!passesFlag(passthrough, CODEX_COMBINED_POLICY_FLAGS)) {
+    if (!passesFlag(passthrough, ["-a", "--ask-for-approval"])) args.push("-a", "on-request");
+    if (!passesFlag(passthrough, ["-s", "--sandbox"])) args.push("-s", "workspace-write");
+  }
+  if (opts.noDaemon && !passesFlag(passthrough, ["--no-daemon"])) {
+    args.push("--no-daemon");
+  }
+  if (!passesFlag(passthrough, ["--no-alt-screen"])) {
+    args.push("--no-alt-screen");
+  }
+  args.push("-c", "check_for_update_on_startup=false");
+  args.push("-c", 'project_root_markers=[".codex", ".git"]');
+  if (!passesFlag(passthrough, ["-m", "--model"])) {
+    args.push(...modelArgs("codex", opts.model));
+  }
+  return args;
+}
+
+/** A same-agent codex revive's arguments: the root flags a spawn passes,
+ *  then the passthrough stored at spawn, then the `resume` subcommand
+ *  (`codex [OPTIONS] <COMMAND>`; root flags after it are not codex's to
+ *  accept). Revive passing only `resume <id>` and the passthrough is how a
+ *  revived session attached to codex's shared daemon. */
+export function codexReviveArgs(opts: {
+  noDaemon: boolean;
+  launchArgs: readonly string[];
+  resumeArgs: readonly string[];
+}): string[] {
+  return [
+    ...codexLaunchArgs({ noDaemon: opts.noDaemon, passthrough: opts.launchArgs }),
+    ...opts.launchArgs,
+    ...opts.resumeArgs,
+  ];
+}
+
+/** Whether `codex --help` offers `--no-daemon`. */
+export function codexHelpHasNoDaemon(help: string): boolean {
+  return /(^|\s)--no-daemon\b/m.test(help);
+}
+
+const codexNoDaemonCache = new Map<string, { mtimeMs: number; supported: boolean }>();
+
+/** Whether the codex at `agentCommand` takes `--no-daemon`, read once from
+ *  its `--help` per binary (keyed on mtime, so an in-place upgrade is seen
+ *  without a daemon restart). A help that can't be read counts as no: on
+ *  codex 0.163 the launch's `-c` flags force embedded mode anyway. */
+export function codexSupportsNoDaemon(agentCommand: string): boolean {
+  let mtimeMs = 0;
+  try { mtimeMs = statSync(agentCommand).mtimeMs; } catch {}
+  const cached = codexNoDaemonCache.get(agentCommand);
+  if (cached && cached.mtimeMs === mtimeMs) return cached.supported;
+  let supported = false;
+  try {
+    const help = execFileSync(agentCommand, ["--help"], {
+      encoding: "utf-8",
+      timeout: 5000,
+      stdio: ["ignore", "pipe", "ignore"],
+    });
+    supported = codexHelpHasNoDaemon(help);
+  } catch {}
+  codexNoDaemonCache.set(agentCommand, { mtimeMs, supported });
+  return supported;
+}
+
+/** Codex reaches MCP tools through its `functions.exec` tool instead of
+ *  listing them, so a fresh codex agent spent its first call finding
+ *  brane's (codex-aihzm7r8:4). Conditional, so it stays true if a later
+ *  codex lists them directly. */
+const CODEX_TOOLS_HINT =
+  "If your tools show only functions.exec, brane's tools are inside it, named mcp__brane__* (e.g. tools.mcp__brane__read_protocol).";
+
+/** A kickoff prompt as `agent` should receive it. */
+export function kickoffPrompt(agent: string, prompt: string): string {
+  return agent === "codex" ? `${prompt} ${CODEX_TOOLS_HINT}` : prompt;
+}
+
 export function buildAgentArgs(
   agent: string,
-  opts: { model?: string; role?: string; narrativeId?: string; mcpConfigPath?: string; bindToken?: string | null; sessionId?: string },
+  opts: {
+    model?: string;
+    role?: string;
+    narrativeId?: string;
+    mcpConfigPath?: string;
+    bindToken?: string | null;
+    sessionId?: string;
+    /** codex: whether this binary takes `--no-daemon` (`codexSupportsNoDaemon`). */
+    noDaemon?: boolean;
+    /** The operator's passthrough, which codex's defaults must not repeat. */
+    passthrough?: readonly string[];
+  },
 ): string[] {
   const args: string[] = [];
 
@@ -818,10 +949,7 @@ export function buildAgentArgs(
   } else if (agent === "gemini") {
     args.push(...modelArgs(agent, opts.model));
   } else if (agent === "codex") {
-    args.push("--full-auto", "--no-alt-screen");
-    args.push("-c", "check_for_update_on_startup=false");
-    args.push("-c", 'project_root_markers=[".codex", ".git"]');
-    args.push(...modelArgs(agent, opts.model));
+    args.push(...codexLaunchArgs({ model: opts.model, noDaemon: opts.noDaemon ?? false, passthrough: opts.passthrough }));
   } else if (agent === "amp") {
     // Amp is an interactive TUI — no special args needed
     // MCP config is read from .amp/settings.json
@@ -973,7 +1101,16 @@ export function doSpawn(opts: SpawnOptions): SpawnResult {
   const affinity = ensureSessionAffinityConfig(agent, absoluteFoldPath, narrativeId, { db });
 
   // Build the command to run inside tmux
-  const agentArgs = buildAgentArgs(agent, { model, role, narrativeId, mcpConfigPath: copilotMcpConfigPath, bindToken, sessionId: sessionId ?? undefined });
+  const agentArgs = buildAgentArgs(agent, {
+    model,
+    role,
+    narrativeId,
+    mcpConfigPath: copilotMcpConfigPath,
+    bindToken,
+    sessionId: sessionId ?? undefined,
+    noDaemon: agent === "codex" && codexSupportsNoDaemon(agentCommand),
+    passthrough: extraArgs,
+  });
   agentArgs.push(...affinity.args);
 
   // Append caller-supplied passthrough args before the prompt (prompts are positional and must come last for claude/codex)
@@ -982,7 +1119,7 @@ export function doSpawn(opts: SpawnOptions): SpawnResult {
   }
 
   // Pass the LIVE loop bootstrap prompt (or continuation prompt if re is set)
-  const prompt = pinnedRe ? buildTwinPrompt(pinnedRe) : LIVE_LOOP_PROMPT;
+  const prompt = kickoffPrompt(agent, pinnedRe ? buildTwinPrompt(pinnedRe) : LIVE_LOOP_PROMPT);
   if (agent === "claude") {
     // Claude accepts prompt as positional arg
     agentArgs.push(prompt);
@@ -1076,12 +1213,13 @@ export function prepareAgentLaunch(
     narrativeId,
     mcpConfigPath: copilotMcpConfigPath,
     bindToken,
+    noDaemon: agent === "codex" && codexSupportsNoDaemon(agentCommand),
   });
   agentArgs.push(...affinity.args);
 
   // Add LIVE loop prompt
   if (agent === "claude" || agent === "codex") {
-    agentArgs.push(LIVE_LOOP_PROMPT);
+    agentArgs.push(kickoffPrompt(agent, LIVE_LOOP_PROMPT));
   } else if (agent === "gemini") {
     agentArgs.push("-i", LIVE_LOOP_PROMPT);
   }

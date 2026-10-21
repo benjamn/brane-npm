@@ -2,6 +2,8 @@ import { defineCommand } from "citty";
 import type Database from "better-sqlite3";
 import { openDatabase } from "../db/schema.js";
 import { cleanAppHost } from "../shared/app-origin.js";
+import { configValueRefusal } from "../daemon/verification-gate.js";
+import { DbCredentialStore } from "../db/credentials.js";
 
 // Well-known config keys and their defaults
 export const CONFIG_DEFAULTS: Record<string, string> = {
@@ -12,6 +14,11 @@ export const CONFIG_DEFAULTS: Record<string, string> = {
   // A fork changes this one line, and its daemons point at its own shell.
   app_domain: "brane.organelle.dev",
   "session-affinity.enabled": "true",
+  // Operator verification (docs/passkeys.md). `off` until a credential is
+  // enrolled, which phase 3 builds; the gate module validates these.
+  verification: "off",
+  "verification.window": "10",
+  "verification.fresh": "mint,mcp-dial,enroll,revoke-credential",
 };
 
 /** The shared app's host from a configured or given `app_domain` value,
@@ -24,6 +31,31 @@ export const CONFIG_DEFAULTS: Record<string, string> = {
  *  meld command to read it. */
 export function resolveAppHost(value: string | null | undefined): string {
   return cleanAppHost(value ?? "") || cleanAppHost(CONFIG_DEFAULTS.app_domain);
+}
+
+/** Why `brane config <key> <value>` is refused, or null. Only the
+ *  `verification*` keys are validated: a wrong value there would lock every
+ *  device out or loosen the gate. */
+export function configSetRefusal(key: string, value: string, db?: Database.Database): string | null {
+  if (!key.startsWith("verification")) return null;
+  const credentials = db ? new DbCredentialStore(db).count() : 0;
+  return configValueRefusal(key, value, { credentials });
+}
+
+/** What switching the gate on will trust, printed before it flips: every
+ *  credential that can verify, how it was admitted, and from which device,
+ *  so a key nobody remembers enrolling is seen before it counts
+ *  (claude-vxnhxcg9:25, :26). */
+export function describeCredentials(db: Database.Database): string[] {
+  const list = new DbCredentialStore(db).list();
+  const lines = [`${list.length} credential(s) will be able to verify a device:`];
+  for (const c of list) {
+    const via = c.enrolled_via ? `, from token ${c.enrolled_via}` : "";
+    lines.push(`  ${c.id}  ${c.label}  [${c.attested ? "attested" : "unattested"}, aaguid ${c.aaguid ?? "?"}]`);
+    lines.push(`      enrolled ${new Date(c.enrolled_at).toISOString()} by ${c.enrolled_by}${via}`);
+  }
+  lines.push("Revoke any you do not recognise before relying on the gate (POST /api/credentials/:id/revoke).");
+  return lines;
 }
 
 /** Reads a config key. Pass the caller's `db` whenever it has one: the daemon
@@ -138,6 +170,12 @@ export const configCommand = defineCommand({
       }
     } else {
       // Set
+      const refused = configSetRefusal(key, value, db);
+      if (refused) {
+        console.error(refused);
+        process.exit(1);
+      }
+      if (key === "verification" && value !== "off") for (const line of describeCredentials(db)) console.log(line);
       db.prepare("INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)").run(
         `config.${key}`,
         value,

@@ -20,7 +20,7 @@ system prompt but cannot put a finger on the sensor or type a password it
 does not know.
 
 An attested hardware key (a YubiKey 5 or later) proves itself without this
-check and remains the strongest option; see [Passkeys](passkeys.md).
+check and remains the strongest option; see [Operator Verification](passkeys.md).
 
 ## Backends
 
@@ -101,10 +101,15 @@ acts, asked from this machine's shell (a tokenless request over
 | `meld-remote` | `POST /api/tokens/remote` | `brane meld --remote` | add a device to brane on another machine |
 | `revoke-device` | `POST /api/tokens/:id/revoke`, when it signs out a device | `brane token revoke <device>` | sign out a device from brane |
 | `rotate` | `POST /api/token/rotate` | `brane token rotate` | sign out every other device from brane |
+| `enroll` | `POST /api/credentials`, when no hardware attestation verified | the enrollment page (`GET /verify`), from a signed-in device | add a passkey or security key to brane |
 
-A device token is never prompted: the app's Meld sheet, Revoke and "Sign
-out other devices" are the operator's delegate acting, and work from
-anywhere. **An agent's token is refused all three, unasked** (403,
+A device token is never prompted for these four: the app's Meld sheet,
+Revoke and "Sign out other devices" are the operator's delegate acting, and
+work from anywhere. The one prompt a device raises is `enroll` ("add a
+passkey or security key to brane"): a credential no hardware attestation
+vouched for waits here before it joins the list, because a software
+authenticator can claim "user verified" with nobody present
+([Operator Verification](passkeys.md), decision 14). **An agent's token is refused all three, unasked** (403,
 `presence: "agent"`; `gateStanding`): they are the operator's acts, and an
 agent that follows the rules should never put a dialog in front of the
 operator — one that read exactly like the prompt their own `brane meld`

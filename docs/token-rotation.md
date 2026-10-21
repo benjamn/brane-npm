@@ -405,7 +405,7 @@ revoked. Through the root matters: the requester is often an *ancestor* (this
 machine's `brane meld` added the phone), and revoking the phone from here
 must still take the laptop the phone added. The first version excluded the
 requester's whole subtree and so found nothing in exactly that case; the
-sandbox run caught it, and a test pins it. Once passkeys gate minting, a
+sandbox run caught it, and a test pins it. Once verification gates minting, a
 stolen token can't mint spares at all, and the default may flip to
 unchecked.
 
@@ -417,9 +417,9 @@ just signed out would be back in and everyone else would be out.
 `TokenRing.abandonRotationBy` drops it.
 
 **Who may revoke.** Any live token can revoke any other device, which is no
-more than "Sign out other devices" already lets it do. Whether a passkey
-should guard revoking, as it will guard adding a device, is open: see
-[Passkeys](passkeys.md), open question 1.
+more than "Sign out other devices" already lets it do. A verified operator
+will guard revoking, as it guards every act: see [Operator
+Verification](passkeys.md), the act list.
 
 **Known gaps, outside the token layer:**
 
@@ -429,7 +429,7 @@ should guard revoking, as it will guard adding a device, is open: see
 - There is no origin check, by design: every request must present a token,
   and the origin it came from is recorded on the token rather than judged.
   A passkey verifier will need its own exact origin list
-  ([Passkeys](passkeys.md)); the origins recorded per token are where one
+  ([Operator Verification](passkeys.md)); the origins recorded per token are where one
   would come from.
 - A token is not bound to the origin it was first used from. Pinning it
   (refusing a different `Origin` afterwards) was considered and left out:

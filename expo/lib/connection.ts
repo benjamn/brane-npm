@@ -21,7 +21,11 @@ export type ControlMessage =
   // Parked in a blocking listen (or a waiting narrate) — OPEN — or not.
   | { type: "awaiting"; narrative: string; awaiting: boolean }
   | { type: "meta"; narrative: string; title?: string; summary?: string; cost_amount?: number; cost_unit?: string }
-  | { type: "heartbeat"; timestamp_ms: number };
+  | { type: "heartbeat"; timestamp_ms: number }
+  // The verification gate (docs/passkeys.md): a message this device sent was
+  // dropped until it verifies; and a proof just landed for this device.
+  | { type: "verify"; verification: "required" | "fresh"; error: string }
+  | { type: "verified"; verified_until: number };
 
 interface ControlChannelOptions {
   conn: ConnectionParams;

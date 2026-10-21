@@ -10,6 +10,10 @@ import {
 } from "@/lib/api";
 import { buildFuzzyIndex, fuzzyFilterIndex, type FuzzyMatch } from "@/lib/fuzzy";
 import { downloadUrl, downloadNameFor } from "@/lib/download";
+import { ejectTrack, useJukeboxEntry } from "@/lib/jukebox";
+import NowPlayingDial, { UI_FONT } from "./NowPlayingDial";
+import { formatClock } from "@shared/audio-dial";
+import { sameTrack, trackTitle } from "@shared/now-playing";
 import { MarkdownContent } from "@/components/Markdown";
 import { CodeView } from "@/components/CodeView";
 import { HexView } from "@/components/HexView";
@@ -39,9 +43,56 @@ function isPdfPath(p: string): boolean {
   return /\.pdf$/i.test(p);
 }
 
+/** Keep in step with the audio entries of MIME_TYPES in src/daemon/server.ts. */
+function isAudioPath(p: string): boolean {
+  return /\.(mp3|m4a|aac|flac|ogg|oga|opus|wav|aiff?)$/i.test(p);
+}
+
 function dirname(p: string): string {
   const i = p.lastIndexOf("/");
   return i < 0 ? "" : p.slice(0, i);
+}
+
+/** Audio plays in place, in the browser's own `<audio>`. The daemon serves it
+ *  with `Range` support, which is what makes it seekable and what Safari needs
+ *  before it plays anything. The element lives in this pane, and the pane
+ *  stays mounted when its tab is hidden or another narrative is pushed on top
+ *  (see docs/view-urls.md), so the music carries on under the rest of the app
+ *  until this view opens another path. Media Session metadata puts the track
+ *  name where the OS shows what's playing and wires the earbuds' buttons. */
+/** An audio file's card: a dial that puts the file on the jukebox, the
+ *  title, and the clock while it is the track in this narrative's slot. The
+ *  dial is the control; the element lives in `@/lib/jukebox`, outside every
+ *  screen, which is what lets the track keep playing wherever you go. */
+function AudioCard({ conn, nid, path }: { conn: ConnectionParams; nid: string; path: string }) {
+  const track = useMemo(() => ({ nid, path, url: filesRawUrl(conn, nid, path) }), [conn, nid, path]);
+  const entry = useJukeboxEntry(nid);
+  const live = entry && sameTrack(entry.track, track) ? entry : null;
+  const held = entry && !live ? trackTitle(entry.track.path) : null;
+  const line = live
+    ? (live.status === "error" ? "Couldn't play this file." : `${formatClock(live.position)} / ${formatClock(live.duration)}`)
+    : held
+      ? `Tap ▶ to play; it takes ${held}'s place in this narrative's slot.`
+      : "Tap ▶ to play. It keeps playing wherever you go in the app.";
+  return (
+    <div style={{ display: "flex", flexDirection: "row", alignItems: "center", gap: 14, padding: 12 }}>
+      <NowPlayingDial nid={nid} track={track} size={56} />
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <Text style={styles.audioTitle} numberOfLines={2}>{trackTitle(path)}</Text>
+        <Text style={styles.audioLine}>{line}</Text>
+      </div>
+      {live && (
+        // Stop lives here, not on the list card: the card shows only the dial.
+        <button
+          onClick={() => ejectTrack(nid)}
+          title="Stop and take it off the jukebox"
+          style={{ background: "none", border: "none", color: "#8a9590", fontFamily: UI_FONT, fontSize: 14, padding: "6px 8px", cursor: "pointer" }}
+        >
+          ✕ Stop
+        </button>
+      )}
+    </div>
+  );
 }
 
 // Collapse `.`, empty (`//`), and `..` segments into a clean relative path.
@@ -248,7 +299,7 @@ const FilesView = forwardRef<FilesViewHandle, FilesViewProps>(function FilesView
   // The hex view is searched by the daemon, over every byte: text, or a run of
   // hex pairs as the bytes they spell.
   const canFind = !!data && data.type === "file" && !data.truncated && (!data.binary || !!data.hex)
-    && !isImagePath(data.path) && !isPdfPath(data.path) && findInFileSupported();
+    && !isImagePath(data.path) && !isPdfPath(data.path) && !isAudioPath(data.path) && findInFileSupported();
   // The view decides the mode; there is no switch. The query survives
   // navigation, so it re-runs in whatever mode the next view dictates —
   // "the same word in the next file" is one navigation.
@@ -955,6 +1006,13 @@ function FileView({
     return <Text style={styles.notice}>{data.notice}</Text>;
   }
 
+  if (isAudioPath(data.path)) {
+    // Before the size check: a song is past the inline limit by nature, and
+    // it streams rather than loads.
+    if (Platform.OS === "web") return <AudioCard conn={conn} nid={nid} path={data.path} />;
+    return <Text style={styles.notice}>Audio: {data.path}</Text>;
+  }
+
   if (data.truncated) {
     return (
       <View>
@@ -1102,6 +1160,8 @@ const styles = StyleSheet.create({
   error: { color: "#ff6b6b", fontSize: 14, padding: 12 },
   empty: { color: "#666", fontSize: 14, fontStyle: "italic", padding: 12 },
   notice: { color: "#888", fontSize: 14, padding: 12 },
+  audioTitle: { color: "#ddd", fontSize: 15, lineHeight: 20 },
+  audioLine: { color: "#8a9590", fontSize: 13, marginTop: 4, fontVariant: ["tabular-nums"] },
   link: { color: "#6cb6ff", fontSize: 14, padding: 12, textDecorationLine: "underline" },
   linkTarget: { color: "#888", fontFamily: monoFont },
   archiveBanner: { paddingHorizontal: 8, paddingBottom: 8, gap: 4 },

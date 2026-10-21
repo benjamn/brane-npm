@@ -8,7 +8,7 @@
 
 import { readdir, stat } from "node:fs/promises";
 import { extname, relative, resolve } from "node:path";
-import type { Readable } from "node:stream";
+import { Readable } from "node:stream";
 import { detectLanguage, highlight } from "../highlight.js";
 import { BINARY_SNIFF_BYTES, HEX_PAGE_BYTES, looksBinary } from "../shared/hex-dump.js";
 import { ReachError, fileSource, streamSource, type ByteSource } from "./bytes.js";
@@ -67,16 +67,34 @@ export type FilesJson =
       archive?: ArchiveInfo;
     };
 
+/** The bytes of a raw answer. `size` is the whole body's length when it is
+ *  known without decoding (null for a `.gz` body), which is what lets the
+ *  server send `Content-Length` and offer ranges. `range` is the window
+ *  actually served, inclusive, when the request asked for one. */
+export interface RawAnswer {
+  stream: Readable;
+  contentType: string;
+  size: number | null;
+  range?: ByteWindow;
+}
+
+export interface ByteWindow {
+  start: number;
+  end: number;
+}
+
 export type BrowseResult =
   | { status: number; json: FilesJson | { error: string } }
-  | { status: 200; raw: { stream: Readable; contentType: string } };
+  | { status: 200 | 206; raw: RawAnswer };
 
 export interface BrowseOptions {
   /** Stream the bytes (an `<img src>`, a download) instead of JSON. */
   raw?: boolean;
+  /** The request's `Range` header, honored for raw answers of known size. */
+  range?: string | null;
   /** Serve a hex page at this byte offset. */
   offset?: number | null;
-  /** Extension → MIME type, for raw responses and to spot images and PDFs. */
+  /** Extension → MIME type, for raw responses and to spot images, PDFs and audio. */
   mimeTypes: Record<string, string>;
 }
 
@@ -88,6 +106,50 @@ export function parseOffsetParam(v: string | null): number | null | undefined {
   if (!/^\d+$/.test(v)) return undefined;
   const n = Number(v);
   return Number.isSafeInteger(n) ? n : undefined;
+}
+
+/** One `Range` header against a body of `size` bytes: `bytes=a-b`, `bytes=a-`
+ *  or `bytes=-n`, resolved to an inclusive window. A header this doesn't
+ *  understand — several ranges, a unit other than bytes, a start past its end
+ *  — is `ignore`, and the whole body goes out as if nothing had been asked,
+ *  which the spec allows a server. A window that starts past the end is
+ *  `unsatisfiable` (416). Ranges are what let a browser seek in media, and
+ *  what Safari requires before it will play any: it probes with `bytes=0-1`. */
+export function parseRangeHeader(header: string | null | undefined, size: number): ByteWindow | "ignore" | "unsatisfiable" {
+  if (!header) return "ignore";
+  const m = /^\s*bytes\s*=\s*(\d*)\s*-\s*(\d*)\s*$/.exec(header);
+  if (!m) return "ignore";
+  const [, a, b] = m;
+  if (a === "" && b === "") return "ignore";
+  if (a === "") {
+    // A suffix: the last n bytes.
+    const n = Number(b);
+    if (!Number.isSafeInteger(n) || n === 0 || size === 0) return "unsatisfiable";
+    return { start: Math.max(0, size - n), end: size - 1 };
+  }
+  const start = Number(a);
+  const end = b === "" ? size - 1 : Math.min(Number(b), size - 1);
+  if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end)) return "ignore";
+  if (start >= size) return "unsatisfiable";
+  if (end < start) return "ignore";
+  return { start, end };
+}
+
+/** The first `count` bytes of `chunks`, and no more: a body claimed to be
+ *  `size` bytes is sent as exactly that many, so `Content-Length` and the
+ *  bytes agree even when an archive's claim is wrong. Stopping early returns
+ *  the iterator, which destroys whatever stream is behind it. */
+async function* take(chunks: AsyncIterable<Buffer>, count: number): AsyncIterable<Buffer> {
+  let left = count;
+  if (left <= 0) return;
+  for await (const chunk of chunks) {
+    if (chunk.length >= left) {
+      yield chunk.subarray(0, left);
+      return;
+    }
+    left -= chunk.length;
+    yield chunk;
+  }
 }
 
 /** The request's path confined to the fold, or why it can't be. */
@@ -329,14 +391,26 @@ export async function respondWithSource(
   const base = { type: "file" as const, path: normRel, size: source.size, mtime: source.mtimeMs };
 
   if (opts.raw) {
-    return { status: 200, raw: { stream: source.stream(), contentType: mime ?? "application/octet-stream" } };
+    const contentType = mime ?? "application/octet-stream";
+    const size = source.size;
+    // Unknown size (a `.gz` body): the whole thing, chunked, as before.
+    if (size === null) return { status: 200, raw: { stream: source.stream(), contentType, size } };
+    const window = parseRangeHeader(opts.range, size);
+    if (window === "unsatisfiable") return err(416, "Range not satisfiable");
+    if (window === "ignore") {
+      return { status: 200, raw: { stream: Readable.from(take(source.stream(), size)), contentType, size } };
+    }
+    // `chunks(start)` rather than `stream()`: it is the one way to begin
+    // mid-body, for a file and an archive member alike.
+    const stream = Readable.from(take(source.chunks(window.start), window.end - window.start + 1));
+    return { status: 206, raw: { stream, contentType, size, range: window } };
   }
 
   const offset = opts.offset ?? null;
   if (offset !== null) return hexPage(source, base, offset);
 
-  // Images, PDFs and fonts render from a raw URL; the JSON only says so.
-  const rendersFromRaw = mime?.startsWith("image/") || mime === "application/pdf" || mime === "font/woff" || mime === "font/woff2";
+  // Images, PDFs, fonts and audio render from a raw URL; the JSON only says so.
+  const rendersFromRaw = mime?.startsWith("image/") || mime?.startsWith("audio/") || mime === "application/pdf" || mime === "font/woff" || mime === "font/woff2";
   if (rendersFromRaw) {
     return {
       status: 200,

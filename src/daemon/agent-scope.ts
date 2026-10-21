@@ -67,10 +67,25 @@ export const AGENT_SCOPE_REFUSAL =
 
 type Matcher = { method: string; segments: string[] };
 
-const MATCHERS: Matcher[] = AGENT_ROUTES.map((route) => {
-  const [method, pattern] = route.split(" ");
-  return { method, segments: pattern.split("/").slice(1) };
-});
+function toMatchers(routes: readonly string[]): Matcher[] {
+  return routes.map((route) => {
+    const [method, pattern] = route.split(" ");
+    return { method, segments: pattern.split("/").slice(1) };
+  });
+}
+
+/** A predicate over `METHOD path-pattern` routes, as `AGENT_ROUTES` is
+ *  written: `:x` matches one non-empty segment, `*` the rest of the path.
+ *  Shared with the verification gate's free list. */
+export function routeMatcher(routes: readonly string[]): (method: string, path: string) => boolean {
+  const matchers = toMatchers(routes);
+  return (method, path) => {
+    const segments = path.split("/").slice(1);
+    return matchers.some((m) => matches(m, method, segments));
+  };
+}
+
+const MATCHERS: Matcher[] = toMatchers(AGENT_ROUTES);
 
 function matches(m: Matcher, method: string, segments: string[]): boolean {
   if (m.method !== method) return false;

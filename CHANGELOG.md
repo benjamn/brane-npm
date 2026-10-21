@@ -6,6 +6,37 @@ page, which is also what triggers its publish (see
 [docs/releasing.md](docs/releasing.md)). This file is the summary that
 travels in the npm tarball.
 
+## 0.3.7 - 2026-10-21
+
+- Operator verification, off until you turn it on. Enroll a passkey or
+  security key from the Devices view, then run `brane config verification
+  passkey`. From then on, a melded device must prove it is you (Face ID,
+  Touch ID, a PIN, or a YubiKey's touch) before it acts: sending,
+  spawning, typing into a terminal. Reads stay open. A refused act opens a
+  lock sheet, which hops to the daemon's own `/verify` page and then retries
+  what was refused. `brane config verification off`, from the Mac's shell,
+  is always the way back. The design is in `docs/passkeys.md`
+  ([#621](https://github.com/benjamn/brane/pull/621),
+  [#625](https://github.com/benjamn/brane/pull/625),
+  [#626](https://github.com/benjamn/brane/pull/626),
+  [#630](https://github.com/benjamn/brane/pull/630)).
+- Audio files open in the Files view and keep playing while you move around
+  the app. One track plays at a time. A dial on the narrative's list card
+  and in its header pauses it and scrubs
+  ([#623](https://github.com/benjamn/brane/pull/623),
+  [#628](https://github.com/benjamn/brane/pull/628)).
+- Codex agents start again under Codex CLI 0.163, which removed
+  `--full-auto`, and a revived one connects as its own narrative. Spawn and
+  revive now share one launch line, run outside codex's shared daemon
+  ([#627](https://github.com/benjamn/brane/pull/627)).
+- A terminal mouse message whose fields aren't plain integers is dropped,
+  not typed into the pane
+  ([#622](https://github.com/benjamn/brane/pull/622),
+  [#624](https://github.com/benjamn/brane/pull/624)).
+
+Published while the repository is private, so like 0.3.0–0.3.6 it
+carries no npm provenance attestation.
+
 ## 0.3.6 - 2026-10-15
 
 - The 🦠 menu has a 🐚 Utility item, beside 🧬 Twin, that opens the

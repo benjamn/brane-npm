@@ -39,6 +39,8 @@ import MeldConfirmModal, {
 } from "@/components/MeldConfirmModal";
 import { checkMeldHost, isFirstMeld, meldRefusalMessage } from "@shared/tailnet";
 import { installNoPan } from "@/lib/noPan";
+import { installVerification, noteVerified, refreshStatus, requireVerification } from "@/lib/verification";
+import LockSheet from "@/components/LockSheet";
 
 // Before the first tap: iOS must never move the page under the app, whether
 // to reveal a focused field or on a drag nothing else takes.
@@ -193,6 +195,10 @@ export default function RootLayout() {
     return () => setUnauthorizedListener(null);
   }, [markSignedOut]);
 
+  // The verification gate's lock sheet: requests and sockets refused for a
+  // proof open it (expo/lib/verification.ts).
+  useEffect(() => installVerification(), []);
+
   // Connect control WebSocket to active daemon
   const connectChannel = useCallback(
     (params: ConnectionParams) => {
@@ -234,9 +240,17 @@ export default function RootLayout() {
             for (const cb of toolUsesListeners) cb(msg.narrative, msg.rows, msg.rev);
           } else if (msg.type === "tool_uses_resync") {
             for (const cb of toolUsesListeners) cb(msg.narrative, null, msg.rev);
+          } else if (msg.type === "verify") {
+            // A signal this device sent was dropped until it verifies.
+            void requireVerification(params, msg.verification);
+          } else if (msg.type === "verified") {
+            noteVerified(params, msg.verified_until);
           }
         },
-        onConnect: () => setConnected(true),
+        onConnect: () => {
+          setConnected(true);
+          refreshStatus(params);
+        },
         onDisconnect: () => setConnected(false),
         onSignedOut: () => markSignedOut(params),
       });
@@ -692,6 +706,7 @@ export default function RootLayout() {
         }}
       />
       <StatusBar style="light" />
+      <LockSheet />
       <MeldConfirmModal
         pending={pendingMeld}
         onConfirm={confirmMeld}

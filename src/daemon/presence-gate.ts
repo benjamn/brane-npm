@@ -18,6 +18,13 @@
  *   device — an agent loop could otherwise sign out their phone;
  * - `rotate`: signing out every other device (`POST /api/token/rotate`).
  *
+ * And one asked of a **device**, the only act a device token is prompted
+ * for: `enroll`, a credential no hardware attestation vouched for
+ * (`src/daemon/verification-ceremony.ts`). A software authenticator says
+ * "user verified" with nobody present, so the Mac is asked instead
+ * (docs/passkeys.md, decision 14). The ceremony calls `check` itself;
+ * `gateStanding` below is for the four shell acts.
+ *
  * A device token is the operator's delegate, minted by an operator act, and
  * is never prompted: the app's Meld sheet, Revoke and "Sign out other
  * devices" work as they always have. An agent's token is refused all three,
@@ -49,7 +56,7 @@
 import type { PresenceResult } from "../presence.js";
 import type { TokenRecord } from "./token-ring.js";
 
-export type GatedAct = "meld" | "meld-remote" | "revoke-device" | "rotate";
+export type GatedAct = "meld" | "meld-remote" | "revoke-device" | "rotate" | "enroll";
 
 /** What the OS prompt says. macOS shows it as "osascript is trying to <it>",
  *  hence the lowercase verb phrase. */
@@ -58,6 +65,7 @@ export const PRESENCE_PROMPTS: Readonly<Record<GatedAct, string>> = {
   "meld-remote": "add a device to brane on another machine",
   "revoke-device": "sign out a device from brane",
   rotate: "sign out every other device from brane",
+  enroll: "add a passkey or security key to brane",
 };
 
 /** How a caller holding `record` stands before a gated act: a device goes

@@ -203,6 +203,43 @@ export function parseTerminalSize(value: unknown): { cols: number; rows: number 
   return ok(cols) && ok(rows) ? { cols, rows } : null;
 }
 
+/** Well beyond any real pane's columns or rows, or any button code; a
+ *  larger value is not a coordinate the viewer measured. */
+const SGR_MAX_COORD = 10000;
+
+/** The SGR mouse sequences a terminal viewer's `mouse` message stands for,
+ *  ready for `send-keys -l`. Every field is checked before it is
+ *  interpolated: `x`, `y` and `button` must be non-negative integers (a
+ *  string `x` would otherwise be concatenated into the sequence, and a
+ *  `\r…\r` inside it typed as a command line), and `action` must be one the
+ *  viewer sends. Anything else is no sequence at all, never a guess. */
+export function sgrMouseSequences(value: unknown): string[] {
+  if (!value || typeof value !== "object") return [];
+  const { x, y, button, action } = value as { x?: unknown; y?: unknown; button?: unknown; action?: unknown };
+  const ok = (n: unknown): n is number => Number.isInteger(n) && (n as number) >= 0 && (n as number) <= SGR_MAX_COORD;
+  if (!ok(x) || !ok(y)) return [];
+  if (button !== undefined && !ok(button)) return [];
+  const btn = button ?? 0;
+  const seq = (b: number, suffix: string) => `\x1b[<${b};${x + 1};${y + 1}${suffix}`; // SGR is 1-indexed
+  switch (action ?? "click") {
+    case "down":
+      return [seq(btn, "M")];
+    case "up":
+      return [seq(btn, "m")];
+    case "drag":
+      // SGR button-motion: button code + 32, terminated with 'M'.
+      return [seq(btn + 32, "M")];
+    case "scroll_up":
+      return [seq(64, "M")];
+    case "scroll_down":
+      return [seq(65, "M")];
+    case "click": // down then up
+      return [seq(btn, "M"), seq(btn, "m")];
+    default:
+      return [];
+  }
+}
+
 /** The `new-session` line `newTmuxSession` sends, as tmux will parse it. */
 export function newSessionLine(opts: {
   name: string;

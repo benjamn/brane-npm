@@ -36,6 +36,8 @@ import {
 import ToolUseGroup from "@/components/ToolUseGroup";
 import TerminalPane, { type TerminalPaneHandle } from "@/components/TerminalPane";
 import ContextMenu from "@/components/ContextMenu";
+import NowPlayingDial from "@/components/NowPlayingDial";
+import type { JukeboxTrack } from "@shared/now-playing";
 import { narrativeMenuItems, openNarrativeExport, revivesAsTwin } from "@/components/NarrativeMenu";
 import type { ExportScope } from "@shared/narrative-menu";
 import { isAwaiting, awaitingGlow, AWAITING_STATUS, NOT_AWAITING_STATUS } from "@shared/narrative-status";
@@ -700,6 +702,8 @@ type NarrativeHeaderProps = {
    *  arrangement the store exists to make possible. */
   selection: MessageSelection;
   openSwitcher: () => void;
+  /** A long-press on the header's dial: the track's file, in the Files tab. */
+  onOpenTrack: (track: JukeboxTrack) => void;
   /** Swiping the card down puts the narrative away: the list, as a jump. */
   onDismiss: () => void;
   onDownload: (scope: ExportScope) => void;
@@ -732,6 +736,7 @@ const NarrativeHeader = memo(function NarrativeHeader({
   archived,
   selection,
   openSwitcher,
+  onOpenTrack,
   onDismiss,
   onDownload,
   onTerminate,
@@ -824,6 +829,9 @@ const NarrativeHeader = memo(function NarrativeHeader({
           </div>
         ) : null}
       </Pressable>
+      {/* The jukebox's dial for this narrative's track, while it holds one:
+          the same control as on its list card, left of the 🦠. */}
+      <NowPlayingDial nid={nid} size={22} style={{ marginRight: 10 }} onOpen={onOpenTrack} />
       <div style={{ position: "relative" }}>
         <Pressable
           onPress={() => setMenuVisible((v) => !v)}
@@ -2076,6 +2084,7 @@ export default function ChatView() {
         archived={narrativeArchived}
         selection={selection}
         openSwitcher={openSwitcher}
+        onOpenTrack={(t) => updateFilesParams(t.path)}
         onDismiss={dismissToList}
         onDownload={downloadConversation}
         onTerminate={() => { revealTerminal(); terminalPaneRef.current?.terminate(); }}
@@ -2330,41 +2339,56 @@ export default function ChatView() {
                       }
                     }}
                   >
-                    <NarrativeIdentity
-                      id={item.id}
-                      foldPath={item.fold_path}
-                      titleStyle={isEnded ? { color: "#666" } : undefined}
-                      copyMarginLeft={5}
-                      dimmed={isEnded}
-                    />
-                    <NarrativeMetaLine
-                      role={item.role}
-                      cost={formatCost(item.cost_amount, item.cost_unit)}
-                      createdAt={item.created_at}
-                      lastActivity={item.last_activity}
-                      status={item.status}
-                      mcpConnected={item.mcp_connected}
-                      dimmed={isEnded}
-                      style={{ marginTop: 4 }}
-                    />
-                    {item.summary && (
-                      <div style={{ position: "relative" }}>
-                        <div className="no-scrollbar" style={{
-                          overflowX: "auto",
-                          overflowY: "hidden",
-                          scrollbarWidth: "none",
-                          WebkitOverflowScrolling: "touch",
-                          // Fade the overflow by masking the text, not by painting the
-                          // background over it, so a glow behind the row shows through.
-                          maskImage: `linear-gradient(to right, #000 calc(100% - 40px), transparent)`,
-                          WebkitMaskImage: `linear-gradient(to right, #000 calc(100% - 40px), transparent)`,
-                        }}>
-                          <Text style={[styles.switcherItemSummary, isEnded && { color: "#555" }]}>
-                            {item.summary}
-                          </Text>
+                    <View style={styles.switcherItemText}>
+                      <NarrativeIdentity
+                        id={item.id}
+                        foldPath={item.fold_path}
+                        titleStyle={isEnded ? { color: "#666" } : undefined}
+                        copyMarginLeft={5}
+                        dimmed={isEnded}
+                      />
+                      <NarrativeMetaLine
+                        role={item.role}
+                        cost={formatCost(item.cost_amount, item.cost_unit)}
+                        createdAt={item.created_at}
+                        lastActivity={item.last_activity}
+                        status={item.status}
+                        mcpConnected={item.mcp_connected}
+                        dimmed={isEnded}
+                        style={{ marginTop: 4 }}
+                      />
+                      {item.summary && (
+                        <div style={{ position: "relative" }}>
+                          <div className="no-scrollbar" style={{
+                            overflowX: "auto",
+                            overflowY: "hidden",
+                            scrollbarWidth: "none",
+                            WebkitOverflowScrolling: "touch",
+                            // Fade the overflow by masking the text, not by painting the
+                            // background over it, so a glow behind the row shows through.
+                            maskImage: `linear-gradient(to right, #000 calc(100% - 40px), transparent)`,
+                            WebkitMaskImage: `linear-gradient(to right, #000 calc(100% - 40px), transparent)`,
+                          }}>
+                            <Text style={[styles.switcherItemSummary, isEnded && { color: "#555" }]}>
+                              {item.summary}
+                            </Text>
+                          </div>
                         </div>
-                      </div>
-                    )}
+                      )}
+                    </View>
+                    {/* That narrative's dial while it holds a track, centered
+                        on the row's right: tap, drag and hold as anywhere. A
+                        tap on it never switches; the dial keeps its clicks. */}
+                    <NowPlayingDial
+                      nid={item.id}
+                      size={28}
+                      style={{ marginLeft: 12 }}
+                      onOpen={(t) => {
+                        setShowSwitcher(false);
+                        if (t.nid === nid) updateFilesParams(t.path);
+                        else router.push(fileHref(t.nid, t.path));
+                      }}
+                    />
                   </Pressable>
                 );
               }}
@@ -2852,6 +2876,8 @@ const styles = StyleSheet.create({
     margin: -4,
   },
   switcherItem: {
+    flexDirection: "row",
+    alignItems: "center",
     paddingVertical: 12,
     paddingHorizontal: 12,
     borderRadius: 8,
@@ -2866,6 +2892,10 @@ const styles = StyleSheet.create({
     outlineColor: "#4caf50",
     outlineOffset: 2,
   } as any,
+  switcherItemText: {
+    flex: 1,
+    minWidth: 0,
+  },
   switcherItemEnded: {
     opacity: 0.5,
   },

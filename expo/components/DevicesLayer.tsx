@@ -9,6 +9,9 @@
  * "Revoke?" and a second tap does it. The revoked device's sockets are closed
  * with 4401 by the daemon, so it shows "signed out" at once.
  *
+ * Below the devices, the operator's passkeys and security keys
+ * (`CredentialsSection`): what verifies any of them once the gate is on.
+ *
  * "Sign out other devices" lives at the foot of this list rather than beside
  * it in the switcher: it is the same job done wholesale, and the list above
  * it shows what it is about to take. Its confirm is the switcher's own layer,
@@ -20,6 +23,7 @@ import { ActivityIndicator, Modal, Pressable, ScrollView, StyleSheet, Text, View
 import { listDeviceTokens, revokeDeviceToken, type ConnectionParams, type DeviceToken } from "@/lib/api";
 import { relPart } from "@shared/narrative-format";
 import { originHost } from "@shared/app-origin";
+import CredentialsSection from "./CredentialsSection";
 
 function ago(ms: number): string {
   const p = relPart(ms);
@@ -216,6 +220,7 @@ export default function DevicesLayer({
                 )}
                 </View>
               ))}
+              <CredentialsSection conn={conn} visible={visible} />
             </ScrollView>
           )}
           {error && <Text style={styles.error}>{error}</Text>}

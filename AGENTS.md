@@ -159,6 +159,7 @@ Single SQLite database at `~/.brane/brane.db` (WAL mode). Key tables:
 | `usage_ledger` | Durable per-message / per-session cost rows — see [Cost Ledger](docs/cost-ledger.md) |
 | `absorb_messages` | (brane, provider, message id) → (narrative, seq): the per-message dedup that makes re-absorbing a session store idempotent — see [Absorb](docs/absorb.md) |
 | `absorb_files` | (brane, provider, session) → (size, mtime) at its last absorb, so an unchanged file is skipped on a stat |
+| `credentials` | The operator's enrolled passkeys and security keys, public keys only, revoked never deleted: any live one satisfies the verification gate — see [Operator Verification](docs/passkeys.md) |
 
 Event types: `narration` (agent), `human_signal` (operator), `agent_signal` (cross-agent).
 
@@ -171,7 +172,7 @@ Brane supports multiple agent types with session resumption. Each agent has an a
 | `claude` | `--resume <session_id>` | Discovers session from `~/.claude/projects/` |
 | `goose` | `-r` | Resumes by session name |
 | `gemini` | (none) | Uses `-i` for prompt injection |
-| `codex` | `resume <session_id>` | Subcommand-based resumption |
+| `codex` | `resume <session_id>` | Subcommand-based resumption; spawn and revive share `codexLaunchArgs()`, which passes `--no-daemon` so `brane mcp` inherits the pane's credentials, not those of Codex's shared daemon |
 | `amp` | (none) | Uses thread references `@T-<id>` in prompt |
 | `copilot` | `--session-id <session_id>` | Daemon-pinned UUID resumes the exact local session |
 | `cline` | (none) | Each revive starts a fresh session; brane captures its id for cost |
@@ -209,6 +210,12 @@ bite outside their own subsystem.
   `AGENT_ROUTES` (`src/daemon/agent-scope.ts`). If agents' CLI or bridge
   needs it, add it there; operator acts stay off the list. See [Agent
   tokens](docs/token-rotation.md#agent-tokens).
+- **A new daemon route is an act for the verification gate** until it is
+  named in `FREE_ROUTES` (`src/daemon/verification-gate.ts`), and
+  `src/test/verification-gate.test.ts` fails until it is on that list or
+  `ACT_ROUTES`. A read goes on the free list; an act that should be
+  configurable by name goes on `ACT_ROUTES`. See [Operator
+  Verification](docs/passkeys.md#what-is-an-act).
 - **No test opens the operator's database.** `openDatabase()` throws under
   `node --test`; code the suite drives takes a `db`, and tests build one with
   `createTestDb()`. A test that reads *source* (not `dist/`) must `skip` when
@@ -261,9 +268,15 @@ change one of those, read its doc first.
   and per-device revoke, `brane token rotate`, why the swap happens on first
   use of the new token, and why this machine holds no token (`.daemon_token`
   is retired).
-- [Passkeys](docs/passkeys.md) (not built yet; `src/presence.ts`,
-  `src/db/tokens.ts`): the design, the spike and real-device results, what
-  the browser and daemon sides must do, open questions, build order.
+- [Operator Verification](docs/passkeys.md) (phase 2 of 6 built, the gate,
+  and phase 3's daemon half: `src/daemon/verification-gate.ts`,
+  `src/daemon/verification-ceremony.ts`, `src/daemon/verify-page.ts`,
+  `src/webauthn/`, `src/db/credentials.ts`, `src/db/tokens.ts`): why a
+  melded device must prove the operator is holding it before it acts, the
+  daemon-side gate and its free list, the proof tiers (passkeys, security
+  keys, OIDC), the WebAuthn checks and Yubico's vendored roots, the
+  ceremony page, the spike's real-device results, decisions, and the
+  phased build order.
 - [Presence Check](docs/presence.md) (`src/presence.ts`,
   `src/daemon/presence-gate.ts`): confirming the operator is at
   the machine with the OS's own prompt (macOS, Windows Hello from Windows or

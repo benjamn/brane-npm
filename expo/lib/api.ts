@@ -17,6 +17,7 @@ import {
 } from "@shared/api-request";
 import { daemonFromHash, withoutConnectionHash, withoutConnectionParams } from "@shared/view-url";
 import { formatSeqModeParam, formatSeqParam, type SeqSelectionMode } from "@shared/export-selection";
+import { verificationRefusal, type StatusVerification, type VerificationKind } from "@shared/verification-hop";
 import { lastTerminalSize } from "./terminal";
 import { adoptDaemonByBraneId } from "./registry";
 
@@ -122,6 +123,9 @@ export interface DaemonStatus {
    *  where a daemon's own bundle hops out to (Isolate). Absent from a daemon
    *  that predates it. */
   app_domain?: string;
+  /** The verification gate's posture, and this device's own window
+   *  (docs/passkeys.md). Absent from a daemon that predates the gate. */
+  verification?: StatusVerification;
 }
 
 const STORAGE_KEY = "brane_conn";
@@ -229,7 +233,7 @@ function apiUrl(conn: ConnectionParams, path: string): string {
  *  it. The operator's own retry is worse than this one: a reload pays a fresh
  *  TCP and TLS handshake and restarts slow start, so a link that is merely bad
  *  produces failure that looks total. */
-function fetchWithTimeout(
+function fetchAttempts(
   url: string,
   init: RequestInit,
   timeoutMs: number = DEFAULT_TIMEOUT_MS,
@@ -266,6 +270,34 @@ function fetchWithTimeout(
   };
 
   return attempt(0);
+}
+
+/** `fetchAttempts`, and when the verification gate refuses (`403
+ *  { verification }`), the lock sheet: once the operator has verified, the
+ *  request goes again, once. That is safe for any method, a signal
+ *  included, because the gate refuses before the route runs: the refused
+ *  request did nothing (docs/passkeys.md, The refusal). If the sheet is
+ *  dismissed, the caller gets the 403 it would have had. */
+async function fetchWithTimeout(
+  url: string,
+  init: RequestInit,
+  timeoutMs: number = DEFAULT_TIMEOUT_MS,
+): Promise<Response> {
+  const res = await fetchAttempts(url, init, timeoutMs);
+  if (res.status !== 403 || !verificationListener) return res;
+  const kind = verificationRefusal(res.status, await res.clone().json().catch(() => null));
+  const conn = kind ? connFromUrl(url) : null;
+  if (!kind || !conn) return res;
+  const verified = await verificationListener(conn, kind);
+  return verified ? fetchAttempts(url, init, timeoutMs) : res;
+}
+
+/** Asked when the gate refuses a request: resolves true once this device has
+ *  verified, false if the operator dismissed the sheet. Set by the lock
+ *  sheet's store (`expo/lib/verification.ts`). */
+let verificationListener: ((conn: ConnectionParams, kind: VerificationKind) => Promise<boolean>) | null = null;
+export function setVerificationListener(cb: typeof verificationListener): void {
+  verificationListener = cb;
 }
 
 /** Told once per 401, with the connection that was refused. The root layout
@@ -1250,4 +1282,60 @@ export async function probeDaemon(
   });
   if (!res.ok) throw new Error(`Status ${res.status}`);
   return res.json() as Promise<DaemonStatus>;
+}
+
+/** An approval for the ceremony page: `verify` for this device's own token
+ *  (free), `enroll` for a new credential (an act, so the gate may ask for a
+ *  proof first, through the lock sheet). Bodiless: the token it is bound to
+ *  is the one this request carries. */
+export async function beginCeremony(
+  conn: ConnectionParams,
+  purpose: "verify" | "enroll",
+): Promise<{ approval: string; url: string; expires_at: number }> {
+  const path = purpose === "verify" ? "/api/verify/begin" : "/api/credentials/begin";
+  const res = await fetchWithTimeout(apiUrl(conn, path), { method: "POST", headers: NO_HEADERS });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error ?? `Verification ${res.status}`);
+  return data;
+}
+
+/** The app went to the background: this device's window ends now.
+ *  Bodiless, and `keepalive`, so it is sent even as the page is hidden. */
+export function endVerification(conn: ConnectionParams): void {
+  fetch(apiUrl(conn, "/api/verify/end"), { method: "POST", headers: NO_HEADERS, keepalive: true }).catch(() => {});
+}
+
+export interface EnrolledCredential {
+  id: string;
+  label: string;
+  rp_id: string;
+  aaguid: string | null;
+  attested: boolean;
+  attestation_root: string | null;
+  backup_eligible: boolean;
+  transports: string[];
+  enrolled_at: number;
+  enrolled_by: string;
+  enrolled_via: string | null;
+  last_used_at: number | null;
+}
+
+/** The enrolled passkeys and keys. Null on a 404, a daemon from before them. */
+export async function listCredentials(conn: ConnectionParams): Promise<EnrolledCredential[] | null> {
+  const res = await fetchWithTimeout(apiUrl(conn, "/api/credentials"), { headers: NO_HEADERS });
+  if (res.status === 404) return null;
+  if (!res.ok) throw new Error(`Credentials ${res.status}`);
+  return ((await res.json()) as { credentials: EnrolledCredential[] }).credentials;
+}
+
+/** Revoke a credential: it can no longer verify. An act, so the gate may ask
+ *  for a fresh proof first. Bodiless. A 404 means already revoked. */
+export async function revokeCredential(conn: ConnectionParams, id: string): Promise<void> {
+  const res = await fetchWithTimeout(apiUrl(conn, `/api/credentials/${encodeURIComponent(id)}/revoke`), {
+    method: "POST",
+    headers: NO_HEADERS,
+  });
+  if (res.ok || res.status === 404) return;
+  const data = await res.json().catch(() => ({}));
+  throw new Error(data.error ?? `Revoke ${res.status}`);
 }

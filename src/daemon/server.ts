@@ -56,11 +56,19 @@ import { getBraneId, getPayloadsDir, getTokenFilePath, fromPortablePath, toPorta
 import { TokenRing, type AuthResult, type TokenRecord } from "./token-ring.js";
 import { signalEventFields, signalStanding } from "./signal-source.js";
 import { AGENT_LOOPBACK_REFUSAL, AGENT_REVIVE_REFUSAL, agentRefusal, agentReviveRefusal } from "./agent-scope.js";
+import {
+  FREE_CONTROL_MESSAGES,
+  FREE_TERMINAL_MESSAGES,
+  VerificationGate,
+  verificationStatus,
+  verifyFrame,
+  type VerificationRefusal,
+} from "./verification-gate.js";
 import { archiveRefusal } from "./archive-gate.js";
 import { DbTokenStore, bootstrapTokens, legacyTokenWarning, parseTokenHashes, liveAgentTokenId, mintAgentToken, recordLauncher, settleAgentLaunch, verifyAgentToken } from "../db/tokens.js";
 import { closeSocketsOf, forgetSelfRoute, listTokensRoute, socketOwners, retireTokens } from "./token-routes.js";
 import { getConfig, resolveAppHost } from "../commands/config.js";
-import { doSpawn, buildGooseExtensionArg, reestablishMcpConfigArgs, braneTmuxEnv, ensureHookConfig, resolveAgentCommand, LIVE_LOOP_PROMPT } from "../commands/spawn.js";
+import { doSpawn, buildGooseExtensionArg, reestablishMcpConfigArgs, braneTmuxEnv, ensureHookConfig, resolveAgentCommand, LIVE_LOOP_PROMPT, codexReviveArgs, codexSupportsNoDaemon, kickoffPrompt } from "../commands/spawn.js";
 import { ensureSessionAffinityConfig } from "../session-affinity.js";
 import { revivedContent, restartedContent } from "../shared/narrative-format.js";
 import { parseRecolorSalt } from "../shared/speaker-color.js";
@@ -83,7 +91,7 @@ import { addressesToBind, nextProbeDelay, TAILSCALE_PROBE_MAX_MS } from "./tails
 import { archivedBraneIds, braneArchiveRefusal, setBraneArchived, visibleUnscopedClause } from "../db/branes.js";
 import { CertManager, type CertStatus } from "./cert-manager.js";
 import { KeepAwake } from "./keep-awake.js";
-import { resolveTmux, ensureTmux, newTmuxSession, parseTerminalSize } from "../tmux.js";
+import { resolveTmux, ensureTmux, newTmuxSession, parseTerminalSize, sgrMouseSequences } from "../tmux.js";
 import { INHERITED_AGENT_ENV, unsetAgentEnvPrefix } from "../agent-env.js";
 import { highlight } from "../highlight.js";
 import { browseFold, openFoldSource, parseOffsetParam } from "../files/browse.js";
@@ -97,6 +105,15 @@ import { confirmPresence } from "../presence.js";
 import { PresenceGate, type PendingPresence } from "./presence-gate.js";
 import { cancelPresenceRoute, gatedMintRoute, gatedRemoteMintRoute, gatedRevokeRoute, gatedRotateRoute, type Caller, type RouteAnswer } from "./gated-routes.js";
 import { accountDirTrust, connectionLabel, getSocketPath, isUnixConnection, listenOnLocalSocket } from "./local-socket.js";
+import { DbCredentialStore, webauthnUserHandle } from "../db/credentials.js";
+import { Ceremonies, type RelyingParty } from "./verification-ceremony.js";
+import { verifyPageHeaders, VERIFY_PAGE_HTML } from "./verify-page.js";
+import { askEnrollPresence, revokeCredentialRoute } from "./credential-routes.js";
+import { trustStore } from "../webauthn/verify.js";
+import { YUBICO_FIDO_INTERMEDIATES, YUBICO_FIDO_ROOTS } from "../webauthn/yubico-roots.js";
+import { describeUserAgent } from "../user-agent.js";
+import { SWITCH_TICK_MS, settleSwitch } from "./verification-switch.js";
+import { certificateHost } from "./verification-ceremony.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const STATIC_DIR = join(__dirname, "..", "..", "expo", "dist");
@@ -336,6 +353,9 @@ export function reviveNarrative(
         const geminiPrompt = opts.prompt ?? LIVE_LOOP_PROMPT;
         cmdArgs.push("-i", geminiPrompt);
       }
+    } else if (effectiveAgent === "codex") {
+      // A spawn's root flags, then the passthrough, then `resume <id>`.
+      cmdArgs = codexReviveArgs({ noDaemon: codexSupportsNoDaemon(agentCommand), launchArgs, resumeArgs });
     } else {
       // Re-establish flag-based MCP config (copilot/cline) that resume args omit
       const mcpArgs = reestablishMcpConfigArgs(effectiveAgent, absoluteFoldPath, nid, bindToken);
@@ -381,7 +401,7 @@ export function reviveNarrative(
 
   // Inject prompt after short delay (skip for gemini — prompt is in command args via -i)
   if (!opts.no_prompt && effectiveAgent !== "gemini") {
-    const revivePrompt = opts.prompt ?? LIVE_LOOP_PROMPT;
+    const revivePrompt = opts.prompt ?? kickoffPrompt(effectiveAgent, LIVE_LOOP_PROMPT);
     setTimeout(() => {
       try {
         execFileSync(resolveTmux(), ["send-keys", "-t", nid, revivePrompt, "Enter"], { stdio: "ignore" });
@@ -542,6 +562,18 @@ const MIME_TYPES: Record<string, string> = {
   ".woff": "font/woff",
   ".woff2": "font/woff2",
   ".pdf": "application/pdf",
+  // Audio the Files view plays in place. Keep in step with `isAudioPath` in
+  // expo/components/FilesView.tsx.
+  ".mp3": "audio/mpeg",
+  ".m4a": "audio/mp4",
+  ".aac": "audio/aac",
+  ".flac": "audio/flac",
+  ".ogg": "audio/ogg",
+  ".oga": "audio/ogg",
+  ".opus": "audio/ogg",
+  ".wav": "audio/wav",
+  ".aif": "audio/aiff",
+  ".aiff": "audio/aiff",
 };
 
 const MAX_PAYLOAD_BASE64 = 50 * 1024 * 1024; // ~50MB base64 ≈ 37.5MB decoded
@@ -857,6 +889,9 @@ export async function startServer(config: DaemonConfig): Promise<void> {
   // rotation swaps on first use of the new token — see token-ring.ts for why.
   const tokenStore = new DbTokenStore(db);
   const tokenRing = new TokenRing(tokenStore, () => randomUUID());
+  // Operator verification (docs/passkeys.md): a device token must hold a
+  // fresh proof before it acts. Dormant while `verification` is `off`.
+  const verificationGate = new VerificationGate(db, tokenStore);
   // Every socket a revocation must close, tagged with the token row it
   // authenticated under, so a retirement or a per-device revoke closes exactly
   // the sockets the revoked tokens opened: every control/terminal socket, and
@@ -1144,6 +1179,37 @@ export async function startServer(config: DaemonConfig): Promise<void> {
     if (answer.retryAfterMs !== undefined) res.setHeader("Retry-After", String(Math.ceil(answer.retryAfterMs / 1000)));
     sendJson(res, answer.status, answer.body);
   };
+  // The ceremonies behind the verification gate (docs/passkeys.md): an
+  // approval for the caller's own token, redeemed on the daemon's own page
+  // (`GET /verify`) for a WebAuthn proof or a new credential. The RP ID is
+  // the daemon's TLS hostname, so without a certificate there is no
+  // ceremony at all.
+  const credentialStore = new DbCredentialStore(db);
+  const relyingParty = (): RelyingParty | null => {
+    // The hostname the served certificate names: what the browser sees, so
+    // what the RP ID must be. Read from the cert itself rather than from
+    // Tailscale, which may be blind at this moment while the cert is fine.
+    const host = currentTlsOpts ? certificateHost(currentTlsOpts.cert) : null;
+    if (!tls || !host) return null;
+    const origin = actualPort === 443 ? `https://${host}` : `https://${host}:${actualPort}`;
+    return { rpId: host, origin, origins: [origin] };
+  };
+  const ceremonies = new Ceremonies({
+    credentials: credentialStore,
+    verifyToken: (id, opts) => tokenStore.verify(id, opts),
+    isLiveDevice: (id) => tokenStore.get(id)?.kind === "device",
+    windowMs: () => verificationGate.config().windowMs,
+    rp: relyingParty,
+    trust: trustStore(YUBICO_FIDO_ROOTS, YUBICO_FIDO_INTERMEDIATES),
+    userHandle: () => webauthnUserHandle(db),
+    confirmPresence: (by, signal) => askEnrollPresence(presenceGate, by, signal),
+    describeToken: (id) => {
+      const t = tokenStore.get(id);
+      return t ? (describeUserAgent(t.user_agent) ?? t.label) : null;
+    },
+    onVerified: (tokenId, verifiedUntil) => broadcastVerified(controlClients, tokenId, verifiedUntil),
+    log: (line) => console.log(line),
+  });
   _serverDb = db;
   _serverControlClients = controlClients;
   const mcpWss = new WebSocketServer({ noServer: true });
@@ -1291,9 +1357,56 @@ export async function startServer(config: DaemonConfig): Promise<void> {
     const url = new URL(req.url ?? "/", `${tls ? "https" : "http"}://localhost:${port}`);
     const path = url.pathname;
 
+    // Page: GET /verify — the ceremony page (docs/passkeys.md, The hop):
+    // self-contained, on the daemon's own origin, holding no token. Its only
+    // capability is the approval in its fragment, which no server sees.
+    if (path === "/verify" && req.method === "GET") {
+      res.writeHead(200, verifyPageHeaders());
+      res.end(VERIFY_PAGE_HTML);
+      return;
+    }
+
     // Static files don't require auth (token is in hash fragment, read by client JS)
     if (!path.startsWith("/api/")) {
       serveStatic(res, path);
+      return;
+    }
+
+    // The ceremony page's own routes. Answered before the token check: the
+    // page holds no token, only an approval a signed-in device asked for,
+    // bound to that device's token (src/daemon/verification-ceremony.ts).
+    // Route: POST /api/verify/challenge — options and a fresh challenge for a verify approval.
+    // Route: POST /api/verify/webauthn — an assertion: verifies the approval's token.
+    // Route: POST /api/credentials/challenge — options and a fresh challenge for an enroll approval.
+    // Route: POST /api/credentials — a new credential, behind the presence check unless attested.
+    if (
+      req.method === "POST" &&
+      (path === "/api/verify/challenge" || path === "/api/verify/webauthn" || path === "/api/credentials/challenge" || path === "/api/credentials")
+    ) {
+      const signal = whileConnected(res);
+      parseBody(req)
+        .then(async (raw) => {
+          let body: unknown;
+          try {
+            body = JSON.parse(raw || "{}");
+          } catch {
+            sendJson(res, 400, { error: "The body is not JSON" });
+            return;
+          }
+          const approval = (body as { approval?: unknown } | null)?.approval;
+          const answer =
+            path === "/api/verify/challenge"
+              ? ceremonies.challenge(approval, "verify")
+              : path === "/api/credentials/challenge"
+                ? ceremonies.challenge(approval, "enroll")
+                : path === "/api/verify/webauthn"
+                  ? ceremonies.finishVerify(body)
+                  : await ceremonies.finishEnroll(body, signal);
+          sendAnswer(res, answer);
+        })
+        .catch((err) => {
+          if (!res.headersSent) sendJson(res, 400, { error: String(err) });
+        });
       return;
     }
 
@@ -1389,6 +1502,13 @@ export async function startServer(config: DaemonConfig): Promise<void> {
       sendJson(res, 403, { error: agentRefused });
       return;
     }
+    // The verification gate: free routes pass; an act needs a verified
+    // device token. Never 401, which the app reads as "signed out".
+    const verifyRefused = verificationGate.refuseRoute(auth.record, req.method ?? "GET", path);
+    if (verifyRefused) {
+      sendJson(res, verifyRefused.status, verifyRefused.body);
+      return;
+    }
 
     // Route: GET /api/status
     if (path === "/api/status" && req.method === "GET") {
@@ -1404,6 +1524,12 @@ export async function startServer(config: DaemonConfig): Promise<void> {
         // Addresses beyond loopback the daemon is actually listening on —
         // empty means "reachable from this machine only".
         listening_on: [...boundAddresses].filter((a) => a !== "127.0.0.1" && a !== "::1"),
+        // The posture, and for a device its own window, so the app knows
+        // whether a hop has landed when it comes back to the foreground.
+        verification: {
+          ...verificationStatus(verificationGate.config()),
+          ...(auth.record.kind === "device" ? { verified_until: tokenStore.verification(auth.record.id, Date.now()).verifiedUntil } : {}),
+        },
         // Listening on the address over HTTPS, but the HTTP fallback (the
         // local/LAN path) is not up there yet.
         fallback_missing: [...needFallback],
@@ -1866,6 +1992,7 @@ export async function startServer(config: DaemonConfig): Promise<void> {
       }
       browseFold(foldRoot, relParam, {
         raw: url.searchParams.get("raw") !== null,
+        range: req.headers.range,
         offset,
         mimeTypes: MIME_TYPES,
       }).then((result) => {
@@ -1876,9 +2003,17 @@ export async function startServer(config: DaemonConfig): Promise<void> {
         // Raw bytes: an <img>/<iframe> src, or a download. Streamed, so a
         // large file costs no memory, and a member of an archive is decoded
         // only as it is sent.
-        const { stream, contentType } = result.raw;
+        const { stream, contentType, size, range } = result.raw;
+        res.statusCode = result.status;
         res.setHeader("Content-Type", contentType);
         res.setHeader("Cache-Control", "no-cache");
+        if (size !== null) {
+          // A known size is what lets a browser seek in media, and what
+          // Safari requires before it will play any (see parseRangeHeader).
+          res.setHeader("Accept-Ranges", "bytes");
+          res.setHeader("Content-Length", String(range ? range.end - range.start + 1 : size));
+          if (range) res.setHeader("Content-Range", `bytes ${range.start}-${range.end}/${size}`);
+        }
         pipeline(stream, res, (err) => {
           if (err && err.code !== "ERR_STREAM_PREMATURE_CLOSE") {
             console.warn(`[files] raw stream failed for ${relParam}:`, err);
@@ -2475,6 +2610,47 @@ export async function startServer(config: DaemonConfig): Promise<void> {
     }
 
 
+    // Route: POST /api/verify/begin — an approval for this device's own
+    // token, for the ceremony page. Free, bodiless: the token it is bound to
+    // is the one this request authenticated with, never one a body names.
+    if (path === "/api/verify/begin" && req.method === "POST") {
+      sendAnswer(res, ceremonies.begin(auth.record.id, "verify"));
+      return;
+    }
+
+    // Route: POST /api/credentials/begin — an approval to enroll a credential.
+    // The enroll act: fresh class, so with the gate on an existing credential
+    // approves every new one. Bodiless.
+    if (path === "/api/credentials/begin" && req.method === "POST") {
+      sendAnswer(res, ceremonies.begin(auth.record.id, "enroll"));
+      return;
+    }
+
+    // Route: GET /api/credentials — the enrolled credentials, no key material.
+    if (path === "/api/credentials" && req.method === "GET") {
+      sendJson(res, 200, { credentials: credentialStore.list() });
+      return;
+    }
+
+    // Route: POST /api/credentials/:id/revoke — the credential can no longer
+    // verify. An act (revoke-credential, fresh class); revoked, never deleted.
+    const credRevoke = path.match(/^\/api\/credentials\/([^/]+)\/revoke$/);
+    if (credRevoke && req.method === "POST") {
+      const answer = revokeCredentialRoute(credentialStore, auth.record, decodeURIComponent(credRevoke[1]));
+      if (answer.status === 200) console.log(`[verification] credential ${credRevoke[1]} revoked by ${auth.record.kind} "${auth.record.label}"`);
+      sendAnswer(res, answer);
+      return;
+    }
+
+    // Route: POST /api/verify/end — the app went to the background, or the
+    // operator locked it: this device's window ends now. Free, bodiless, and
+    // a no-op for anything but a device token.
+    if (path === "/api/verify/end" && req.method === "POST") {
+      const ended = auth.record.kind === "device" ? tokenStore.endVerification(auth.record.id) : false;
+      sendJson(res, 200, { ended });
+      return;
+    }
+
     // Route: POST /api/presence/cancel?id= — close the presence prompt that
     // is up. Only a device may (src/daemon/gated-routes.ts); there is no
     // approve. Bodiless, like every app request that can be.
@@ -2863,6 +3039,14 @@ export async function startServer(config: DaemonConfig): Promise<void> {
       socket.destroy();
       return;
     }
+    // The control and terminal upgrades are free (each message is judged on
+    // its own below); `/ws/mcp` places its own check, since a reconnect that
+    // presents its secret is an agent, not a mint.
+    if (path !== "/ws/mcp" && verificationGate.refuseRoute(auth.record, "GET", path)) {
+      socket.write("HTTP/1.1 403 Forbidden\r\n\r\n");
+      socket.destroy();
+      return;
+    }
     if (auth.retired) finishRotation({ retired: auth.retired });
     // No Origin check: the token above is the credential, and the origin it
     // was presented from is now on its row for the Devices list to show
@@ -2873,7 +3057,7 @@ export async function startServer(config: DaemonConfig): Promise<void> {
     if (path === "/ws/control") {
       controlWss.handleUpgrade(req, socket, head, (ws) => {
         trackViewerSocket(ws, socketOwners("control", auth.record));
-        handleControlSocket(ws, auth.record, db, controlClients, mcpClients, notifyListenWaiters, recordEventMentions, awaiting, presenceGate.current());
+        handleControlSocket(ws, auth.record, db, controlClients, mcpClients, notifyListenWaiters, recordEventMentions, awaiting, presenceGate.current(), verificationGate);
       });
       return;
     }
@@ -2920,6 +3104,18 @@ export async function startServer(config: DaemonConfig): Promise<void> {
           });
           return;
         }
+        // A device dialing with no valid secret is about to be minted an
+        // agent token, which is never gated: a mint, in the fresh class
+        // (docs/passkeys.md). A reconnect presenting its secret is an agent.
+        if (!(bindSecret && verifyAgentToken(db, nid, bindSecret))) {
+          const refused = verificationGate.refuseRoute(auth.record, "GET", "/ws/mcp");
+          if (refused) {
+            console.error(`[mcp-ws] device "${auth.record.label}" dialed unverified; refused (${refused.body.verification})`);
+            socket.write("HTTP/1.1 403 Forbidden\r\n\r\n");
+            socket.destroy();
+            return;
+          }
+        }
         const bind = resolveMcpBind(db, braneId, nid, bindSecret, auth.record.id);
         if (bind.rejected) {
           const { claimedNid, reason } = bind.rejected;
@@ -2959,7 +3155,7 @@ export async function startServer(config: DaemonConfig): Promise<void> {
       const nid = termMatch[1];
       terminalWss.handleUpgrade(req, socket, head, (ws) => {
         trackViewerSocket(ws, socketOwners("terminal", auth.record));
-        handleTerminalSocket(ws, nid);
+        handleTerminalSocket(ws, nid, () => verificationGate.refuseAct(auth.record, "terminal"));
       });
       return;
     }
@@ -3010,6 +3206,20 @@ export async function startServer(config: DaemonConfig): Promise<void> {
 
   // Start polling for event hints to push to control clients and MCP bridges
   const controlPoller = startControlPoller(db, controlClients);
+  // The switch from `off`: the daemon hears it only by reading config, so
+  // it checks on a tick of its own and once now (src/daemon/verification-switch.ts).
+  const settleVerificationSwitch = () => {
+    try {
+      const outcome = settleSwitch(db, verificationGate.config().mode, tokenStore);
+      if (!outcome) return;
+      const closed = outcome.revoked.length > 0 ? closeSocketsOf(viewerSockets, outcome.revoked, "verification switched on") : 0;
+      console.log(`[verification] mode ${outcome.from} → ${outcome.to}; revoked ${outcome.revoked.length} device-dialed agent token(s), closed ${closed} socket(s)`);
+    } catch (err) {
+      console.error("[verification] could not settle the mode switch:", err);
+    }
+  };
+  settleVerificationSwitch();
+  const verificationSwitchTicker = setInterval(settleVerificationSwitch, SWITCH_TICK_MS);
   const mcpPoller = startMcpPoller(db, mcpClients, settleOwnCall);
   const costSampler = startCostSampler(db, controlClients, mcpClients);
   const crushToolSampler = startCrushToolSampler(
@@ -3246,6 +3456,7 @@ export async function startServer(config: DaemonConfig): Promise<void> {
     certMgr.stop();
     if (tailscaleProbeTimer) clearTimeout(tailscaleProbeTimer);
     clearInterval(controlPoller);
+    clearInterval(verificationSwitchTicker);
     clearInterval(mcpPoller);
     clearInterval(costSampler);
     crushToolSampler.stop();
@@ -3347,8 +3558,9 @@ export async function startServer(config: DaemonConfig): Promise<void> {
 // new events appear. Actual event data is fetched via HTTP.
 function handleControlSocket(
   ws: WebSocket,
-  /** The token this socket authenticated with: who its signals are from. */
-  sender: Pick<TokenRecord, "kind">,
+  /** The token this socket authenticated with: who its signals are from,
+   *  and whose verification each act is checked against. */
+  sender: Pick<TokenRecord, "id" | "kind">,
   db: Database.Database,
   controlClients: Set<ControlClient>,
   mcpClients: Set<McpBridgeClient>,
@@ -3358,9 +3570,13 @@ function handleControlSocket(
   /** The presence prompt up right now, so a device that connects mid-prompt
    *  hears of it too. */
   presence?: PendingPresence | null,
+  /** The verification gate, when the daemon has one: an act from an
+   *  unverified device is dropped and answered with a `verify` frame. */
+  verification?: Pick<VerificationGate, "refuseAct">,
 ): void {
   const client: ControlClient = {
     ws,
+    tokenId: sender.id,
     subscriptions: new Map(),
     activity: false,
   };
@@ -3384,6 +3600,16 @@ function handleControlSocket(
   ws.on("message", (data) => {
     try {
       const msg = JSON.parse(data.toString());
+      // Per message, not per connection: a socket opened inside the window
+      // must not keep acting after it. Subscriptions are free; `signal` and
+      // any type not named free is an act.
+      if (verification && !FREE_CONTROL_MESSAGES.has(msg.type)) {
+        const refused = verification.refuseAct(sender, msg.type === "signal" ? "signal" : null);
+        if (refused) {
+          ws.send(JSON.stringify(verifyFrame(refused)));
+          return;
+        }
+      }
 
       switch (msg.type) {
         // Subscribe to event hints for a narrative
@@ -3467,6 +3693,9 @@ function handleControlSocket(
 
 interface ControlClient {
   ws: WebSocket;
+  /** The token the socket authenticated with: a `verified` frame goes to
+   *  that token's sockets only. */
+  tokenId: string;
   // narrative_id → after (cursor)
   subscriptions: Map<string, number>;
   // Opted into the brane-wide activity stream: receives one lightweight
@@ -3508,6 +3737,16 @@ function broadcastAwaiting(controlClients: Set<ControlClient>, narrativeId: stri
 
 // Push the presence prompt that is up (or null once it closes), so every
 // signed-in device sees what is waiting at the machine and can cancel it.
+/** A proof just landed for `tokenId`: tell that token's own control
+ *  sockets, so the app's lock sheet closes and retries the moment the hop
+ *  succeeds, wherever the ceremony ran. Nobody else hears of it. */
+function broadcastVerified(controlClients: Set<ControlClient>, tokenId: string, verifiedUntil: number): void {
+  const msg = JSON.stringify({ type: "verified", verified_until: verifiedUntil });
+  for (const client of controlClients) {
+    if (client.tokenId === tokenId && client.ws.readyState === WebSocket.OPEN) client.ws.send(msg);
+  }
+}
+
 function broadcastPresence(controlClients: Set<ControlClient>, pending: PendingPresence | null): void {
   const msg = JSON.stringify({ type: "presence", pending });
   for (const client of controlClients) {
@@ -7068,7 +7307,10 @@ function ensureTerminalCapture(nid: string): TerminalCapture {
   return cap;
 }
 
-function handleTerminalSocket(ws: WebSocket, nid: string): void {
+/** `refuseAct` is the verification gate for this socket's token: asked
+ *  before every message that is not free (keys, paste, mouse, clearing
+ *  history), since a pane opened inside the window must not type after it. */
+function handleTerminalSocket(ws: WebSocket, nid: string, refuseAct?: () => VerificationRefusal | null): void {
   const client: TerminalClient = {
     ws,
     nid,
@@ -7083,6 +7325,13 @@ function handleTerminalSocket(ws: WebSocket, nid: string): void {
   ws.on("message", (data) => {
     try {
       const msg = JSON.parse(data.toString());
+      if (refuseAct && !FREE_TERMINAL_MESSAGES.has(msg.type)) {
+        const refused = refuseAct();
+        if (refused) {
+          ws.send(JSON.stringify(verifyFrame(refused)));
+          return;
+        }
+      }
       switch (msg.type) {
         case "start": {
           client.active = true;
@@ -7281,38 +7530,11 @@ const TMUX_SPECIAL_KEYS = new Set([
   "Space",
 ]);
 
-function sendMouseToTmux(nid: string, msg: { x?: number; y?: number; button?: number; action?: string }): void {
-  const x = (msg.x ?? 0) + 1; // SGR is 1-indexed
-  const y = (msg.y ?? 0) + 1;
-  const button = msg.button ?? 0;
-  const action = msg.action ?? "click";
-
-  const sendEvent = (btn: number, suffix: string) => {
-    const seq = `\x1b[<${btn};${x};${y}${suffix}`;
+function sendMouseToTmux(nid: string, msg: unknown): void {
+  // Every field is validated in `sgrMouseSequences` before it reaches the
+  // sequence; a message it does not recognise sends nothing.
+  for (const seq of sgrMouseSequences(msg)) {
     execFile(resolveTmux(), ["send-keys", "-t", nid, "-l", seq], { timeout: 2000 }, () => {});
-  };
-
-  switch (action) {
-    case "down":
-      sendEvent(button, "M");
-      break;
-    case "up":
-      sendEvent(button, "m");
-      break;
-    case "drag":
-      // SGR button-motion: button code + 32, terminated with 'M'.
-      sendEvent(button + 32, "M");
-      break;
-    case "scroll_up":
-      sendEvent(64, "M");
-      break;
-    case "scroll_down":
-      sendEvent(65, "M");
-      break;
-    default: // "click" — down then up
-      sendEvent(button, "M");
-      sendEvent(button, "m");
-      break;
   }
 }
 

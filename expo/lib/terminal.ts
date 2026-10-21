@@ -57,6 +57,14 @@ interface TerminalChannelOptions {
   onDisconnect?: () => void;
 }
 
+/** Told when the daemon dropped a keystroke because this device must verify
+ *  first (`{ type: "verify" }`, docs/passkeys.md): the lock sheet's store
+ *  sets it. The keystroke itself is gone; the operator types it again. */
+let verifyHandler: ((conn: ConnectionParams, kind: "required" | "fresh") => void) | null = null;
+export function setTerminalVerifyHandler(fn: typeof verifyHandler): void {
+  verifyHandler = fn;
+}
+
 export function createTerminalChannel(opts: TerminalChannelOptions) {
   const { conn, nid, onFrame, onCursor, onTerminated, onConnect, onDisconnect } = opts;
   const wsProtocol =
@@ -89,9 +97,11 @@ export function createTerminalChannel(opts: TerminalChannelOptions) {
 
     ws.onmessage = (event) => {
       try {
-        const msg = JSON.parse(event.data) as TerminalFrame | TerminalCursorMessage;
+        const msg = JSON.parse(event.data) as TerminalFrame | TerminalCursorMessage | { type: "verify"; verification?: string };
         if (msg.type === "terminated") {
           onTerminated?.();
+        } else if (msg.type === "verify") {
+          verifyHandler?.(conn, msg.verification === "fresh" ? "fresh" : "required");
         } else if (msg.type === "cursor") {
           onCursor?.(msg.cursor ?? null);
         } else if (msg.type === "frame" || msg.type === "append") {
