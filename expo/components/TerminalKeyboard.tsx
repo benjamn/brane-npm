@@ -85,6 +85,16 @@ const ROW5: KeyDef[] = [
   { label: "\u2192", tmux: "Right" },
 ];
 
+// Names for the keys whose label is a glyph or nothing.
+const KEY_NAMES: Record<string, string> = {
+  BSpace: "Backspace",
+  Space: "Space",
+  Left: "Left arrow",
+  Down: "Down arrow",
+  Up: "Up arrow",
+  Right: "Right arrow",
+};
+
 const ALL_ROWS = [ROW1, ROW2, ROW3, ROW4, ROW5];
 
 export default function TerminalKeyboard({ sendKeys }: TerminalKeyboardProps) {
@@ -131,6 +141,9 @@ export default function TerminalKeyboard({ sendKeys }: TerminalKeyboardProps) {
     }
 
     const keyId = `${rowIdx}-${keyIdx}`;
+    // What a screen reader calls the key: the glyph keys by name, the rest as
+    // they read on screen.
+    const keyName = isMod ? def.label : (KEY_NAMES[def.tmux] ?? displayLabel);
     const isPressed = pressedKey === keyId;
 
     const handleTouch = (e: React.TouchEvent) => {
@@ -158,6 +171,9 @@ export default function TerminalKeyboard({ sendKeys }: TerminalKeyboardProps) {
     return (
       <div
         key={keyId}
+        role="button"
+        aria-label={keyName}
+        aria-pressed={isMod ? isActive : undefined}
         onTouchStart={handleTouch}
         onMouseDown={handleMouse}
         style={{

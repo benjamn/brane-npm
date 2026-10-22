@@ -27,6 +27,14 @@ export function fractionAt(cx: number, cy: number, x: number, y: number): number
   return a < 0 ? a + 1 : a;
 }
 
+/** Whether a point lies inside the ring, within `inner` of its center. The
+ *  angle is useless to scrub by there, since a pixel swings it a long way
+ *  near the center, so a drag let go inside the ring cancels instead of
+ *  seeking. */
+export function insideRing(cx: number, cy: number, x: number, y: number, inner: number): boolean {
+  return Math.hypot(x - cx, y - cy) < inner;
+}
+
 /** How long a finger held still on the dial is a long-press, which opens the
  *  track's file rather than playing or pausing it. React Native's own
  *  `Pressable` default, so it is the hold every other long-press here takes. */

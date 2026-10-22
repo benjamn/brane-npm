@@ -87,7 +87,7 @@ function SearchStatus({ doc, search }: { doc: HexDoc; search: HexSearch }) {
     <View style={styles.status}>
       <Text style={styles.statusText}>{text}</Text>
       {more && (
-        <Pressable onPress={() => doc.searchOn()} hitSlop={8}>
+        <Pressable onPress={() => doc.searchOn()} role="button" hitSlop={8}>
           <Text style={styles.statusLink}>{search.stop === "cancelled" ? "Resume" : "Search on"} from 0x{hexOffset(search.next!)}</Text>
         </Pressable>
       )}
@@ -123,11 +123,11 @@ function GapRow({ doc, from, to }: { doc: HexDoc; from: number; to: number | nul
         <ActivityIndicator color="#888" />
       ) : (
         <View style={styles.gapButtons}>
-          <Pressable onPress={() => void doc.ensure(down)} hitSlop={8}>
+          <Pressable onPress={() => void doc.ensure(down)} role="button" aria-label={`Load the next ${kb} KB`} hitSlop={8}>
             <Text style={styles.gapLink}>↓ {kb} KB</Text>
           </Pressable>
           {up !== null && up !== down && (
-            <Pressable onPress={() => void doc.ensure(up)} hitSlop={8}>
+            <Pressable onPress={() => void doc.ensure(up)} role="button" aria-label={`Load the previous ${kb} KB`} hitSlop={8}>
               <Text style={styles.gapLink}>↑ {kb} KB</Text>
             </Pressable>
           )}

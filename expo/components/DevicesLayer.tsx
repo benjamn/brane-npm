@@ -160,8 +160,8 @@ export default function DevicesLayer({
 
   return (
     <Modal visible={visible} transparent animationType="fade" onRequestClose={close}>
-      <Pressable style={styles.overlay} onPress={close}>
-        <Pressable style={styles.card} onPress={(e) => e.stopPropagation()}>
+      <Pressable style={styles.overlay} onPress={close} tabIndex={-1}>
+        <Pressable style={styles.card} onPress={(e) => e.stopPropagation()} tabIndex={-1}>
           <Text style={styles.title}>Devices on {daemonName}</Text>
           {tokens === null && !error ? (
             <ActivityIndicator style={{ marginVertical: 16 }} color="#aaa" />
@@ -191,6 +191,8 @@ export default function DevicesLayer({
                     <Pressable
                       style={[styles.revoke, confirming === t.id && styles.revokeConfirm, revoking !== null && { opacity: 0.5 }]}
                       onPress={() => revoke(t)}
+                      role="button"
+                      aria-busy={revoking === t.id}
                       disabled={revoking !== null}
                     >
                       {revoking === t.id ? (
@@ -230,13 +232,14 @@ export default function DevicesLayer({
           <Pressable
             style={[styles.signOut, (!connected || revoking !== null) && { opacity: 0.5 }]}
             onPress={onSignOutOthers}
+            role="button"
             disabled={!connected || revoking !== null}
           >
             <Text style={styles.signOutText}>
               {signedOutOthers ? "Other devices signed out" : "Sign out other devices"}
             </Text>
           </Pressable>
-          <Pressable style={[styles.close, revoking !== null && { opacity: 0.5 }]} onPress={close} disabled={revoking !== null}>
+          <Pressable style={[styles.close, revoking !== null && { opacity: 0.5 }]} role="button" onPress={close} disabled={revoking !== null}>
             <Text style={styles.closeText}>Close</Text>
           </Pressable>
         </Pressable>
@@ -284,7 +287,7 @@ function CascadePanel({
         const d = byId.get(id);
         const checked = also.has(id);
         return (
-          <Pressable key={id} style={styles.cascadeRow} onPress={() => onToggle(id)}>
+          <Pressable key={id} style={styles.cascadeRow} role="checkbox" aria-checked={checked} onPress={() => onToggle(id)}>
             <Text style={[styles.checkbox, checked && styles.checkboxOn]}>{checked ? "☑" : "☐"}</Text>
             <Text style={styles.cascadeText} numberOfLines={2}>
               {d ? `${rowTitle(d)} · ${rowDetail(d)}` : id}

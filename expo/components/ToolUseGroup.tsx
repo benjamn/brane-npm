@@ -351,6 +351,8 @@ export default function ToolUseGroup({
     // dismissing what you had selected.
     <View style={styles.container} dataSet={{ chrome: "tools" }} onLayout={(e) => setPaneWidth(e.nativeEvent.layout.width)}>
       <Pressable
+        role="button"
+        aria-expanded={expanded}
         onPress={() => {
           userToggledRef.current = true;
           setExpanded((wasOpen) => {
@@ -428,6 +430,7 @@ export default function ToolUseGroup({
                 </Pressable>
                 {open && (
                   <Pressable
+                    tabIndex={-1}
                     style={[
                       styles.detail,
                       stickyLeft,

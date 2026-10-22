@@ -136,8 +136,8 @@ export default function QrModal({ visible, conn, path, view, onClose }: QrModalP
       animationType="fade"
       onRequestClose={onClose}
     >
-      <Pressable style={styles.backdrop} onPress={onClose}>
-        <Pressable style={styles.card} onPress={(e) => e.stopPropagation()}>
+      <Pressable style={styles.backdrop} onPress={onClose} tabIndex={-1}>
+        <Pressable style={styles.card} onPress={(e) => e.stopPropagation()} tabIndex={-1}>
           <Text style={styles.title}>Meld another device</Text>
           {minted?.state === "minting" && (
             <ActivityIndicator style={styles.minting} color="#9ad6b3" />
@@ -195,7 +195,7 @@ export default function QrModal({ visible, conn, path, view, onClose }: QrModalP
               gate. Don't display in public.
             </Text>
           )}
-          <Pressable style={styles.close} onPress={onClose}>
+          <Pressable style={styles.close} role="button" onPress={onClose}>
             <Text style={styles.closeText}>Close</Text>
           </Pressable>
         </Pressable>

@@ -228,6 +228,12 @@ bite outside their own subsystem.
   a GET needs no CORS preflight; `src/test/api-request.test.ts` enforces it.
   Breaking this is invisible on a fast network. See [The Request
   Layer](docs/request-layer.md).
+- **Every `Pressable` says what it is.** A `role` (and an `aria-label` when
+  its content is a glyph), or `tabIndex={-1}` for a backdrop or card that is
+  surface, not control; a `<div onClick>` needs a `role` too.
+  `src/test/pressable-roles.test.ts` fails otherwise. `focusable={false}` is
+  not an opt-out: RNW's Pressable sets its own tabIndex. See
+  [Accessibility](docs/accessibility.md).
 - **A `src/shared/` module with a bare npm import needs a metro alias** in
   `expo/metro.config.js`, as `katex` has. See [Math Rendering](docs/math.md).
 - **One parse, never a second scanner.** Warnings, mentions and diagram
@@ -329,6 +335,11 @@ change one of those, read its doc first.
   and what an excerpt discloses.
 - [Link Previews](docs/link-previews.md) (`expo/public/index.html`,
   `expo/scripts/og-membrane/`): the `og:*` card and its image.
+- [Accessibility](docs/accessibility.md) (`role` / `aria-*` on every
+  `Pressable`, `Markdown.tsx` headings, the chat's live region,
+  `src/test/pressable-roles.test.ts`): what a screen reader and a keyboard
+  get, the RNW quirks (`focusable` ignored, `Image` wants `aria-label`,
+  `role="button"` renders a `<button>`), what is still open.
 
 **Markdown rendering**
 

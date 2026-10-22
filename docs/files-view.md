@@ -109,7 +109,21 @@ to the start, as the finger says. (The first draft was a knob, moving by the
 turn the finger made; the operator asked for the angle itself.) A press
 doesn't move the playhead, since it may be a tap: the scrub begins once the
 finger leaves the tap slop. The seek is made on release; while the finger is
-down a clock under the dial shows where it will land. The dial takes the
+down a clock under the dial shows where it will land. Inside the ring
+(`insideRing`) the drag is a cancel: near the center a pixel swings the
+angle a long way, so letting go there would seek almost anywhere. Instead,
+while the pointer is inside, the ring and the clock show the playhead where
+it already is, and letting go leaves it there. On the list card's 22px dial
+a fingertip covers the whole ring, so there this mostly guards against the
+jumpy angle; on the Files card's dial, or with a mouse, it is a cancel you
+can aim for. A release the dial
+never hears ends the drag as a cancel, and the playhead stays where it was,
+since where the button came up is unknown. That covers a mouse let go
+outside the window, and lost capture when the list re-sorts and moves the
+card's node. The dial notices on the next move with no button down, or when
+it loses capture. Every way a gesture ends clears the clock; once only a
+drag's own release did, so one stranded drag left the clock up through any
+number of taps. The dial takes the
 whole gesture (`touch-action: none`, pointer capture), so the list under it
 doesn't scroll and the card under it doesn't open. Nothing on or around it
 is selectable: iOS answers a long-press on a `user-select: none` element by

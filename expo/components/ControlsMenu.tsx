@@ -132,6 +132,8 @@ export default function ControlsMenu({ onControl }: ControlsMenuProps) {
     <div ref={menuRef} style={{ position: "relative" }}>
       <button
         onClick={() => setOpen((v) => !v)}
+        aria-label="Terminal controls"
+        aria-expanded={open}
         style={{
           padding: "6px 8px",
           borderRadius: 6,

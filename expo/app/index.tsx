@@ -179,7 +179,10 @@ function NarrativeCard({
   return (
     <div
       style={{ borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: "#555", borderBottomStyle: "solid", backgroundColor: "#121214", cursor: "pointer", boxShadow: glow, transition: "box-shadow 400ms ease" }}
+      role="link"
+      tabIndex={0}
       onClick={() => onPress()}
+      onKeyDown={(e) => { if (e.key === "Enter" && e.target === e.currentTarget) onPress(); }}
     >
       <div style={{ padding: 16 }}>
         <div style={{ display: "flex", flexDirection: "row", justifyContent: "space-between", alignItems: "center" }}>
@@ -304,7 +307,10 @@ function NarrativeCard({
             {hits.slice(0, 3).map((hit, i) => (
               <div
                 key={i}
+                role="link"
+                tabIndex={0}
                 onClick={(e) => { e.stopPropagation(); onHitPress?.(item.id, hit.seq); }}
+                onKeyDown={(e) => { if (e.key === "Enter") { e.stopPropagation(); onHitPress?.(item.id, hit.seq); } }}
                 style={{ cursor: "pointer" }}
               >
                 <Text style={styles.hitSnippet} numberOfLines={2}>
@@ -442,6 +448,7 @@ function SectionBar({
         // edge shifts as the word changes).
         <Pressable
           onPress={onToggleOrder}
+          role="button"
           hitSlop={6}
           style={({ pressed }) => [styles.wikiBarPill, pressed && styles.wikiBarPillPressed]}
         >
@@ -454,6 +461,8 @@ function SectionBar({
           chevron was redundant chrome, so it's gone. */}
       <Pressable
         onPress={onToggle}
+        role="button"
+        aria-expanded={!collapsed}
         hitSlop={6}
         style={({ pressed }) => [styles.wikiBarPill, pressed && styles.wikiBarPillPressed]}
       >
@@ -490,7 +499,7 @@ function WikiResultsHeader({
       />
       {!collapsed && results.map((a) => (
         <View key={`${a.source}\u0000${a.slug}`} style={styles.wikiCard}>
-          <Pressable onPress={() => onOpen(a.source, a.slug, a.hits[0]?.anchor)}>
+          <Pressable role="button" onPress={() => onOpen(a.source, a.slug, a.hits[0]?.anchor)}>
             <View style={styles.wikiCardHeader}>
               <Text style={styles.wikiSlug} numberOfLines={1}>
                 {a.slug.replace(/\.md$/, "")}
@@ -500,7 +509,7 @@ function WikiResultsHeader({
           </Pressable>
           <View style={styles.hitsContainer}>
             {a.hits.slice(0, 3).map((h, i) => (
-              <Pressable key={i} onPress={() => onOpen(a.source, a.slug, h.anchor)}>
+              <Pressable key={i} role="button" onPress={() => onOpen(a.source, a.slug, h.anchor)}>
                 {!!h.anchor && <Text style={styles.wikiHitCitation}>#{h.anchor}</Text>}
                 <Text style={styles.hitSnippet} numberOfLines={3}>
                   {buildSnippetSegments(h.content, query).map((s, j) =>
@@ -573,6 +582,7 @@ function RowMenu({
       <Pressable
         style={styles.rowMenuButton}
         onPress={() => setOpenId(openId === id ? null : id)}
+        role="button"
         accessibilityLabel={label}
       >
         <Text style={styles.rowMenuIcon}>⋯</Text>
@@ -746,6 +756,8 @@ function BraneSwitcher({
       <Pressable
         style={styles.daemonChip}
         onPress={() => setShowDropdown(true)}
+        role="button"
+        aria-label={`Switch brane: ${chipLabel}`}
       >
         <View
           style={[
@@ -768,8 +780,9 @@ function BraneSwitcher({
         <Pressable
           style={styles.modalOverlay}
           onPress={closeDropdown}
+          tabIndex={-1}
         >
-          <Pressable style={styles.modalContent} onPress={() => {}}>
+          <Pressable style={styles.modalContent} onPress={() => {}} tabIndex={-1}>
             <Text style={styles.modalTitle}>Branes</Text>
 
             <ScrollView style={{ flexGrow: 0 }}>
@@ -787,6 +800,7 @@ function BraneSwitcher({
             >
             <Pressable
               style={styles.switcherRowMain}
+              role="button"
               onPress={() => {
                 onSwitchBrane(null);
                 setShowDropdown(false);
@@ -836,6 +850,7 @@ function BraneSwitcher({
               >
               <Pressable
                 style={styles.switcherRowMain}
+                role="button"
                 onPress={() => {
                   onSwitchBrane(b.brane_id);
                   setShowDropdown(false);
@@ -889,6 +904,7 @@ function BraneSwitcher({
               >
               <Pressable
                 style={styles.switcherRowMain}
+                role="button"
                 onPress={() => {
                   onSwitchDaemon(d.id);
                   setShowDropdown(false);
@@ -927,7 +943,7 @@ function BraneSwitcher({
                   </Text>
                 </View>
                 <View style={styles.archivedActions}>
-                  <Pressable style={styles.archivedAction} onPress={() => archiveBrane(b, false)}>
+                  <Pressable style={styles.archivedAction} role="button" onPress={() => archiveBrane(b, false)}>
                     <Text style={styles.archivedActionText}>Unarchive</Text>
                   </Pressable>
                 </View>
@@ -942,6 +958,7 @@ function BraneSwitcher({
                 <View style={styles.archivedActions}>
                   <Pressable
                     style={styles.archivedAction}
+                    role="button"
                     onPress={() => {
                       onReconnectDaemon(d.id);
                       setShowDropdown(false);
@@ -949,14 +966,14 @@ function BraneSwitcher({
                   >
                     <Text style={styles.archivedActionText}>Reconnect</Text>
                   </Pressable>
-                  <Pressable style={styles.archivedAction} onPress={() => setConfirmForget(d)}>
+                  <Pressable style={styles.archivedAction} role="button" onPress={() => setConfirmForget(d)}>
                     <Text style={[styles.archivedActionText, styles.archivedActionDanger]}>Delete…</Text>
                   </Pressable>
                 </View>
               </View>
             ))}
             {archivedCount > 0 && (
-              <Pressable onPress={() => setShowArchived((v) => !v)} style={styles.archivedToggle}>
+              <Pressable onPress={() => setShowArchived((v) => !v)} role="button" aria-expanded={showArchived} style={styles.archivedToggle}>
                 <Text style={styles.archivedToggleText}>
                   {showArchived ? "Hide archived" : `Show ${archivedCount} archived`}
                 </Text>
@@ -966,6 +983,7 @@ function BraneSwitcher({
 
             <Pressable
               style={styles.addDaemonButton}
+              role="button"
               onPress={() => setShowAddForm(true)}
             >
               <Text style={styles.addDaemonButtonText}>+ Add Daemon</Text>
@@ -973,6 +991,7 @@ function BraneSwitcher({
             {activeDaemon && !activeDaemon.revoked && (
               <Pressable
                 style={styles.addDaemonButton}
+                role="button"
                 onPress={() => setShowDevices(true)}
                 disabled={!connected}
               >
@@ -982,6 +1001,7 @@ function BraneSwitcher({
 
             <Pressable
               style={styles.modalCancel}
+              role="button"
               onPress={closeDropdown}
             >
               <Text style={styles.modalCancelText}>Close</Text>
@@ -997,8 +1017,8 @@ function BraneSwitcher({
         animationType="fade"
         onRequestClose={cancelAdd}
       >
-        <Pressable style={styles.modalOverlay} onPress={cancelAdd}>
-          <Pressable style={styles.layerCard} onPress={(e) => e.stopPropagation()}>
+        <Pressable style={styles.modalOverlay} onPress={cancelAdd} tabIndex={-1}>
+          <Pressable style={styles.layerCard} onPress={(e) => e.stopPropagation()} tabIndex={-1}>
             <Text style={styles.layerTitle}>Add a daemon</Text>
             <View style={styles.addForm}>
               <TextInput
@@ -1027,6 +1047,7 @@ function BraneSwitcher({
               <View style={styles.layerButtonRow}>
                 <Pressable
                   style={[styles.layerCancel, adding && { opacity: 0.5 }]}
+                  role="button"
                   onPress={cancelAdd}
                   disabled={adding}
                 >
@@ -1035,6 +1056,9 @@ function BraneSwitcher({
                 <Pressable
                   style={[styles.addButton, styles.layerConfirm, (adding || !newHost || !newToken) && { opacity: 0.5 }]}
                   onPress={handleAdd}
+                  role="button"
+                  aria-label="Connect"
+                  aria-busy={adding}
                   disabled={adding || !newHost || !newToken}
                 >
                   {adding ? (
@@ -1067,8 +1091,8 @@ function BraneSwitcher({
         animationType="fade"
         onRequestClose={cancelSignOut}
       >
-        <Pressable style={styles.modalOverlay} onPress={cancelSignOut}>
-          <Pressable style={styles.layerCard} onPress={(e) => e.stopPropagation()}>
+        <Pressable style={styles.modalOverlay} onPress={cancelSignOut} tabIndex={-1}>
+          <Pressable style={styles.layerCard} onPress={(e) => e.stopPropagation()} tabIndex={-1}>
             <Text style={styles.layerTitle}>Sign out other devices?</Text>
             <Text style={styles.signOutBody}>
               {activeDaemon?.id} will issue a new token. This device keeps
@@ -1082,6 +1106,7 @@ function BraneSwitcher({
             <View style={styles.layerButtonRow}>
               <Pressable
                 style={[styles.layerCancel, signingOut && { opacity: 0.5 }]}
+                role="button"
                 onPress={cancelSignOut}
                 disabled={signingOut}
               >
@@ -1090,6 +1115,9 @@ function BraneSwitcher({
               <Pressable
                 style={[styles.signOutButton, styles.layerConfirm, signingOut && { opacity: 0.5 }]}
                 onPress={handleSignOutOthers}
+                role="button"
+                aria-label="Sign out other devices"
+                aria-busy={signingOut}
                 disabled={signingOut}
               >
                 {signingOut ? (
@@ -1110,8 +1138,8 @@ function BraneSwitcher({
         animationType="fade"
         onRequestClose={cancelForget}
       >
-        <Pressable style={styles.modalOverlay} onPress={cancelForget}>
-          <Pressable style={styles.layerCard} onPress={(e) => e.stopPropagation()}>
+        <Pressable style={styles.modalOverlay} onPress={cancelForget} tabIndex={-1}>
+          <Pressable style={styles.layerCard} onPress={(e) => e.stopPropagation()} tabIndex={-1}>
             <Text style={styles.layerTitle}>Delete {confirmForget?.id}?</Text>
             <Text style={styles.signOutBody}>
               {forgetError === null
@@ -1122,6 +1150,7 @@ function BraneSwitcher({
             <View style={styles.layerButtonRow}>
               <Pressable
                 style={[styles.layerCancel, forgetting && { opacity: 0.5 }]}
+                role="button"
                 onPress={cancelForget}
                 disabled={forgetting}
               >
@@ -1130,6 +1159,9 @@ function BraneSwitcher({
               <Pressable
                 style={[styles.signOutButton, styles.layerConfirm, forgetting && { opacity: 0.5 }]}
                 onPress={handleForget}
+                role="button"
+                aria-label={forgetError === null ? "Delete" : "Forget anyway"}
+                aria-busy={forgetting}
                 disabled={forgetting}
               >
                 {forgetting ? (
@@ -1818,7 +1850,7 @@ export default function NarrativeList() {
           header: () => (
             <View style={styles.customHeader}>
               <View style={styles.headerTitleRow}>
-                <Pressable onPress={loadData}>
+                <Pressable onPress={loadData} role="button" aria-label="Reload narratives">
                   <Text
                     style={{
                       color: "#8fd4b4",
@@ -1846,6 +1878,7 @@ export default function NarrativeList() {
                 </Pressable>
                 <Pressable
                   onPress={handleSpawnPress}
+                  role="button"
                   disabled={!conn}
                   style={[
                     styles.spawnButton,
@@ -1879,6 +1912,9 @@ export default function NarrativeList() {
                     });
                   }}
                   style={[styles.searchButton, showSearch && styles.searchButtonActive]}
+                  role="button"
+                  aria-label="Search narratives"
+                  aria-expanded={showSearch}
                 >
                   <Text style={[styles.searchButtonText, showSearch && styles.searchButtonTextActive]}>{"\uD83D\uDD2C"}</Text>
                 </Pressable>

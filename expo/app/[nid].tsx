@@ -147,8 +147,9 @@ const PayloadThumbnail = memo(function PayloadThumbnail({
   const height = dims ? Math.round(dims.h * scale) : THUMB_MAX_H;
 
   return (
-    <Pressable onPress={onPress}>
+    <Pressable onPress={onPress} role="button" aria-label="Open image">
       <Image
+        aria-label="Attached image"
         source={{ uri }}
         style={{ width, height, borderRadius: 8 }}
         resizeMode="cover"
@@ -185,13 +186,13 @@ const MessageBubble = memo(function MessageBubble({ item, nid, agentType, foldPa
               nid itself navigates, and the (nid:seq) beside it selects this
               event the way every other attribution does. */}
           {foreign && item.source && (
-            <Pressable onPress={() => onForeignPress?.(item.source!, item.time)} style={styles.bubbleSourcePress}>
+            <Pressable onPress={() => onForeignPress?.(item.source!, item.time)} role="link" aria-label={`Go to ${item.source}`} style={styles.bubbleSourcePress}>
               <Text style={[styles.bubbleSource, styles.bubbleSourceLink, { color: speakerColor(item.source, palette) }]}>
                 {item.source}
               </Text>
             </Pressable>
           )}
-          <Pressable onPress={() => onTimestampPress?.(item.seq)} style={[styles.bubbleSourcePress, foreign && styles.bubbleSourceAfterLink]}>
+          <Pressable onPress={() => onTimestampPress?.(item.seq)} role="button" style={[styles.bubbleSourcePress, foreign && styles.bubbleSourceAfterLink]}>
             <Text style={[
               styles.bubbleSource,
               foreign && item.source && { color: speakerColor(item.source, palette) },
@@ -241,6 +242,8 @@ const MessageBubble = memo(function MessageBubble({ item, nid, agentType, foldPa
                   downloadUrl(url, filename).catch((err) => console.error("Payload download failed:", err));
                 }}
                 style={styles.filePayload}
+                role="button"
+                aria-label={`Download ${filename}`}
               >
                 <Text style={styles.filePayloadText}>{filename}</Text>
               </Pressable>
@@ -248,7 +251,7 @@ const MessageBubble = memo(function MessageBubble({ item, nid, agentType, foldPa
           })}
         </View>
       )}
-      <Pressable onPress={() => onTimestampPress?.(item.seq)} style={styles.bubbleTimePress}>
+      <Pressable onPress={() => onTimestampPress?.(item.seq)} role="button" tabIndex={-1} style={styles.bubbleTimePress}>
         <Text style={styles.bubbleTime}>
           {formatTimestamp(item.time)}
         </Text>
@@ -604,7 +607,7 @@ const InputBar = memo(function InputBar({
                   <Text style={{ color: "#aaa", fontSize: 10 }} numberOfLines={2}>{p.filename.split(".").pop()}</Text>
                 </View>
               )}
-              <Pressable style={styles.pendingPayloadRemove} onPress={() => removePendingPayload(p.id)}>
+              <Pressable style={styles.pendingPayloadRemove} role="button" aria-label="Remove attachment" onPress={() => removePendingPayload(p.id)}>
                 <Text style={styles.pendingPayloadRemoveText}>×</Text>
               </Pressable>
             </View>
@@ -615,6 +618,7 @@ const InputBar = memo(function InputBar({
         {Platform.OS === "web" && (
           <Pressable
             onPress={handleFilePick}
+            role="button"
             accessibilityLabel="Attach file"
             style={({ hovered, pressed }: { hovered?: boolean; pressed?: boolean }) =>
               [styles.attachButton, (hovered || pressed) && styles.circleGlowActive]}
@@ -668,6 +672,8 @@ const InputBar = memo(function InputBar({
         <Pressable
           style={[styles.sendButton, (!sending && (hasText || pendingPayloads.length > 0)) && styles.circleGlowSend]}
           onPress={handleSend}
+          role="button"
+          aria-label="Send"
           disabled={sending || (!hasText && pendingPayloads.length === 0)}
         >
           <Text style={[styles.sendText, (sending || (!hasText && pendingPayloads.length === 0)) && styles.sendTextInactive]}>🦋</Text>
@@ -791,6 +797,7 @@ const NarrativeHeader = memo(function NarrativeHeader({
     >
       <Pressable
         style={styles.headerTitleContainer}
+        role="button"
         // A swipe is not also a tap, should the browser click after it.
         onPress={() => { if (swipedRef.current) swipedRef.current = false; else openSwitcher(); }}
       >
@@ -835,6 +842,9 @@ const NarrativeHeader = memo(function NarrativeHeader({
       <div style={{ position: "relative" }}>
         <Pressable
           onPress={() => setMenuVisible((v) => !v)}
+          role="button"
+          aria-label="Narrative menu"
+          aria-expanded={menuVisible}
           style={styles.reloadButton}
           hitSlop={8}
         >
@@ -931,12 +941,15 @@ function landChatRow(node: HTMLDivElement | null, seq: number): boolean {
 }
 
 // Controls whose press means only itself — pressing one never re-points the
-// keyboard at the pane it happens to sit in. Real <button>s cover the terminal
-// quick bar, the 🎹/🦾/macro menus and the copy buttons; the role selectors catch
-// the handful of RN `Pressable`s that declare `accessibilityRole` (RN-Web
-// renders the rest as a bare <div>, which correctly reads as pane surface).
-// <input>/<textarea> are pointedly absent: clicking into the composer is a
-// request to type there.
+// keyboard at the pane it happens to sit in. Every `Pressable` is one: each
+// declares a role (docs/accessibility.md), and RN-Web renders `role="button"`
+// as a real <button> and the other roles as a <div role=…>, so the selector
+// catches them all alongside the terminal quick bar's and the copy buttons'
+// own <button>s. What reads as pane surface is everything else: the bubbles,
+// the mirror, the file listing's chrome, and the modal backdrops and cards,
+// which are Pressables too but opt out of the tab order with `tabIndex={-1}`
+// and carry no role. <input>/<textarea> are pointedly absent: clicking into
+// the composer is a request to type there.
 const INTERACTIVE_SELECTOR =
   'button, a[href], [role="button"], [role="link"], [role="menuitem"]';
 function readHeaderMeta(nid: string | undefined): HeaderMeta {
@@ -964,6 +977,23 @@ export default function ChatView() {
   const router = useRouter();
   const { conn, subscribe, unsubscribe, onHint, onMeta, onStatus, onToolUses, narrativeIds } = useBrane();
   const [events, setEvents] = useState<NarrativeEvent[]>([]);
+  // What a screen reader hears when a message lands: the newest event, as
+  // "speaker: first 240 characters", through a polite live region. Nothing
+  // from the page that loads with the narrative (opening one would otherwise
+  // read its last message aloud), and nothing the operator sent themselves.
+  const liveFloorRef = useRef<{ nid: string | undefined; seq: number } | null>(null);
+  const liveAnnouncement = useMemo(() => {
+    if (events.length === 0) return null;
+    const last = events[events.length - 1];
+    const floor = liveFloorRef.current;
+    if (!floor || floor.nid !== nid) {
+      liveFloorRef.current = { nid, seq: last.seq };
+      return null;
+    }
+    if (last.seq <= floor.seq || isOperator(last.type)) return null;
+    const text = (last.content ?? "").replace(/\s+/g, " ").trim();
+    return { seq: last.seq, text: `${last.source ?? last.type}: ${text.length > 240 ? text.slice(0, 240) + "…" : text}` };
+  }, [events, nid]);
   // Tool rows keyed by dedup_key — a row mutates in place (rev bump), so a map
   // makes both the inline-push upsert and the refetch merge idempotent.
   const [toolUses, setToolUses] = useState<Map<string, ToolUse>>(() => new Map());
@@ -2103,6 +2133,9 @@ export default function ChatView() {
         isIsolated={isolated}
         canIsolate={!isolated || !!appHost}
       />
+      {/* Not a tablist: the pins and scroll arrows sit between the tabs, and a
+          tablist may own only tabs (axe aria-required-children). The labels
+          are toggle buttons that say which pane is showing. */}
       <View style={styles.tabBar}>
         {CANONICAL_TABS.map((tab, idx) => {
           const isActive = activeTab === tab;
@@ -2116,13 +2149,16 @@ export default function ChatView() {
               key={tab}
               style={[styles.tab, idx > 0 && styles.tabDivider, isActive && styles.tabActive]}
             >
-              <Pressable style={styles.tabLabel} onPress={() => activateTab(tab)}>
+              <Pressable style={styles.tabLabel} role="button" aria-pressed={isActive} onPress={() => activateTab(tab)}>
                 <Text style={[styles.tabText, isActive && styles.tabTextActive]}>
                   {label}
                 </Text>
               </Pressable>
               <Pressable
                 style={styles.tabPin}
+                role="button"
+                aria-label={`Pin ${label}`}
+                aria-pressed={isPinned}
                 onPress={() => togglePin(tab)}
                 hitSlop={6}
               >
@@ -2130,6 +2166,8 @@ export default function ChatView() {
               </Pressable>
               <Pressable
                 style={styles.tabArrowPress}
+                role="button"
+                aria-label={arrowAtBottom ? `Scroll ${label} to top` : `Scroll ${label} to bottom`}
                 onPress={onArrowPress}
                 disabled={!isVisible}
                 hitSlop={6}
@@ -2185,6 +2223,12 @@ export default function ChatView() {
       >
       {/* Chat view */}
       <View style={paneStyles.chat} dataSet={{ pane: "chat" }}>
+        <View aria-live="polite" style={styles.srOnly}>
+          {/* Keyed by seq: a live region speaks on a DOM change, and the same
+              text twice in a row is no change, so each event gets its own
+              node. */}
+          {liveAnnouncement && <Text key={liveAnnouncement.seq}>{liveAnnouncement.text}</Text>}
+        </View>
         {/* Vertical scroll is never switched off, not even under a
             horizontal pane swipe: the gate that did so could outlive its
             gesture and leave the list stuck. See CHAT_SCROLLER_STYLE. */}
@@ -2287,6 +2331,7 @@ export default function ChatView() {
         <Pressable
           style={styles.switcherOverlay}
           onPress={() => setShowSwitcher(false)}
+          tabIndex={-1}
         >
           <View style={styles.switcherContent}>
             <View style={styles.switcherTitleRow}>
@@ -2330,6 +2375,7 @@ export default function ChatView() {
                       isEnded && styles.switcherItemEnded,
                       glow ? ({ boxShadow: glow } as any) : null,
                     ]}
+                    role="button"
                     onPress={() => {
                       setShowSwitcher(false);
                       // Another narrative is a new history entry, as it is from
@@ -2395,6 +2441,7 @@ export default function ChatView() {
             />
             <Pressable
               style={styles.switcherCancel}
+              role="button"
               onPress={() => setShowSwitcher(false)}
             >
               <Text style={styles.switcherCancelText}>Cancel</Text>
@@ -2432,10 +2479,11 @@ export default function ChatView() {
         animationType="fade"
         onRequestClose={() => setLightboxUrl(null)}
       >
-        <Pressable style={styles.lightboxBackdrop} onPress={() => setLightboxUrl(null)}>
+        <Pressable style={styles.lightboxBackdrop} role="button" aria-label="Close image" onPress={() => setLightboxUrl(null)}>
           {lightboxUrl && (
             <Image
               source={{ uri: lightboxUrl }}
+              aria-label="Image"
               style={styles.lightboxImage}
               resizeMode="contain"
             />
@@ -2463,6 +2511,11 @@ export default function ChatView() {
 }
 
 const styles = StyleSheet.create({
+  // Present for assistive tech, invisible otherwise: a 1px clipped box, not
+  // display:none, which would silence it. RN styles have no `clip`, so the
+  // box can still paint one pixel of glyph; opacity 0 hides that pixel and
+  // hides nothing from a screen reader.
+  srOnly: { position: "absolute", width: 1, height: 1, overflow: "hidden", opacity: 0 },
   container: {
     flex: 1,
   },

@@ -134,6 +134,8 @@ export default function CredentialsSection({ conn, visible }: { conn: Connection
             <Pressable
               style={[styles.revoke, confirming === c.id && styles.revokeConfirm, revoking !== null && { opacity: 0.5 }]}
               onPress={() => revoke(c)}
+              role="button"
+              aria-busy={revoking === c.id}
               disabled={revoking !== null}
             >
               {revoking === c.id ? (
@@ -152,11 +154,11 @@ export default function CredentialsSection({ conn, visible }: { conn: Connection
       )}
       {error && <Text style={styles.error}>{error}</Text>}
       {pageUrl ? (
-        <Pressable style={styles.add} onPress={open}>
+        <Pressable style={styles.add} role="button" onPress={open}>
           <Text style={styles.addText}>Open the enrollment page</Text>
         </Pressable>
       ) : (
-        <Pressable style={[styles.add, (asking || !conn) && { opacity: 0.5 }]} onPress={ask} disabled={asking || !conn}>
+        <Pressable style={[styles.add, (asking || !conn) && { opacity: 0.5 }]} role="button" aria-label="Add a passkey or security key" aria-busy={asking} onPress={ask} disabled={asking || !conn}>
           {asking ? <ActivityIndicator size="small" color="#66d9a0" /> : <Text style={styles.addText}>Add a passkey or security key</Text>}
         </Pressable>
       )}

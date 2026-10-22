@@ -376,6 +376,13 @@ export const MarkdownContent = memo(function MarkdownContent({
         </Text>
       );
     };
+    // A heading is an <h1>…<h6> for assistive tech, so a long narration can
+    // be walked by its headings; the library's own rule renders a styled Text.
+    base.heading = ({ node, styles, children }: any) => (
+      <Text key={node.key} role="heading" aria-level={node.depth} style={styles[`heading${node.depth}`]}>
+        {children}
+      </Text>
+    );
     base.text = ({ node, styles, parentStack }: any) => {
       const value: string = typeof node.value === "string" ? node.value.replace(/\n/g, " ") : node.value;
       const heading = parentStack?.find((p: any) => p.type === "heading");

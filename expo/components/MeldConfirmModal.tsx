@@ -39,8 +39,8 @@ export default function MeldConfirmModal({
       animationType="fade"
       onRequestClose={onCancel}
     >
-      <Pressable style={styles.backdrop} onPress={onCancel}>
-        <Pressable style={styles.card} onPress={(e) => e.stopPropagation()}>
+      <Pressable style={styles.backdrop} onPress={onCancel} tabIndex={-1}>
+        <Pressable style={styles.card} onPress={(e) => e.stopPropagation()} tabIndex={-1}>
           <Text style={styles.title}>
             {pending?.isUpdate ? "Update credentials?" : "Meld this device?"}
           </Text>
@@ -62,12 +62,14 @@ export default function MeldConfirmModal({
           <View style={styles.buttonRow}>
             <Pressable
               style={[styles.button, styles.cancelButton]}
+              role="button"
               onPress={onCancel}
             >
               <Text style={styles.cancelText}>Cancel</Text>
             </Pressable>
             <Pressable
               style={[styles.button, styles.confirmButton]}
+              role="button"
               onPress={onConfirm}
             >
               <Text style={styles.confirmText}>
@@ -100,8 +102,8 @@ function FirstMeld({
   const where = pending.domain && pending.domain !== LOOPBACK ? pending.domain : null;
   return (
     <Modal visible transparent animationType="fade" onRequestClose={onCancel}>
-      <Pressable style={styles.backdrop} onPress={onCancel}>
-        <Pressable style={styles.card} onPress={(e) => e.stopPropagation()}>
+      <Pressable style={styles.backdrop} onPress={onCancel} tabIndex={-1}>
+        <Pressable style={styles.card} onPress={(e) => e.stopPropagation()} tabIndex={-1}>
           <Text style={styles.title}>Connect this browser to brane?</Text>
           <View style={styles.warning}>
             <Text style={styles.warningText}>
@@ -127,10 +129,10 @@ function FirstMeld({
             <DetailRow label="Brane" value={pending.status.brane_id} mono />
           </View>
           <View style={styles.buttonRow}>
-            <Pressable style={[styles.button, styles.cancelButton]} onPress={onCancel}>
+            <Pressable style={[styles.button, styles.cancelButton]} role="button" onPress={onCancel}>
               <Text style={styles.cancelText}>Cancel</Text>
             </Pressable>
-            <Pressable style={[styles.button, styles.cautionButton]} onPress={onConfirm}>
+            <Pressable style={[styles.button, styles.cautionButton]} role="button" onPress={onConfirm}>
               <Text style={styles.confirmText}>I asked for this</Text>
             </Pressable>
           </View>
@@ -158,15 +160,15 @@ export function MeldRefusedModal({
 }) {
   return (
     <Modal visible={refusal !== null} transparent animationType="fade" onRequestClose={onClose}>
-      <Pressable style={styles.backdrop} onPress={onClose}>
-        <Pressable style={styles.card} onPress={(e) => e.stopPropagation()}>
+      <Pressable style={styles.backdrop} onPress={onClose} tabIndex={-1}>
+        <Pressable style={styles.card} onPress={(e) => e.stopPropagation()} tabIndex={-1}>
           <Text style={styles.title}>Not this browser's tailnet</Text>
           <Text style={styles.body}>{refusal?.message ?? ""}</Text>
           <View style={styles.detailsBlock}>
             <DetailRow label="Address" value={refusal?.host ?? ""} />
           </View>
           <View style={styles.buttonRow}>
-            <Pressable style={[styles.button, styles.cancelButton]} onPress={onClose}>
+            <Pressable style={[styles.button, styles.cancelButton]} role="button" onPress={onClose}>
               <Text style={styles.cancelText}>Close</Text>
             </Pressable>
           </View>

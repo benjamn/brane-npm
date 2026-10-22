@@ -5,7 +5,9 @@
  *  from the dial's center to the finger points, so 3 o'clock is a quarter of
  *  the way through however the finger got there. The seek happens on
  *  release; while the finger is down a clock under the dial shows where it
- *  will land. A long-press (`LONG_PRESS_MS`, held still) calls `onOpen`, which
+ *  will land. Inside the ring the angle is no use, so a drag let go there
+ *  cancels, and while the finger is there the dial shows the playhead where
+ *  it already is. A long-press (`LONG_PRESS_MS`, held still) calls `onOpen`, which
  *  is how the list card, the header and the switcher take you back to the
  *  file the track came from.
  *
@@ -27,7 +29,15 @@
  *  `@shared/audio-dial`, tested without a DOM. */
 import { useEffect, useRef, useState } from "react";
 import { Platform } from "react-native";
-import { arcPath, clampFraction, elapsedFraction, formatClock, fractionAt, LONG_PRESS_MS } from "@shared/audio-dial";
+import {
+  arcPath,
+  clampFraction,
+  elapsedFraction,
+  formatClock,
+  fractionAt,
+  insideRing,
+  LONG_PRESS_MS,
+} from "@shared/audio-dial";
 import { sameTrack, trackTitle, type JukeboxTrack } from "@shared/now-playing";
 import { TAP_SLOP_PX } from "@shared/no-pan";
 import { playTrack, seekTrack, toggleTrack, useJukeboxEntry } from "@/lib/jukebox";
@@ -42,8 +52,9 @@ interface Drag {
   pointerId: number;
   startX: number;
   startY: number;
-  /** The scrub position, as a fraction of the track. */
-  value: number;
+  /** The scrub position, as a fraction of the track; `null` while the
+   *  pointer is inside the ring, where letting go cancels. */
+  value: number | null;
   moved: boolean;
   /** The pending long-press, until the finger moves or lifts. */
   hold: ReturnType<typeof setTimeout> | null;
@@ -77,7 +88,9 @@ export default function NowPlayingDial({
 }) {
   const entry = useJukeboxEntry(nid);
   const live = track ? (entry && sameTrack(entry.track, track) ? entry : null) : entry;
-  const [scrub, setScrub] = useState<number | null>(null);
+  /** The drag in progress, if any, and where it would land: `to` is `null`
+   *  while the pointer is inside the ring and letting go would cancel. */
+  const [scrub, setScrub] = useState<{ to: number | null } | null>(null);
   const drag = useRef<Drag | null>(null);
   const [el, setEl] = useState<HTMLDivElement | null>(null);
   useEffect(() => {
@@ -101,7 +114,7 @@ export default function NowPlayingDial({
   if (Platform.OS !== "web" || (!live && !track)) return null;
 
   const duration = live?.duration ?? 0;
-  const fraction = scrub ?? (live ? elapsedFraction(live.position, duration) : 0);
+  const fraction = scrub?.to ?? (live ? elapsedFraction(live.position, duration) : 0);
   const active = live?.status === "playing" || live?.status === "loading";
   const color = live?.status === "error" ? TOMATO : GREEN;
 
@@ -110,19 +123,32 @@ export default function NowPlayingDial({
   const r = c - stroke / 2 - 1;
   const glyph = size * 0.2;
 
+  /** The dial's center on screen, and the ring's inner edge as a radius. */
   const center = (el: HTMLElement) => {
     const box = el.getBoundingClientRect();
-    return { x: box.left + box.width / 2, y: box.top + box.height / 2 };
+    return { x: box.left + box.width / 2, y: box.top + box.height / 2, inner: ((r - stroke / 2) * box.width) / size };
+  };
+
+  /** Every way a gesture ends, the release, a cancel, or a release that
+   *  never arrived, leaves nothing behind: no pending long-press and no clock
+   *  under the dial. Before this, only a drag's own release cleared the clock,
+   *  so one stranded drag kept it up through any number of taps. */
+  const finish = (g: Drag) => {
+    if (g.hold) clearTimeout(g.hold);
+    g.hold = null;
+    if (drag.current === g) drag.current = null;
+    setScrub(null);
   };
 
   const onPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
     if (e.pointerType === "mouse" && e.button !== 0) return;
     e.stopPropagation();
+    if (drag.current) finish(drag.current);
     const g: Drag = {
       pointerId: e.pointerId,
       startX: e.clientX,
       startY: e.clientY,
-      value: fraction,
+      value: null,
       moved: false,
       hold: null,
       held: false,
@@ -142,7 +168,16 @@ export default function NowPlayingDial({
 
   const onPointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
     const g = drag.current;
-    if (!g || g.pointerId !== e.pointerId || g.held) return;
+    if (!g || g.pointerId !== e.pointerId) return;
+    // A move with no button down is a release the dial never heard: let go
+    // outside the window, or after capture was lost. The mouse's pointerId
+    // never changes, so without this, hovering would go on scrubbing. It is
+    // a cancel, not a seek: where the button came up is unknown.
+    if (e.buttons === 0) {
+      finish(g);
+      return;
+    }
+    if (g.held) return;
     if (!g.moved) {
       if (Math.hypot(e.clientX - g.startX, e.clientY - g.startY) <= TAP_SLOP_PX) return;
       g.moved = true;
@@ -152,38 +187,36 @@ export default function NowPlayingDial({
     // Only a loaded track with a known length can be scrubbed; an idle dial
     // still swallows the drag so the list under it doesn't move.
     if (live && duration > 0) {
-      const { x, y } = center(e.currentTarget);
-      g.value = clampFraction(fractionAt(x, y, e.clientX, e.clientY));
-      setScrub(g.value);
+      const { x, y, inner } = center(e.currentTarget);
+      g.value = insideRing(x, y, e.clientX, e.clientY, inner) ? null : clampFraction(fractionAt(x, y, e.clientX, e.clientY));
+      setScrub({ to: g.value });
     }
   };
 
   const onPointerUp = (e: React.PointerEvent<HTMLDivElement>) => {
     const g = drag.current;
     if (!g || g.pointerId !== e.pointerId) return;
-    drag.current = null;
+    finish(g);
     e.stopPropagation();
-    if (g.hold) clearTimeout(g.hold);
     if (g.held) {
       clearSelection();
       return;
     }
     if (g.moved) {
-      if (live && duration > 0) seekTrack(nid, g.value * duration);
-      setScrub(null);
+      if (live && duration > 0 && g.value !== null) seekTrack(nid, g.value * duration);
       return;
     }
     if (live) toggleTrack(nid);
     else if (track) playTrack(track);
   };
 
+  /** A cancel, and a lost capture: capture can go without a release (a
+   *  re-sorted list moves the card's node, which releases it), and the
+   *  `pointerup` then lands elsewhere. After an ordinary release the gesture
+   *  is already finished and this finds nothing to end. */
   const onPointerCancel = (e: React.PointerEvent<HTMLDivElement>) => {
     const g = drag.current;
-    if (g?.pointerId === e.pointerId) {
-      if (g.hold) clearTimeout(g.hold);
-      drag.current = null;
-    }
-    setScrub(null);
+    if (g?.pointerId === e.pointerId) finish(g);
   };
 
   const label = live
@@ -207,6 +240,7 @@ export default function NowPlayingDial({
       onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}
       onPointerCancel={onPointerCancel}
+      onLostPointerCapture={onPointerCancel}
       // A click on the dial is never a click on what holds it (a list card
       // opens its narrative on click); touches are stopped natively, above.
       onClick={(e) => e.stopPropagation()}
@@ -263,7 +297,7 @@ export default function NowPlayingDial({
             zIndex: 2,
           }}
         >
-          {formatClock(scrub * duration)} / {formatClock(duration)}
+          {formatClock(fraction * duration)} / {formatClock(duration)}
         </div>
       )}
     </div>

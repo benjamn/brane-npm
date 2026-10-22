@@ -1495,6 +1495,8 @@ const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(function 
         {/* Keyboard toggle */}
         <button
           onClick={() => setShowKeyboard((v) => !v)}
+          aria-label="On-screen keyboard"
+          aria-pressed={showKeyboard}
           style={{
             padding: "6px 8px",
             borderRadius: 6,

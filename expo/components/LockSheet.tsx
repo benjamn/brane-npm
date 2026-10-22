@@ -36,21 +36,24 @@ export default function LockSheet() {
           )}
           {s.phase === "error" && <Text style={styles.error}>{s.error}</Text>}
           <View style={styles.buttonRow}>
-            <Pressable style={[styles.button, styles.cancelButton]} onPress={dismiss}>
+            <Pressable style={[styles.button, styles.cancelButton]} role="button" onPress={dismiss}>
               <Text style={styles.cancelText}>Not now</Text>
             </Pressable>
             {s.phase === "error" ? (
-              <Pressable style={[styles.button, styles.confirmButton]} onPress={retry}>
+              <Pressable style={[styles.button, styles.confirmButton]} role="button" onPress={retry}>
                 <Text style={styles.confirmText}>Try again</Text>
               </Pressable>
             ) : s.phase === "hopping" ? (
-              <Pressable style={[styles.button, styles.confirmButton]} onPress={retry}>
+              <Pressable style={[styles.button, styles.confirmButton]} role="button" onPress={retry}>
                 <Text style={styles.confirmText}>Open again</Text>
               </Pressable>
             ) : (
               <Pressable
                 style={[styles.button, styles.confirmButton, s.phase !== "ready" && styles.disabled]}
                 disabled={s.phase !== "ready"}
+                role="button"
+                aria-label="Verify"
+                aria-busy={s.phase !== "ready"}
                 onPress={hop}
               >
                 {s.phase === "ready" ? <Text style={styles.confirmText}>Verify</Text> : <ActivityIndicator color="#fff" size="small" />}

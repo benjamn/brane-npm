@@ -48,7 +48,7 @@ function WikiNavRow({
   onPress: () => void;
 }) {
   return (
-    <Pressable onPress={onPress} style={styles.wikiNavItem}>
+    <Pressable onPress={onPress} role="button" style={styles.wikiNavItem}>
       <Text style={styles.wikiNavArrow}>{direction === "up" ? "↑" : "↓"}</Text>
       <View style={{ flex: 1 }}>
         <Text style={styles.wikiNavHeading} numberOfLines={1}>
@@ -263,6 +263,7 @@ export default function WikiReader({
         <Pressable
           onPress={dismiss}
           accessibilityLabel="Close wiki"
+          tabIndex={-1}
           style={StyleSheet.absoluteFill}
         />
         <Animated.View
@@ -289,7 +290,7 @@ export default function WikiReader({
               </Text>
             </Text>
             {loading && data && <ActivityIndicator size="small" color="#8fd4b4" style={styles.wikiReaderBusy} />}
-            <Pressable onPress={dismiss} style={styles.wikiReaderClose}>
+            <Pressable onPress={dismiss} role="button" aria-label="Close wiki" style={styles.wikiReaderClose}>
               <Text style={styles.wikiReaderCloseText}>{"✕"}</Text>
             </Pressable>
           </View>

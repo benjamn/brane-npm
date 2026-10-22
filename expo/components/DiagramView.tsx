@@ -76,6 +76,10 @@ export function DiagramView({ source }: { source: string }) {
   return (
     <div
       className="brane-diagram-host"
+      // The click is delegated to the <a>s inside the SVG; the host is a group
+      // around them, not a control.
+      role="group"
+      aria-label="Diagram"
       onClick={onClick}
       style={{ margin: "6px 0", overflowX: "auto", overflowY: "hidden", overscrollBehaviorX: "contain", maxWidth: "100%" }}
       {...panGuard}

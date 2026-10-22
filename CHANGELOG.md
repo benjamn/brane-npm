@@ -6,6 +6,29 @@ page, which is also what triggers its publish (see
 [docs/releasing.md](docs/releasing.md)). This file is the summary that
 travels in the npm tarball.
 
+## 0.3.8 - 2026-10-22
+
+- The web app works with a screen reader and a keyboard. Every control
+  says what it is: the send 🦋 is "Send", the tab 📌 is "Pin Chat" and says
+  whether it is pressed, the 🦠 is "Narrative menu", the on-screen terminal
+  keys are named. The narrative cards on the list, which a keyboard could
+  not reach before, are links with a tab stop. Markdown headings are real
+  headings, so a long narration can be walked by them, and a message that
+  arrives is announced. The 📋 copy button keeps its look and gains a 24 px
+  hit box. What is still open (pinch zoom, the terminal mirror, contrast)
+  is in `docs/accessibility.md`
+  ([#635](https://github.com/benjamn/brane/pull/635)).
+- The audio dial no longer keeps scrubbing after a release it never heard,
+  as when the mouse is let go outside the window: the drag ends and the
+  playhead stays put. Letting go inside the ring, where a pixel swings the
+  angle a long way, cancels the scrub rather than seeking somewhere
+  arbitrary
+  ([#633](https://github.com/benjamn/brane/pull/633),
+  [#634](https://github.com/benjamn/brane/pull/634)).
+
+Published while the repository is private, so like 0.3.0–0.3.7 it
+carries no npm provenance attestation.
+
 ## 0.3.7 - 2026-10-21
 
 - Operator verification, off until you turn it on. Enroll a passkey or

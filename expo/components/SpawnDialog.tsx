@@ -316,8 +316,8 @@ export default function SpawnDialog({ visible, conn, re, defaultFoldPath, initia
   return (
     <>
     <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
-      <Pressable style={styles.modalOverlay} onPress={onClose}>
-        <Pressable style={styles.modalContent} onPress={() => {}}>
+      <Pressable style={styles.modalOverlay} onPress={onClose} tabIndex={-1}>
+        <Pressable style={styles.modalContent} onPress={() => {}} tabIndex={-1}>
           <Text style={styles.modalTitle}>{re ? `/twin with ${re}` : utilityMode ? "Run utility" : "Spawn agent"}</Text>
 
           <ScrollView style={{ flexGrow: 0 }}>
@@ -459,6 +459,8 @@ export default function SpawnDialog({ visible, conn, re, defaultFoldPath, initia
               </Text>
             )}
 
+            {/* One choice among the folds: a radio group for assistive tech. */}
+            <View role="radiogroup" aria-label="Fold">
             {activeFolds.map((fold) => {
               const selected = fold.path === foldPath;
               return (
@@ -474,6 +476,8 @@ export default function SpawnDialog({ visible, conn, re, defaultFoldPath, initia
                 >
                   <Pressable
                     style={styles.foldRowSelect}
+                    role="radio"
+                    aria-checked={selected}
                     onPress={() => setFoldPath(fold.path)}
                   >
                     <Text style={styles.foldRowDot}>{selected ? "●" : "○"}</Text>
@@ -483,6 +487,7 @@ export default function SpawnDialog({ visible, conn, re, defaultFoldPath, initia
                     <Pressable
                       style={styles.foldRowAction}
                       onPress={() => setMenuFor((cur) => (cur === fold.path ? null : fold.path))}
+                      role="button"
                       accessibilityLabel={`Actions for ${fold.path}`}
                     >
                       <Text style={styles.foldRowActionIcon}>⋯</Text>
@@ -502,6 +507,7 @@ export default function SpawnDialog({ visible, conn, re, defaultFoldPath, initia
                 </View>
               );
             })}
+            </View>
 
             {/* Hidden folds, shown behind a toggle. Archived folds aren't
                 spawnable — only un-hideable — so no selection affordance. */}
@@ -522,6 +528,7 @@ export default function SpawnDialog({ visible, conn, re, defaultFoldPath, initia
                     <Pressable
                       style={styles.foldRowAction}
                       onPress={() => setMenuFor((cur) => (cur === fold.path ? null : fold.path))}
+                      role="button"
                       accessibilityLabel={`Actions for ${fold.path}`}
                     >
                       <Text style={styles.foldRowActionIcon}>⋯</Text>
@@ -542,7 +549,7 @@ export default function SpawnDialog({ visible, conn, re, defaultFoldPath, initia
               ))}
 
             {archivedFolds.length > 0 && (
-              <Pressable onPress={() => setShowHidden((v) => !v)} style={styles.foldTextButton}>
+              <Pressable onPress={() => setShowHidden((v) => !v)} role="button" aria-expanded={showHidden} style={styles.foldTextButton}>
                 <Text style={styles.foldTextButtonLabel}>
                   {showHidden
                     ? "Hide archived"
@@ -567,6 +574,9 @@ export default function SpawnDialog({ visible, conn, re, defaultFoldPath, initia
                 <Pressable
                   style={[styles.addButton, { marginTop: 8 }, (addingFold || !newFoldPath.trim()) && { opacity: 0.5 }]}
                   onPress={handleAddFold}
+                  role="button"
+                  aria-label="Add folder"
+                  aria-busy={addingFold}
                   disabled={addingFold || !newFoldPath.trim()}
                 >
                   {addingFold ? (
@@ -577,7 +587,7 @@ export default function SpawnDialog({ visible, conn, re, defaultFoldPath, initia
                 </Pressable>
               </View>
             ) : (
-              <Pressable style={styles.addFoldButton} onPress={() => setShowAddFold(true)}>
+              <Pressable style={styles.addFoldButton} role="button" onPress={() => setShowAddFold(true)}>
                 <Text style={styles.addFoldButtonText}>+ Add folder</Text>
               </Pressable>
             )}
@@ -588,6 +598,9 @@ export default function SpawnDialog({ visible, conn, re, defaultFoldPath, initia
           <Pressable
             style={[styles.addButton, { marginTop: 12 }, !canSpawn && { opacity: 0.5 }]}
             onPress={handleGo}
+            role="button"
+            aria-label={re ? "/twin" : utilityMode ? "Run" : "Spawn"}
+            aria-busy={spawning}
             disabled={!canSpawn}
           >
             {spawning ? (
@@ -596,7 +609,7 @@ export default function SpawnDialog({ visible, conn, re, defaultFoldPath, initia
               <Text style={styles.addButtonText}>{re ? "/twin" : utilityMode ? "Run" : "Spawn"}</Text>
             )}
           </Pressable>
-          <Pressable style={styles.modalCancel} onPress={onClose}>
+          <Pressable style={styles.modalCancel} role="button" onPress={onClose}>
             <Text style={styles.modalCancelText}>Cancel</Text>
           </Pressable>
         </Pressable>
@@ -610,8 +623,8 @@ export default function SpawnDialog({ visible, conn, re, defaultFoldPath, initia
       animationType="fade"
       onRequestClose={() => setConfirmFold(null)}
     >
-      <Pressable style={styles.modalOverlay} onPress={() => setConfirmFold(null)}>
-        <Pressable style={[styles.modalContent, { maxWidth: 340 }]} onPress={() => {}}>
+      <Pressable style={styles.modalOverlay} onPress={() => setConfirmFold(null)} tabIndex={-1}>
+        <Pressable style={[styles.modalContent, { maxWidth: 340 }]} onPress={() => {}} tabIndex={-1}>
           <Text style={styles.modalTitle}>
             {confirmFold?.toArchived ? "Archive fold?" : "Unarchive fold?"}
           </Text>
@@ -625,6 +638,7 @@ export default function SpawnDialog({ visible, conn, re, defaultFoldPath, initia
           )}
           <Pressable
             style={[styles.addButton, { marginTop: 16 }]}
+            role="button"
             onPress={() => {
               if (confirmFold) handleToggleArchive(confirmFold.fold);
               setConfirmFold(null);
@@ -634,7 +648,7 @@ export default function SpawnDialog({ visible, conn, re, defaultFoldPath, initia
               {confirmFold?.toArchived ? "Archive" : "Unarchive"}
             </Text>
           </Pressable>
-          <Pressable style={styles.modalCancel} onPress={() => setConfirmFold(null)}>
+          <Pressable style={styles.modalCancel} role="button" onPress={() => setConfirmFold(null)}>
             <Text style={styles.modalCancelText}>Cancel</Text>
           </Pressable>
         </Pressable>

@@ -456,7 +456,7 @@ const FilesView = forwardRef<FilesViewHandle, FilesViewProps>(function FilesView
           {breadcrumbs.map((c, i) => (
             <View key={`${c.path}-${i}`} style={styles.breadcrumbItem}>
               {i > 0 && <Text style={styles.breadcrumbSep}>/</Text>}
-              <Pressable onPress={() => onPathChange(c.path)}>
+              <Pressable role="button" onPress={() => onPathChange(c.path)}>
                 <Text style={styles.breadcrumbText}>{c.label}</Text>
               </Pressable>
             </View>
@@ -589,7 +589,7 @@ function RefreshButton({ angle, onPress }: { angle: number; onPress: () => void 
     );
   }
   return (
-    <Pressable onPress={onPress} style={styles.refreshSlot} hitSlop={10} accessibilityLabel="Refresh">
+    <Pressable onPress={onPress} style={styles.refreshSlot} hitSlop={10} role="button" accessibilityLabel="Refresh">
       <RecycleGlyph angle={angle} fontSize={15} />
     </Pressable>
   );
@@ -827,7 +827,7 @@ function SearchBar({
   }
   return (
     <View style={styles.searchBar}>
-      <Pressable onPressIn={toggleFocus} style={styles.searchIconSlot} hitSlop={4} accessibilityLabel={active ? "Close search" : "Open search"}>
+      <Pressable onPressIn={toggleFocus} style={styles.searchIconSlot} hitSlop={4} role="button" accessibilityLabel={active ? "Close search" : "Open search"}>
         <Text style={[
           { fontSize: 20 },
           active && {
@@ -904,7 +904,7 @@ function MatchRow({ match, onPress }: { match: FuzzyMatch; onPress: () => void }
   const dirChars = renderHighlighted(dir, match.indices, 0, "#888");
   const baseChars = renderHighlighted(base, match.indices, baseStart, "#e0e0e0");
   return (
-    <Pressable style={styles.dirItem} onPress={onPress}>
+    <Pressable style={styles.dirItem} role="button" onPress={onPress}>
       <Text style={styles.dirIcon}>📄</Text>
       <Text style={styles.dirName} numberOfLines={1}>
         <Text style={{ color: "#888" }}>{dirChars}</Text>
@@ -956,6 +956,7 @@ function DirectoryListing({
         <Pressable
           key={entry.name}
           style={styles.dirItem}
+          role="button"
           onPress={() => onEntryPress(entry)}
         >
           <Text style={styles.dirIcon}>{entry.is_dir ? "📁" : entry.link !== undefined ? "🔗" : entry.archive ? "📦" : "📄"}</Text>
@@ -1022,6 +1023,7 @@ function FileView({
           // the raw URL carries `?token=`, and a tab navigated to it hands the
           // token to the address bar and to anything saved from that page.
           <Pressable
+            role="button"
             onPress={() => {
               downloadUrl(filesRawUrl(conn, nid, data.path), downloadNameFor(data.path))
                 .catch((err) => console.error("Download failed:", err));
@@ -1038,7 +1040,7 @@ function FileView({
     const url = filesRawUrl(conn, nid, data.path);
     if (Platform.OS === "web") {
       return (
-        <Pressable onPress={() => onImagePress?.(url)}>
+        <Pressable role="button" aria-label="Open image" onPress={() => onImagePress?.(url)}>
           <img src={url} alt={data.path} style={{ maxWidth: "100%", borderRadius: 4, display: "block" }} />
         </Pressable>
       );
@@ -1089,6 +1091,7 @@ function ArchiveBanner({ conn, nid, path, archive }: {
       {notes.map((n) => <Text key={n} style={styles.archiveNote}>{n}</Text>)}
       {atRoot && Platform.OS === "web" && (
         <Pressable
+          role="button"
           onPress={() => {
             downloadUrl(filesRawUrl(conn, nid, archive.root), downloadNameFor(archive.root))
               .catch((err) => console.error("Download failed:", err));

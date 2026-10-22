@@ -26,6 +26,8 @@ export default function NowPlayingRow({ nid }: { nid: string }) {
 
   return (
     <div
+      // Only keeps the dial's taps off the card behind it: not a control.
+      role="presentation"
       onClick={(e) => e.stopPropagation()}
       style={{ display: "flex", flexDirection: "row", alignItems: "center", gap: 10, marginTop: 10 }}
     >

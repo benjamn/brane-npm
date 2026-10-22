@@ -39,6 +39,8 @@ export default function MacroMenu({ onSelect }: MacroMenuProps) {
     <div ref={menuRef} style={{ position: "relative" }}>
       <button
         onClick={() => setOpen((v) => !v)}
+        aria-label="Macros"
+        aria-expanded={open}
         style={{
           padding: "6px 8px",
           borderRadius: 6,

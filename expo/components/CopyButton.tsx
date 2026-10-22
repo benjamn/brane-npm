@@ -19,6 +19,15 @@ export default function CopyButton({
   translateY?: number;
 }) {
   const [copied, setCopied] = useState(false);
+  // A 24 px hit box, however small the glyph: the padding grows the button
+  // to at least 24×24 (WCAG 2.5.8, axe target-size) and the matching negative
+  // margins give that growth back, so nothing beside it moves. The glyph's
+  // natural box is estimated from the font size — 📋 is about 1.1 em wide —
+  // and an underestimate only makes the box larger.
+  const natW = Math.round(size * 1.1) + 2 * padding;
+  const natH = size + 2 * padding;
+  const padX = Math.max(0, Math.ceil((24 - natW) / 2));
+  const padY = Math.max(0, Math.ceil((24 - natH) / 2));
   return (
     <button
       type="button"
@@ -40,9 +49,8 @@ export default function CopyButton({
       style={{
         background: "none",
         border: "none",
-        padding,
-        margin: 0,
-        marginLeft,
+        padding: `${padding + padY}px ${padding + padX}px`,
+        margin: `${-padY}px ${-padX}px ${-padY}px ${marginLeft - padX}px`,
         cursor: "pointer",
         color: copied ? "#66d9a0" : "#888",
         fontSize: size,

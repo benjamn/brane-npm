@@ -6,6 +6,7 @@ import {
   elapsedFraction,
   formatClock,
   fractionAt,
+  insideRing,
 } from "../shared/audio-dial.js";
 
 // The dial is the scrubber, the clock and the progress ring in one, so these
@@ -48,6 +49,16 @@ describe("scrubbing by angle", () => {
     near(scrub(10, 20), 0.5);
     assert.ok(scrub(9.999, 0) > 0.99);
     assert.ok(scrub(10.001, 0) < 0.01);
+  });
+});
+
+describe("insideRing", () => {
+  it("is the disc within the ring's inner edge, where letting go cancels", () => {
+    // A 22px dial: center (11, 11), inner edge 8px out.
+    assert.equal(insideRing(11, 11, 11, 11, 8), true);
+    assert.equal(insideRing(11, 11, 16, 15, 8), true);    // 6.4px out
+    assert.equal(insideRing(11, 11, 11, 3, 8), false);    // on the edge scrubs
+    assert.equal(insideRing(11, 11, 30, 11, 8), false);   // a finger past the dial
   });
 });
 
