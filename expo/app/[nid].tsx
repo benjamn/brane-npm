@@ -45,7 +45,7 @@ import { MessageSelection, useIsSelected, useMessageSelection, useSelectedSeqs }
 import { speakerColor, speakerBgColor } from "@shared/speaker-color";
 import { readRecolorSalt, bumpRecolorSalt } from "@/lib/recolor";
 import { glowHueFor, recolorGlowHue } from "@/lib/glow-hues";
-import { NarrativeMetaLine, NarrativeIdentity } from "@/components/NarrativeMeta";
+import { NarrativeMetaLine, NarrativeIdentity, SUMMARY_LINE_HEIGHT, SUMMARY_MARGIN_TOP } from "@/components/NarrativeMeta";
 import QrModal from "@/components/QrModal";
 import { MarkdownContent } from "@/components/Markdown";
 import { narrativeHref, fileHref, inAppLinkProps } from "@/lib/routes";
@@ -683,6 +683,9 @@ const InputBar = memo(function InputBar({
   );
 });
 
+// How wide the fade over the header's overflowing summary is.
+const HEADER_SUMMARY_FADE_PX = 60;
+
 // Custom in-tree header. Rendered as a plain View inside ChatView's JSX so it
 // lives in our render tree and is fully insulated from expo-router's navigator
 // re-renders. memo() guarantees that changes to unrelated ChatView state
@@ -818,18 +821,30 @@ const NarrativeHeader = memo(function NarrativeHeader({
           />
         ) : null}
         {narrativeSummary ? (
-          <div style={{ position: "relative", marginRight: 8 }}>
+          <div style={{ position: "relative", marginTop: SUMMARY_MARGIN_TOP, marginRight: 8 }}>
             <div className="no-scrollbar" style={{
               overflowX: "auto",
               overflowY: "hidden",
               scrollbarWidth: "none",
               WebkitOverflowScrolling: "touch",
+              // A flex container, not a block: react-native-web's Text is
+              // display: inline, and a block holding an inline gets a strut
+              // from the font it inherits, which no lineHeight on the Text can
+              // undercut. Under a plain <div> that strut was the UA default
+              // 16px serif; inside a role="button" Pressable it is the UA
+              // <button> font (13px Chromium, 11px WebKit). As a flex item the
+              // Text is blockified and its own lineHeight is the row's height,
+              // whatever the container is.
+              display: "flex",
               // Fade the overflow by masking the text, not by painting the
               // background over it, so a glow behind the row shows through.
-              maskImage: `linear-gradient(to right, #000 calc(100% - 60px), transparent)`,
-              WebkitMaskImage: `linear-gradient(to right, #000 calc(100% - 60px), transparent)`,
+              maskImage: `linear-gradient(to right, #000 calc(100% - ${HEADER_SUMMARY_FADE_PX}px), transparent)`,
+              WebkitMaskImage: `linear-gradient(to right, #000 calc(100% - ${HEADER_SUMMARY_FADE_PX}px), transparent)`,
             }}>
-              <Text style={styles.headerSummary}>
+              {/* The fade is on the scroller's box, not its content, so the
+                  text ends in padding as wide as the fade: scrolled to the
+                  end, the last character clears it. */}
+              <Text style={[styles.headerSummary, { paddingRight: HEADER_SUMMARY_FADE_PX }]}>
                 {narrativeSummary}
               </Text>
             </div>
@@ -2404,12 +2419,16 @@ export default function ChatView() {
                         style={{ marginTop: 4 }}
                       />
                       {item.summary && (
-                        <div style={{ position: "relative" }}>
+                        <div style={{ position: "relative", marginTop: SUMMARY_MARGIN_TOP }}>
                           <div className="no-scrollbar" style={{
                             overflowX: "auto",
                             overflowY: "hidden",
                             scrollbarWidth: "none",
                             WebkitOverflowScrolling: "touch",
+                            // See the header's summary scroller: a flex
+                            // container, so the row is the Text's lineHeight
+                            // and not a strut from the <button> around it.
+                            display: "flex",
                             // Fade the overflow by masking the text, not by painting the
                             // background over it, so a glow behind the row shows through.
                             maskImage: `linear-gradient(to right, #000 calc(100% - 40px), transparent)`,
@@ -2621,7 +2640,7 @@ const styles = StyleSheet.create({
   headerSummary: {
     color: "#9a9aa0",
     fontSize: 12,
-    lineHeight: 12,
+    lineHeight: SUMMARY_LINE_HEIGHT,
     whiteSpace: "nowrap",
   },
   list: {
@@ -2955,7 +2974,7 @@ const styles = StyleSheet.create({
   switcherItemSummary: {
     color: "#9a9aa0",
     fontSize: 12,
-    lineHeight: 12,
+    lineHeight: SUMMARY_LINE_HEIGHT,
     whiteSpace: "nowrap",
   },
   switcherEmpty: {

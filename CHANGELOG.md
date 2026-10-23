@@ -6,6 +6,21 @@ page, which is also what triggers its publish (see
 [docs/releasing.md](docs/releasing.md)). This file is the summary that
 travels in the npm tarball.
 
+## 0.3.9 - 2026-10-23
+
+- The summary line under a narrative's header, on its list card and in the
+  switcher sits where it belongs again: 0.3.8 had put it against the line
+  above, touching it on iOS. Making the header a real button for the screen
+  reader had let the browser's button font set the row's height; the row now
+  declares its own, and the gap matches the one above it on each surface
+  ([#638](https://github.com/benjamn/brane/pull/638)).
+- In the header the summary is left-aligned, and scrolling it to the end
+  brings the last word out from under the fade
+  ([#637](https://github.com/benjamn/brane/pull/637)).
+
+Published while the repository is private, so like 0.3.0–0.3.8 it
+carries no npm provenance attestation.
+
 ## 0.3.8 - 2026-10-22
 
 - The web app works with a screen reader and a keyboard. Every control

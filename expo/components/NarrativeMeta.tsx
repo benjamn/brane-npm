@@ -185,6 +185,23 @@ export function NarrativeIdentity({
   );
 }
 
+/** The summary line's height on all three surfaces (list card, page header,
+ *  switcher). It is the row's height outright, because each summary scroller
+ *  is a flex container (see the header's in [nid].tsx) and not a block with a
+ *  strut. 16 for 12px text: the glyph box is ~15px tall and the scroller
+ *  clips vertically, so 12 — what it said from 2026-07-13 on, and was
+ *  never in effect because a strut always overrode it — would clip
+ *  descenders. */
+export const SUMMARY_LINE_HEIGHT = 16;
+
+/** The summary scroller's gap above, on the same three surfaces. 3, not the
+ *  meta line's 4: the gaps that should match are between the *text* edges,
+ *  and the meta line's 4px box margin reads as 3px under the id's glyphs
+ *  because the identity row is taller than its text. With a 16px row around
+ *  12px text, 3px of margin puts the summary's text 3px under the meta's in
+ *  both Chromium and WebKit — what the operator picked as even. */
+export const SUMMARY_MARGIN_TOP = 3;
+
 const styles = StyleSheet.create({
   row: { flexDirection: "row", alignItems: "center" },
   dot: { width: 8, height: 8, borderRadius: 4, marginRight: 10 },

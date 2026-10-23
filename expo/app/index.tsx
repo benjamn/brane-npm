@@ -19,7 +19,7 @@ import { narrativeMenuItems, openNarrativeExport, revivesAsTwin } from "@/compon
 import { bumpRecolorSalt } from "@/lib/recolor";
 import { glowHueFor, recolorGlowHue } from "@/lib/glow-hues";
 import { menuHueRgb, type MenuHue } from "@/components/MenuPanel";
-import { NarrativeMetaLine, NarrativeIdentity } from "@/components/NarrativeMeta";
+import { NarrativeMetaLine, NarrativeIdentity, SUMMARY_LINE_HEIGHT, SUMMARY_MARGIN_TOP } from "@/components/NarrativeMeta";
 import {
   fetchNarratives,
   fetchFolds,
@@ -75,6 +75,18 @@ const KEYED_SCROLL_SETTLE_MS = 400;
 function NarrativeCell({ index, style, ...cellProps }: { index: number; style?: any; [k: string]: any }) {
   return <View {...cellProps} style={[style, { zIndex: 100000 - index, position: "relative" }]} />;
 }
+
+// How wide the fade over a card's overflowing summary is.
+const SUMMARY_FADE_PX = 40;
+
+// The card's summary sits 6px under its meta line, not the header's and
+// switcher's SUMMARY_MARGIN_TOP: the card's identity row also holds the
+// status <button> (12px text, 4px of padding above and below), which makes
+// that row 22–23px tall around 17px id glyphs, so the id→meta *text* gap on
+// a card is 5.5px (Chromium) / 6px (WebKit) rather than 3. Measured in both
+// engines on a copy of the card DOM: 6 here puts the summary's text the same
+// distance under the meta's as the meta's is under the id's.
+const CARD_SUMMARY_MARGIN_TOP = SUMMARY_MARGIN_TOP + 3;
 
 function NarrativeCard({
   item,
@@ -287,18 +299,25 @@ function NarrativeCard({
           style={{ marginTop: 4 }}
         />
         {item.summary && (
-          <div style={{ position: "relative", marginTop: 4 }}>
+          <div style={{ position: "relative", marginTop: CARD_SUMMARY_MARGIN_TOP }}>
             <div className="no-scrollbar" style={{
               overflowX: "auto",
               overflowY: "hidden",
               scrollbarWidth: "none",
               WebkitOverflowScrolling: "touch",
+              // A flex container, so the row is the Text's lineHeight and not
+              // a strut from the font this card inherits (see the narrative
+              // header's summary scroller in [nid].tsx).
+              display: "flex",
               // Fade the overflow by masking the text, not by painting the
               // background over it, so a glow behind the row shows through.
-              maskImage: `linear-gradient(to right, #000 calc(100% - 40px), transparent)`,
-              WebkitMaskImage: `linear-gradient(to right, #000 calc(100% - 40px), transparent)`,
+              maskImage: `linear-gradient(to right, #000 calc(100% - ${SUMMARY_FADE_PX}px), transparent)`,
+              WebkitMaskImage: `linear-gradient(to right, #000 calc(100% - ${SUMMARY_FADE_PX}px), transparent)`,
             }}>
-              <Text style={[styles.summary, { marginTop: 0, whiteSpace: "nowrap" }]}>{item.summary}</Text>
+              {/* The fade is on the scroller's box, not its content, so the
+                  text ends in padding as wide as the fade: scrolled to the
+                  end, the last character clears it. */}
+              <Text style={[styles.summary, { marginTop: 0, whiteSpace: "nowrap", paddingRight: SUMMARY_FADE_PX }]}>{item.summary}</Text>
             </div>
           </div>
         )}
@@ -2400,7 +2419,7 @@ const styles = StyleSheet.create({
     color: "#9a9aa0",
     fontSize: 12,
     marginTop: 4,
-    lineHeight: 12,
+    lineHeight: SUMMARY_LINE_HEIGHT,
   },
   status: {
     fontSize: 12,

@@ -88,6 +88,27 @@ a prop combination produces.
   sits in. So giving a Pressable a role also makes a tap on it *not* select
   its pane, which is right for a control and a (small) change for the Files
   view's directory rows, which were pane surface before.
+- **A real `<button>` brings the UA stylesheet's button font with it.**
+  RNW's View reset covers box properties (margin, padding, border,
+  display) and not `font`, `line-height`, `text-align` or `color`, so
+  inside a `role="button"` Pressable those are the browser's
+  `<button>` defaults: `font: -webkit-small-control` (13.33px in
+  Chromium, 11px in WebKit), `line-height: normal`, `text-align:
+  center`. RNW `Text` sets its own font and color, so text is unaffected
+  — but a plain `<div>` holding an inline `Text` is a block with a
+  *strut* from the font it inherits, and the line box can never be shorter
+  than that strut, whatever `lineHeight` the Text declares. That is how
+  #635 shrank the narrative header's summary row: the row's height had
+  only ever been the `<body>` default 16px serif strut (≈18px), the
+  `lineHeight: 12` on the Text never in effect; as a `<button>` child the
+  strut became 15px (Chromium) / 13px (WebKit) and the summary landed on
+  the meta line. #637 patched the `text-align` half of the same leak
+  without seeing the other half. The fix made the three summary
+  scrollers flex containers (`SUMMARY_LINE_HEIGHT`, `NarrativeMeta.tsx`):
+  a flex item is blockified, has no strut, and its own `lineHeight` is
+  the row. The rule: **a raw `<div>` with inline `Text` inside a
+  Pressable takes its line box from the Pressable's element**, so give
+  it `display: flex` (or make it a `View`) and declare the height.
 - **`focusable={false}` does nothing on a `Pressable`.** Not because RNW
   drops the prop (`createDOMProps` honors it on a plain `View`) but because
   RNW's `Pressable` sets `tabIndex` itself, `disabled ? -1 : 0`
