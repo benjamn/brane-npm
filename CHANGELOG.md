@@ -6,6 +6,20 @@ page, which is also what triggers its publish (see
 [docs/releasing.md](docs/releasing.md)). This file is the summary that
 travels in the npm tarball.
 
+## 0.3.10 - 2026-10-25
+
+- On a phone held in landscape, the narrative screen drops its header
+  and the tab bar becomes the top row, so the chat and terminal get the
+  height back. Pins and split panes work as before. The header returns
+  as it was when the phone turns back to portrait. Desktop windows and
+  tablets keep the header at any shape: the test is the device, not the
+  window. The terminal's quick bar also loses the empty band under its
+  keys, where it had added the bottom safe-area inset a second time
+  ([#507](https://github.com/benjamn/brane/pull/507)).
+
+Published while the repository is private, so like 0.3.0–0.3.9 it
+carries no npm provenance attestation.
+
 ## 0.3.9 - 2026-10-23
 
 - The summary line under a narrative's header, on its list card and in the

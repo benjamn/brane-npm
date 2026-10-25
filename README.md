@@ -4,7 +4,7 @@ Brane provides a [web-based remote management interface](https://brane.organelle
 
 The "intelligent" TUI applications demonstrate their intelligence by using brane's local MCP tools: `whoami`, `narrate`, `listen` and the rest, to implement a protocol for ongoing, purposeful conversation (the "LIVE loop") recorded automatically to a permanent, fully agent-searchable record that remains completely private to the host machine.
 
-Unlike a lot of other remote-coding tools, which let you chat with your agents and accept/deny permissions prompts, brane also _mirrors the terminal of the running agent_, so you can effortlessly observe your agents working from any mobile device, with the full power of a software keyboard and touch inputs for interacting with the terminal from afar, whenever you need that level of control.
+Unlike a lot of other remote-coding tools, which let you chat with your agents and accept/deny permissions prompts, brane also _mirrors the terminal of the running agent_, so you can keep ambient tabs on your agents working from any mobile device, with the full power of a software keyboard and touch inputs for interacting with the terminal from afar, whenever you need that level of control.
 
 You can use brane from any web-capable device, anywhere in the world, but you must do so via [Tailscale](https://tailscale.com), which makes your private global network fully invisible/useless to anyone else, the best possible network security posture. Requiring you to install Tailscale first would be a dubious pitch for any consumer product, but brane is not a product.
 
@@ -14,7 +14,7 @@ You can use brane from any web-capable device, anywhere in the world, but you mu
 
 I am not paid to work on brane, except by your donations. Brane is not a product. No one is watching you use it, and no one can stand in the way of your continued use of the software as downloaded, even if all maintenance ceases.
 
-If you find brane useful, perhaps because your tastes align with mine and I have aligned brane relentlessly to my tastes, please consider supporting brane's development so it may remain unencumbered by centralization, surveillance, or required payment:
+If you find brane useful, perhaps because your tastes align with mine and I have aligned brane relentlessly to my tastes, please consider supporting brane's development so it may remain in active development, unencumbered by centralization, surveillance, or required payment:
 
 [![Sponsor](https://img.shields.io/badge/Sponsor-%E2%9D%A4-ea4aaa?logo=githubsponsors)](https://github.com/sponsors/benjamn)
 

@@ -41,6 +41,7 @@ import type { JukeboxTrack } from "@shared/now-playing";
 import { narrativeMenuItems, openNarrativeExport, revivesAsTwin } from "@/components/NarrativeMenu";
 import type { ExportScope } from "@shared/narrative-menu";
 import { isAwaiting, awaitingGlow, AWAITING_STATUS, NOT_AWAITING_STATUS } from "@shared/narrative-status";
+import { usePhoneLandscape } from "@/lib/phoneLandscape";
 import { MessageSelection, useIsSelected, useMessageSelection, useSelectedSeqs } from "@/lib/selection";
 import { speakerColor, speakerBgColor } from "@shared/speaker-color";
 import { readRecolorSalt, bumpRecolorSalt } from "@/lib/recolor";
@@ -692,6 +693,8 @@ const HEADER_SUMMARY_FADE_PX = 60;
 // (activeTab, pinnedTabs, events, etc.) do not re-render this subtree.
 type NarrativeHeaderProps = {
   nid: string;
+  /** A phone held in landscape: the tab bar is the top row instead. */
+  hidden: boolean;
   narrativeSummary: string | null;
   narrativeFoldPath: string | null;
   narrativeRole: string | null;
@@ -732,6 +735,7 @@ type NarrativeHeaderProps = {
 
 const NarrativeHeader = memo(function NarrativeHeader({
   nid,
+  hidden,
   narrativeSummary,
   narrativeFoldPath,
   narrativeRole,
@@ -795,7 +799,9 @@ const NarrativeHeader = memo(function NarrativeHeader({
 
   return (
     <View
-      style={[styles.header, styles.glowTransition, glow ? ({ boxShadow: glow } as any) : null]}
+      // Hidden, not unmounted, so rotating back finds it as it was: an open
+      // 🦠 menu stays open.
+      style={[styles.header, styles.glowTransition, glow ? ({ boxShadow: glow } as any) : null, hidden && styles.headerHidden]}
       {...swipeHandlers}
     >
       <Pressable
@@ -1032,6 +1038,10 @@ export default function ChatView() {
   // during a navigation transition (persist runs before restore in the commit).
   const tabsRestoredNidRef = useRef<string | null>(null);
   const [activeTab, setActiveTab] = useState<Tab>(() => parseActiveTab(tabParam));
+  // A phone in landscape hides the header, so the tab bar is the top row.
+  // Never on desktop, whatever the window's shape — see
+  // src/shared/phone-landscape.ts.
+  const phoneLandscape = usePhoneLandscape();
   const [pinnedTabs, setPinnedTabs] = useState<Set<Tab>>(() => parsePinnedTabs(pinnedParam));
 
   // When navigating to a different narrative, sync file state from the URL.
@@ -2116,6 +2126,7 @@ export default function ChatView() {
       <Stack.Screen options={HIDE_NAV_HEADER} />
       <NarrativeHeader
         nid={nid!}
+        hidden={phoneLandscape}
         narrativeSummary={narrativeSummary}
         narrativeFoldPath={narrativeFoldPath}
         narrativeRole={narrativeRole}
@@ -2553,6 +2564,9 @@ const styles = StyleSheet.create({
     borderBottomColor: "rgb(216, 216, 216)",
     position: "relative",
     zIndex: 10,
+  },
+  headerHidden: {
+    display: "none",
   },
   tabBar: {
     flexDirection: "row",

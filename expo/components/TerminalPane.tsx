@@ -1482,8 +1482,10 @@ const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(function 
           flexDirection: "row",
           justifyContent: "center",
           gap: 8,
+          // No safe-area padding here: #root already pads the whole app by
+          // env(safe-area-inset-bottom), and adding it again left an empty
+          // band under the keys (34pt in portrait on a Face ID iPhone).
           padding: "6px 8px",
-          paddingBottom: "max(6px, env(safe-area-inset-bottom))" as any,
           minHeight: 53,
           boxSizing: "border-box",
           backgroundColor: "#1a1a1a",
