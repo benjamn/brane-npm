@@ -1,9 +1,10 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import WebSocket from "ws";
-import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { createTestDb } from "./helpers.js";
 import { adoptBindTokens } from "../db/tokens.js";
 import { appendEvent, readEventsSince, readEvents, getMaxSeq } from "../db/events.js";
@@ -18,6 +19,7 @@ import {
   maybeCaptureSessionId,
   recordSessionId,
   getSessionIds,
+  whoamiResult,
 } from "../daemon/server.js";
 import { buildAgentArgs } from "../commands/spawn.js";
 import { getAgentAdapter, discoverCodexSession } from "../agents.js";
@@ -186,6 +188,50 @@ describe("MCP whoami logic", () => {
     const db = createTestDb();
     const braneId = getBraneId(db);
     assert.equal(braneId, "brane-test");
+  });
+
+  it("reports the narrative's fold, agent and role, and brane's install_dir", () => {
+    const db = createTestDb();
+    db.prepare(
+      `INSERT INTO narratives (id, brane_id, fold_path, agent_type, role, created_at, status)
+       VALUES ('claude-who00001', 'brane-test', '/work/fold', 'claude', 'worker', 0, 'active')`,
+    ).run();
+    const result = whoamiResult(db, "claude-who00001", "brane-test", "/opt/brane/lib/../brane");
+    assert.deepEqual(result, {
+      narrative_id: "claude-who00001",
+      brane_id: "brane-test",
+      fold_dir: "/work/fold",
+      agent_type: "claude",
+      role: "worker",
+      // Resolved, so an agent can join paths onto it as written.
+      install_dir: "/opt/brane/brane",
+    });
+  });
+
+  it("reports install_dir even for a narrative with no row (an external client)", () => {
+    const db = createTestDb();
+    const result = whoamiResult(db, "claude-nobody00", "brane-test", "/opt/brane");
+    assert.equal(result.install_dir, "/opt/brane");
+    assert.equal(result.fold_dir, undefined);
+  });
+
+  // The prelude sends every agent to install_dir for brane's docs. Pin that
+  // what it names there actually ships, against the real install the daemon
+  // would report (dist/test/ → two levels up), not a fixture.
+  it("defaults install_dir to an install that holds the docs the prelude names", () => {
+    const db = createTestDb();
+    const installDir = whoamiResult(db, "claude-nobody00", "brane-test").install_dir as string;
+    assert.equal(installDir, join(dirname(fileURLToPath(import.meta.url)), "..", ".."));
+    const prelude = readFileSync(join(installDir, "protocols", "prelude.md"), "utf-8");
+    assert.match(prelude, /`install_dir` that `whoami` reports/);
+    for (const name of ["AGENTS.md", "docs", "SECURITY.md", "DESIGN.md"]) {
+      assert.match(prelude, new RegExp("`" + name.replace(".", "\\.")));
+      assert.ok(existsSync(join(installDir, name)), `${name} should exist under install_dir`);
+    }
+    const files = JSON.parse(readFileSync(join(installDir, "package.json"), "utf-8")).files as string[];
+    for (const name of ["AGENTS.md", "docs", "SECURITY.md", "DESIGN.md", "protocols"]) {
+      assert.ok(files.includes(name), `package.json "files" should ship ${name}`);
+    }
   });
 });
 

@@ -62,6 +62,15 @@ exact message. Prose like "seq 42" is not linkified; always use the
 `nid:seq` format when citing specific events. A `/name` that matches a
 protocol (e.g. /LIVE_loop) links to that protocol, too.
 
+### Brane's own documentation
+
+Brane ships its documentation with every install, under the
+`install_dir` that `whoami` reports. `AGENTS.md` there is the index:
+the rules for every change, and a line per subsystem pointing into
+`docs/`. `SECURITY.md` and `DESIGN.md` sit beside it. When a question
+is about brane itself (how a tool behaves, why the daemon does
+something), read the relevant page(s) there rather than guessing.
+
 ### Protocol precedence
 
 Protocol documents are the canonical source of operational

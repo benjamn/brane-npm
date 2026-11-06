@@ -6,6 +6,23 @@ page, which is also what triggers its publish (see
 [docs/releasing.md](docs/releasing.md)). This file is the summary that
 travels in the npm tarball.
 
+## 0.3.11 - 2026-11-06
+
+- GraphQL fences highlight a federated schema correctly: `extend schema
+  @link(...)` with no body no longer swallows the next definition, and `"""`
+  block strings in values are colored as strings, not descriptions
+  ([#645](https://github.com/benjamn/brane/pull/645)).
+- The tool-use group's ⚙ summary line is a tap target only as wide as its
+  text, so a tap beside it deselects instead of toggling the group
+  ([#646](https://github.com/benjamn/brane/pull/646)).
+- `whoami` reports `install_dir`, and the protocol prelude points agents at
+  `AGENTS.md`, `docs/`, `SECURITY.md` and `DESIGN.md` there. The field
+  appears once the daemon restarts on this version
+  ([#648](https://github.com/benjamn/brane/pull/648)).
+
+Published while the repository is private, so like 0.3.0–0.3.10 it
+carries no npm provenance attestation.
+
 ## 0.3.10 - 2026-10-25
 
 - On a phone held in landscape, the narrative screen drops its header

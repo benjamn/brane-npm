@@ -249,7 +249,7 @@ function PanArea({ children }: { children: React.ReactNode }) {
     );
   }
   return (
-    <div style={{ overflowX: "auto", overflowY: "hidden" }} {...panGuard}>
+    <div style={{ overflowX: "auto", overflowY: "hidden" }} data-chrome="tools" {...panGuard}>
       {/* Every row stretches to the *widest* row rather than to its own
           content. That is what keeps the trailing status column at one x for
           the whole group at every scroll offset — sticky pins an element
@@ -346,12 +346,15 @@ export default function ToolUseGroup({
   if (visible.length === 0) return null;
 
   return (
-    // `data-chrome` opts this group out of the chat's tap-in-negative-space
-    // deselect: expanding a tool row is interacting with the list, not
-    // dismissing what you had selected.
-    <View style={styles.container} dataSet={{ chrome: "tools" }} onLayout={(e) => setPaneWidth(e.nativeEvent.layout.width)}>
+    // `data-chrome` opts the group's *controls* out of the chat's
+    // tap-in-negative-space deselect: expanding a tool row is interacting with
+    // the list, not dismissing what you had selected. It sits on the summary
+    // button and the pan area, not on this container, so the blank space
+    // beside the summary line is still negative space and still deselects.
+    <View style={styles.container} onLayout={(e) => setPaneWidth(e.nativeEvent.layout.width)}>
       <Pressable
         role="button"
+        dataSet={{ chrome: "tools" }}
         aria-expanded={expanded}
         onPress={() => {
           userToggledRef.current = true;
@@ -588,9 +591,14 @@ const styles = StyleSheet.create({
     paddingTop: 4,
     paddingBottom: 10,
   },
+  // Hugs its content rather than stretching across the column: the tap target
+  // is the ⚙ and the summary text, not the empty width beside them, where a
+  // tap meant to deselect a message used to toggle the group instead.
   summaryRow: {
     flexDirection: "row",
     alignItems: "center",
+    alignSelf: "flex-start",
+    maxWidth: "100%",
   },
   row: {
     flexDirection: "row",

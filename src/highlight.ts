@@ -2,6 +2,7 @@ import { extname } from "node:path";
 import { createHash } from "node:crypto";
 import { createHighlighter, bundledLanguages, type Highlighter, type LanguageRegistration, type ThemedToken } from "shiki";
 import { ebnf as ebnfGrammar } from "./grammars/ebnf.js";
+import { loadGraphql } from "./grammars/graphql.js";
 
 export const HIGHLIGHT_THEME = "github-dark-default";
 
@@ -157,7 +158,9 @@ let highlighterP: Promise<Highlighter> | null = null;
 
 async function getHighlighter(): Promise<Highlighter> {
   if (!highlighterP) {
-    highlighterP = createHighlighter({ themes: [HIGHLIGHT_THEME], langs: CUSTOM_GRAMMARS });
+    highlighterP = loadGraphql().then((graphql) =>
+      createHighlighter({ themes: [HIGHLIGHT_THEME], langs: [...CUSTOM_GRAMMARS, ...graphql] }),
+    );
   }
   return highlighterP;
 }

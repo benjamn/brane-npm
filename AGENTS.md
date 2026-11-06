@@ -288,6 +288,13 @@ change one of those, read its doc first.
   the machine with the OS's own prompt (macOS, Windows Hello from Windows or
   WSL, polkit); the gate it puts on meld, a device's sign-out and rotation
   from the shell, and why agents are refused them.
+- [Tailscale, TLS and the Listeners](docs/tailscale.md) (`src/tailscale.ts`,
+  `src/tls.ts`, `src/daemon/cert-manager.ts`,
+  `src/daemon/tailscale-rebind.ts`, `buildMeldUrl` in
+  `src/commands/meld.ts`): what listens and what the kernel refuses, the
+  re-probe policy, certificate provisioning, renewal and hot reload, the
+  HTTP fallback, why meld never advertises a LAN address, running
+  Tailscale beside WARP and in containers.
 - [Session Affinity](docs/session-affinity.md) (`src/session-affinity.ts`):
   the `X-Session-Affinity` header for claude sessions on Fireworks.
 - [Doctor](docs/doctor.md) (`src/commands/doctor.ts`, `src/test/`): `brane

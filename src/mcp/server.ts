@@ -184,7 +184,9 @@ const TOOLS: McpToolDefinition[] = [
   },
   {
     name: "whoami",
-    description: "Get your narrative ID, brane ID, fold directory, agent type, and role.",
+    description:
+      "Get your narrative ID, brane ID, fold directory, agent type, and role, and the directory brane is installed in " +
+      "(`install_dir`), where its own documentation lives.",
     inputSchema: {
       type: "object",
       properties: {},

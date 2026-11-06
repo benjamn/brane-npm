@@ -1,5 +1,10 @@
 # Why Tailscale
 
+> The mechanism — certificate provisioning and renewal, the listeners
+> and their re-probing, the HTTP fallback, meld's host preference —
+> is documented in [docs/tailscale.md](../docs/tailscale.md), which
+> is kept with the code. This page is the argument.
+
 Tailscale is not incidental plumbing for brane. It is the condition
 that makes the rest of the architecture possible. The operator's own
 crystallization, from early in brane's design:
@@ -55,8 +60,9 @@ are backstops. The actual isolation is in Tailscale's routing model.
 
 ## The QR-code argument
 
-`brane meld` displays a QR code containing the daemon's URL and its
-bearer token (`src/commands/meld.ts`). That's a convenience for
+`brane meld` displays a QR code containing the daemon's URL and a
+bearer token minted for that one device (`src/commands/meld.ts`; the
+daemon keeps only its hash, and a QR nobody scans lapses). That's a convenience for
 onboarding a phone in one scan — and it's the feature that most visibly
 depends on Tailscale being the trust boundary. The exchange that
 produced SECURITY.md's two-factor framing [claude-0c9d425b:10]:
@@ -74,7 +80,7 @@ produced SECURITY.md's two-factor framing [claude-0c9d425b:10]:
 Without Tailscale, the QR code is **single-factor**: one glance gives
 an attacker the hostname and the token, and the network path is open
 (SECURITY.md "Without Tailscale", claude-0c9d425b:10). The token travels in cleartext
-HTTP headers on the same LAN that any coffee-shop patron shares. No
+on the same LAN that any coffee-shop patron shares. No
 cryptographic primitive in brane changes this; it is a property of how
 the secret is presented (visually, all-at-once) and what networks are
 reachable (everyone on the subnet).
@@ -310,7 +316,7 @@ longer-form version of:
 > model."*
 
 Everything brane does to harden the daemon (TCP-level IP filter,
-128-bit bearer token, TLS on the hostname) is hardening
+256-bit bearer token, stored as a hash, TLS on the hostname) is hardening
 that assumes the network path is already narrowed. Tailscale is what
 narrows it.
 

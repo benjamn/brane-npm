@@ -155,7 +155,8 @@ distinguishes:
 
 Some of these biases are fully expressed in the current implementation;
 others exist as architectural intent without the code or practice
-that would activate them (status column current as of August 2026).
+that would activate them (status column last checked August 2026;
+treat it as a dated snapshot, not a live view).
 Naming both honestly is part of the same discipline that named the
 record-keeping ontology above.
 
@@ -356,9 +357,11 @@ understanding does.
 
 Each page in `wiki/` exists because the operator authorized its
 creation through `/wiki seed <name>.md` (or equivalent imperative
-guidance). The pages live in the same flat directory as
-`sedimentary-superintelligence.md`, `why-tailscale.md`, and the rest;
-their internal links point only at pages that already exist. The
+guidance). The pages live in one flat directory plus its one
+subdirectory, `shared/`, which is the publication unit: a page's
+place decides who can reach it, never what kind of page it is
+([wiki](../docs/wiki.md)). Their internal links point only at pages
+that already exist. The
 disciplines described in [premature-ontologies](shared/premature-ontologies.md)
 — operator owns the ontology, agents fill but do not invent,
 free-form text, inline provenance — are the rules that produced this

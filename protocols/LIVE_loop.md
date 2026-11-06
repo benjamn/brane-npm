@@ -349,7 +349,7 @@ holds; this table says only what each tool is *for*.
 |------|-----------------|
 | `narrate` | Vocalize — your only voice. The events it returns are a receipt, not a poll; read before you speak. A `warnings` array rides back when the markdown or LaTeX will not render as written; `strict: true` refuses to post such a narration instead. `wait: true` posts and then listens, in one call. |
 | `listen` | Block until signals arrive — your idle state. Timeouts are normal; call again. With `wait: false`, your read-before-you-speak check. |
-| `whoami` | Get your narrative ID, brane ID, fold, agent type, and role — and any /mentions of you, without settling them. Your first call after a restart. |
+| `whoami` | Get your narrative ID, brane ID, fold, agent type, role, and brane's `install_dir` — and any /mentions of you, without settling them. Your first call after a restart. |
 | `revive` | Restart a dead agent session (idempotent). |
 | `narrative_search`, `narrative_info`, `list_branes` | Find and inspect other narratives and branes — see /memory. |
 | `list_protocols`, `read_protocol` | List and read protocol documents. |

@@ -5579,6 +5579,44 @@ function normalizeCursors(raw: unknown, paramName: string, defaultValue?: Record
   throw new Error(`Invalid ${paramName} parameter: expected number or object, got ${typeof raw}`);
 }
 
+/**
+ * `whoami`'s result. The recovery surface: delivery elsewhere is at-most-once —
+ * a tool result can be dropped by a socket closing mid-flight — so `whoami`
+ * reports mentions *without* settling anything: it is the call a restarted
+ * agent makes before it has any cursor, and the one to reach for when
+ * something might have been missed.
+ *
+ * `install_dir` is where this daemon's package lives. The prelude points every
+ * agent there for brane's own documentation (`AGENTS.md`, `docs/`, which ship
+ * in the tarball); it is the one place an agent in another fold can learn it.
+ */
+export function whoamiResult(
+  db: Database.Database,
+  narrativeId: string,
+  braneId: string,
+  installDir: string = INSTALL_DIR,
+): Record<string, unknown> {
+  const row = db.prepare("SELECT fold_path, agent_type, role FROM narratives WHERE id = ?").get(narrativeId) as
+    | { fold_path: string | null; agent_type: string | null; role: string | null }
+    | undefined;
+  const recent = allMentions(db, narrativeId, mentionReceiptLimit(db), braneId);
+  const owed = pendingMentions(db, narrativeId, mentionReceiptLimit(db), braneId);
+  return {
+    narrative_id: narrativeId,
+    brane_id: braneId,
+    ...(row && {
+      fold_dir: row.fold_path ? fromPortablePath(row.fold_path) : undefined,
+      agent_type: row.agent_type ?? undefined,
+      role: row.role ?? undefined,
+    }),
+    install_dir: resolve(installDir),
+    // Absent when there are none, so a brane with no mentions in play
+    // gets the response it always did.
+    ...(recent.length > 0 && { mentions: recent }),
+    ...(owed.total > 0 && { mentions_pending: owed.total }),
+  };
+}
+
 function handleMcpToolCall(
   client: McpBridgeClient,
   db: Database.Database,
@@ -5653,29 +5691,7 @@ function handleMcpToolCall(
         break;
       }
       case "whoami": {
-        const row = db.prepare("SELECT fold_path, agent_type, role FROM narratives WHERE id = ?").get(client.narrativeId) as
-          | { fold_path: string | null; agent_type: string | null; role: string | null }
-          | undefined;
-        // The recovery surface. Delivery elsewhere is at-most-once — a tool
-        // result can be dropped by a socket closing mid-flight — so `whoami`
-        // reports mentions *without* settling anything: it is the call a
-        // restarted agent makes before it has any cursor, and the one to reach
-        // for when something might have been missed.
-        const recent = allMentions(db, client.narrativeId, mentionReceiptLimit(db), braneId);
-        const owed = pendingMentions(db, client.narrativeId, mentionReceiptLimit(db), braneId);
-        sendToolResult(client.ws, callId, {
-          narrative_id: client.narrativeId,
-          brane_id: braneId,
-          ...(row && {
-            fold_dir: row.fold_path ? fromPortablePath(row.fold_path) : undefined,
-            agent_type: row.agent_type ?? undefined,
-            role: row.role ?? undefined,
-          }),
-          // Absent when there are none, so a brane with no mentions in play
-          // gets the response it always did.
-          ...(recent.length > 0 && { mentions: recent }),
-          ...(owed.total > 0 && { mentions_pending: owed.total }),
-        });
+        sendToolResult(client.ws, callId, whoamiResult(db, client.narrativeId, braneId));
         break;
       }
       case "revive": {

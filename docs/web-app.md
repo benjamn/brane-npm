@@ -13,7 +13,23 @@ The Expo app runs as a web PWA served by the daemon (and optionally via Cloudfla
 - **Markdown link handling** — `MarkdownLinksProvider` (`components/MarkdownLinks.tsx`) is mounted once per screen and supplies `knownNarrativeIds`, `knownProtocols` (defaulting to `useBrane().protocols`), `onNarrativePress`, and `onProtocolPress` to every `MarkdownContent` beneath it, so chat bubbles, Files-tab markdown, and the wiki reader linkify `nid:seq` and `/command` identically without threading props. Nested providers override only the fields they set (the wiki modal wraps itself to close before navigating); explicit props on `MarkdownContent` still win
 - **Tabs** — Chat / Terminal / Files. The active tab plus any **pinned** tabs render simultaneously; the set persists per narrative in storage and round-trips through the `tab` and `pinned` URL params. Tapping into a visible pane selects it *without changing which panes are visible* and never unpins anything — a pin comes off only through its 📌 (`selectPane`, `src/shared/pane-layout.ts`), and a press on a control — a quick key, a menu, a copy button — selects nothing at all: selection runs on `pointerdown`, so a pane that widens under the finger slides the button away before the release, and the tap that caused it is never delivered as a `click`
 - **Phone landscape** — a phone held sideways has ~440pt of height, and the stacked header (id, meta line, summary) took ~72 of it. There the header is hidden (`display: none`, so rotating back finds it as it was, an open 🦠 menu included) and the tab bar is the top row, pins and split panes as ever; the header's controls wait for portrait. The gate is the *device*, never the window's shape: a phone-class `screen` (short side < 500), `(pointer: coarse)`, **and** landscape — all three (`isPhoneLandscape`, `src/shared/phone-landscape.ts`, pinned by `src/test/phone-landscape.test.ts`). Desktop keeps its header at any window size, and so do tablets and phones in portrait
-- **Quick bar** — macros (via MacroMenu component) + quick keys
+- **Quick bar** — `🎹 | 🥫 🦾 | Esc 1 2 3` (`QUICK_KEYS`, `expo/components/TerminalPane.tsx`). `Esc`, `1`, `2`, `3` stay inline because they answer Claude Code's numbered prompts from a phone, where a menu would cost a tap on the most frequent action. 🎹 opens the software keyboard *above* the bar, so the bar stays anchored. 🥫 is the macro menu (`MACROS`, `MacroMenu.tsx`): canned lines typed into the session — `live loop`, `live loop (full)` (the kickoff prompt), `narrate more`, `continue if unblocked`, `/ramify`; the first is the nudge the protocol says an agent must heed whatever it is doing. 🦾 is the controls menu (`COMMON_CONTROLS` and `NAV_CONTROLS`, `ControlsMenu.tsx`), keycaps with operator-chosen hints that stay open so a control can be repeated (paste and clear close it, since the point is to see the terminal):
+
+  | Keycap | Does | Sends |
+  |---|---|---|
+  | `^C` 🛑 | cancel / interrupt | `C-c` |
+  | `^O` 🪗 | verbose transcript (also refreshes the mirror) | action |
+  | `^T` ✅ | toggle todos | `C-t` |
+  | `^V` 📋 | paste clipboard | action |
+  | `⇧⇥` 🚦 | cycle permission mode | `BTab` |
+  | `^B` 😶‍🌫️ | background task | `C-b` |
+  | `^D` 🪂 | exit (EOF on empty input) | `C-d` |
+  | `^J` ↩️ | newline without submitting; the phone's newline, since the 🎹 keyboard's Shift only swaps glyphs | `C-j` |
+  | `^L` 🧹 | clear / redraw | `C-l` |
+  | Home ⏫ · End ⏬ · Page ⬆️ · Page ⬇️ | scrollback | `C-Home`, `C-End`, `PPage`, `NPage` |
+  | Clear 🧽 | clear scrollback, keep the screen | action |
+
+  `^R` history search and `^G` external editor were dropped: keyboard-shaped actions nobody reaches for from a touch menu
 - **Full software keyboard** — multitouch with sticky/held modifiers
 - **Live updates** — control WebSocket pushes `status`, `meta`, and `new_events` hints
 - **Archive/unarchive** — from the 🦠 menu, on a list card's status badge or in the narrative's header. Archive is offered only once the session has ended (the same test that swaps End for Revive); Unarchive on any archived narrative. Archiving from the header goes to the list as a jump, so Back returns — see [View URLs](view-urls.md)
