@@ -19,8 +19,9 @@
 // Without --push it only reads, and prints what it would create. With --push
 // it creates the commit and tag in the mirror clone and pushes the commit to
 // main and the tag in one atomic push; the clone's own main moves only once
-// that push has succeeded. That push is the release: release.yml in brane-npm
-// publishes a main whose version is not on npm yet. If the push fails, nothing
+// that push has succeeded. That push starts the release: release.yml in
+// brane-npm stages a main whose version is not on npm yet, and the operator
+// publishes it by approving it on npmjs.com. If the push fails, nothing
 // on brane-npm changed, and running the script again pushes the same commit
 // and tag rather than making new ones.
 import { execFileSync } from "node:child_process";
@@ -218,4 +219,7 @@ try {
   );
 }
 git(mirror, ["merge", "--quiet", "--ff-only", commit]);
-console.log(`Pushed ${commit.slice(0, 9)} and ${tag} to brane-npm. release.yml there publishes ${name}@${version}.`);
+console.log(
+  `Pushed ${commit.slice(0, 9)} and ${tag} to brane-npm. release.yml there stages ${name}@${version} on npm; ` +
+    "approve it on npmjs.com (Staged Packages) once its SHASUM matches the run's.",
+);

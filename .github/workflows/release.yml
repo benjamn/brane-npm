@@ -199,15 +199,26 @@ jobs:
 
       # npm's Staged Packages page shows each staged version's SHASUM, not the
       # commit or run that staged it, so this prints the one to compare it with
-      # before approving (docs/releasing.md, "The gates").
+      # before approving (docs/releasing.md, "The gates"). Reading it is a
+      # convenience and never blocks staging: if scripts/pack-shasum.mjs cannot
+      # read npm's output, the run warns, and npm's own `npm notice shasum:`
+      # line in this step's log carries the same value.
       - name: Stage
         env:
           DIST_TAG: ${{ needs.plan.outputs.dist-tag }}
         run: |
-          shasum=$(npm pack --dry-run --json | node -p 'JSON.parse(require("fs").readFileSync(0, "utf8"))[0].shasum')
-          echo "Staging under the $DIST_TAG dist-tag; the tarball's shasum is $shasum."
+          shasum=$(npm pack --dry-run --json | node scripts/pack-shasum.mjs || true)
+          if [ -n "$shasum" ]; then
+            echo "Staging under the $DIST_TAG dist-tag; the tarball's shasum is $shasum."
+          else
+            echo "::warning title=No SHASUM read::Could not read the shasum from npm pack --json; use the npm notice shasum line in this step's log."
+          fi
           npm stage publish --tag "$DIST_TAG"
-          echo "::notice title=Staged, not published::Before approving it on npmjs.com (Staged Packages), check its SHASUM is $shasum. Reject it there otherwise."
+          if [ -n "$shasum" ]; then
+            echo "::notice title=Staged, not published::Before approving it on npmjs.com (Staged Packages), check its SHASUM is $shasum. Reject it there otherwise."
+          else
+            echo "::notice title=Staged, not published::Before approving it on npmjs.com (Staged Packages), check its SHASUM against the npm notice shasum line in this step's log. Reject it there otherwise."
+          fi
 
   # Waits for the operator's approval on npmjs.com to show on the registry:
   # the version published and its dist-tag pointing at it. It holds no token

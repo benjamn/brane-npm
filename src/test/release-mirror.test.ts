@@ -32,6 +32,40 @@ async function loadChangelog(): Promise<ChangelogModule> {
   return import(pathToFileURL(CHANGELOG_MJS).href) as Promise<ChangelogModule>;
 }
 
+const PACK_SHASUM_MJS = join(root, "scripts", "pack-shasum.mjs");
+
+// The first brane-npm release run failed here: the runner's npm@latest (npm
+// 12) prints `npm pack --json` as an object keyed by package name, where npm
+// 10 printed an array, and the step read only the array.
+describe("scripts/pack-shasum.mjs", () => {
+  const sha = "3a0d2424d63000156d04a4c2bfcdbc527fb17efb";
+  const entry = { id: "brane@0.3.12-rc.0", name: "brane", version: "0.3.12-rc.0", shasum: sha, integrity: "sha512-x" };
+
+  it("reads npm 10's array and npm 12's object alike", async (t) => {
+    if (!existsSync(PACK_SHASUM_MJS)) return t.skip("source is not present (an installed package)");
+    const { packShasum } = (await import(pathToFileURL(PACK_SHASUM_MJS).href)) as {
+      packShasum(output: string): string | null;
+    };
+    assert.equal(packShasum(JSON.stringify([entry])), sha);
+    assert.equal(packShasum(JSON.stringify({ brane: entry })), sha);
+    for (const bad of ["", "not json", "null", "[]", "{}", JSON.stringify([{ shasum: "nope" }]), JSON.stringify({ brane: {} })]) {
+      assert.equal(packShasum(bad), null, `no shasum from ${JSON.stringify(bad)}`);
+    }
+  });
+
+  it("prints the shasum, or fails without output so the workflow stages anyway", (t) => {
+    if (!existsSync(PACK_SHASUM_MJS)) return t.skip("source is not present (an installed package)");
+    const ok = spawnSync(process.execPath, [PACK_SHASUM_MJS], { input: JSON.stringify({ brane: entry }), encoding: "utf8" });
+    assert.equal(ok.status, 0);
+    assert.equal(ok.stdout, `${sha}\n`);
+    const bad = spawnSync(process.execPath, [PACK_SHASUM_MJS], { input: "{}", encoding: "utf8" });
+    assert.equal(bad.status, 1);
+    assert.equal(bad.stdout, "");
+    // The step must not let this script's failure stop `npm stage publish`.
+    assert.match(readFileSync(RELEASE_YML, "utf8"), /node scripts\/pack-shasum\.mjs \|\| true\)/);
+  });
+});
+
 describe("the publishing repository", () => {
   it("is the one release.yml runs in and package.json's repository.url names", (t) => {
     if (!existsSync(RELEASE_YML)) return t.skip("source is not present (an installed package)");

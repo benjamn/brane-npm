@@ -7,12 +7,15 @@ message in `benjamn/brane-npm`, the repository npm publishes from (see
 [docs/releasing.md](docs/releasing.md)), with pull request links removed.
 This file travels in the npm tarball.
 
-## 0.3.12-rc.0 - 2026-11-16
+## 0.3.12-rc.1 - 2026-11-16
 
 The first release published from
 [`benjamn/brane-npm`](https://github.com/benjamn/brane-npm), as a
 prerelease under the `next` dist-tag (`npm install -g brane@next`), so
-`latest` stays at 0.3.11 until 0.3.12 itself.
+`latest` stays at 0.3.11 until 0.3.12 itself. 0.3.12-rc.0 was tagged there
+but never reached npm: its release run failed before staging, reading
+`npm pack --json` in the shape npm 10 printed rather than npm 12's. That
+step now reads both, and can no longer stop a release.
 
 - Releases are published from `benjamn/brane-npm`, whose history is one
   commit per release; from this release on, each commit's tree is exactly
@@ -40,6 +43,11 @@ prerelease under the `next` dist-tag (`npm install -g brane@next`), so
 
 Published while `benjamn/brane-npm` is private, so like 0.3.0–0.3.11 it
 carries no npm provenance attestation.
+
+## 0.3.12-rc.0 - 2026-11-16
+
+Tagged in `benjamn/brane-npm` but never published to npm: its release run
+failed before staging. Everything it carried is in 0.3.12-rc.1.
 
 ## 0.3.11 - 2026-11-06
 
