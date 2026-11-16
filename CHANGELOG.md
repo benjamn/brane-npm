@@ -7,6 +7,44 @@ message in `benjamn/brane-npm`, the repository npm publishes from (see
 [docs/releasing.md](docs/releasing.md)), with pull request links removed.
 This file travels in the npm tarball.
 
+## 0.3.12 - 2026-11-16
+
+The first stable release published from
+[`benjamn/brane-npm`](https://github.com/benjamn/brane-npm), after
+0.3.12-rc.1 and 0.3.12-rc.2. Everything since 0.3.11:
+
+- Releases are published from `benjamn/brane-npm`, now public, whose
+  history is one commit per release, each with exactly the released tree.
+  `package.json`'s `repository`, `homepage` and `bugs` point there, as do
+  `SECURITY.md`'s vulnerability reports, and `package.json` names its
+  `author` ([#654](https://github.com/benjamn/brane/pull/654),
+  [#655](https://github.com/benjamn/brane/pull/655)).
+- A release is staged on npm by trusted publishing and published only when
+  a maintainer approves it on npmjs.com with 2FA, and the shared app
+  deploys a release only after a second approval
+  ([#656](https://github.com/benjamn/brane/pull/656),
+  [#657](https://github.com/benjamn/brane/pull/657),
+  [#660](https://github.com/benjamn/brane/pull/660)). Like 0.3.12-rc.2, it
+  carries an npm provenance attestation, the first stable release that
+  does.
+- Search marks where each hit matched, using the index's own stemming, and
+  shows the part of a long narration or wiki section where the matches
+  are, rather than its first two lines
+  ([#652](https://github.com/benjamn/brane/pull/652)).
+- A chat tool-use group with a failed call starts collapsed like any
+  other; its red summary line still marks the failure, and a group you
+  closed stays closed on reload
+  ([#651](https://github.com/benjamn/brane/pull/651)).
+- A message sent just after typing no longer comes back as a draft in the
+  composer after switching away and returning
+  ([#653](https://github.com/benjamn/brane/pull/653)).
+- brane's own installs no longer warn under npm 12, which blocks
+  dependencies' install scripts by default: `package.json` declines the
+  ones brane doesn't need. `npm install -g brane` under npm 12 may still
+  list `onnxruntime-node`, whose script only fetches CUDA binaries on Linux
+  x64; brane embeds on the CPU and doesn't need it
+  ([#661](https://github.com/benjamn/brane/pull/661)).
+
 ## 0.3.12-rc.2 - 2026-11-16
 
 The first release since [`benjamn/brane-npm`](https://github.com/benjamn/brane-npm)
