@@ -61,8 +61,9 @@ pushes, so the clone never fetches this history and stands alone afterwards.
    push has succeeded. That push starts the release. With `--push`, `--from`
    must name a commit on `origin/main`: only merged commits are released.
 4. When the run in `brane-npm` has staged the version, **approve it on
-   npmjs.com** (the package's Staged Packages tab, or `npm stage approve
-   <stage-id>`), after checking it is the one you pushed: the `stage` job of
+   npmjs.com** (Staged Packages, at
+   `https://www.npmjs.com/settings/<user>/staged-packages`, or `npm stage
+   approve <stage-id>`), after checking it is the one you pushed: the `stage` job of
    the run for your commit is green, and the SHASUM npmjs.com shows is the one
    that job printed (see [The gates](#the-gates)). That approval, with its
    2FA, is the publish.
@@ -125,12 +126,14 @@ dispatching `deploy-app.yml` (below).
 Trusted publishing attests a build by itself when the repository is public
 and leaves attestation out when it is private, where `--provenance` would
 fail the publish on a 422; npm says a staged version gets provenance on
-parity with a direct publish. Every release so far, 0.3.0 to 0.3.11, was
+parity with a direct publish. Every release from 0.3.0 to 0.3.12-rc.1 was
 published from a private repository and carries **no provenance
-attestation**. Once `brane-npm` is public, every release from it will, with
-no workflow change, provided `package.json`'s `repository.url` names
-`brane-npm`: npm rejects a provenance-bearing publish whose `repository.url`
-names another repository. `src/test/release-mirror.test.ts` keeps that URL
+attestation**. `brane-npm` went public on 2026-11-16, and every release
+from it should carry one, with no workflow change, provided `package.json`'s
+`repository.url` names `brane-npm`: npm rejects a provenance-bearing publish
+whose `repository.url` names another repository. A staged version is not on
+the registry until it is approved, so its attestation can only be confirmed
+afterwards, with `npm view <name>@<version> dist.attestations`. `src/test/release-mirror.test.ts` keeps that URL
 and the workflow's repository check equal. Check `gh repo view
 benjamn/brane-npm --json visibility` before a release's notes say which it
 is: the 0.3.1 CHANGELOG entry in its tarball claims provenance it does not

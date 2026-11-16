@@ -1,6 +1,6 @@
 {
   "name": "brane",
-  "version": "0.3.12-rc.1",
+  "version": "0.3.12-rc.2",
   "description": "Userspace daemon and CLI for narrative agent sessions",
   "keywords": [
     "agents",
@@ -93,5 +93,12 @@
   "license": "AGPL-3.0-or-later",
   "overrides": {
     "katex": "$katex"
+  },
+  "allowScripts": {
+    "better-sqlite3": false,
+    "esbuild": false,
+    "onnxruntime-node": false,
+    "workerd": false,
+    "fsevents": false
   }
 }

@@ -53,5 +53,8 @@
     "@istanbuljs/load-nyc-config": {
       "js-yaml": "^4.1.0"
     }
+  },
+  "allowScripts": {
+    "fsevents": false
   }
 }

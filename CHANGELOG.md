@@ -7,6 +7,19 @@ message in `benjamn/brane-npm`, the repository npm publishes from (see
 [docs/releasing.md](docs/releasing.md)), with pull request links removed.
 This file travels in the npm tarball.
 
+## 0.3.12-rc.2 - 2026-11-16
+
+The first release since [`benjamn/brane-npm`](https://github.com/benjamn/brane-npm)
+became public, again a prerelease under `next`.
+
+- brane's own installs no longer warn under npm 12, which blocks
+  dependencies' install scripts by default: `package.json` declines the
+  ones brane doesn't need. `better-sqlite3` ships prebuilt binaries, and
+  `onnxruntime-node`'s script only fetches CUDA binaries on Linux x64,
+  which brane, embedding on the CPU, doesn't use. `npm install -g brane`
+  under npm 12 may still list `onnxruntime-node`; the README says why that
+  is fine ([#661](https://github.com/benjamn/brane/pull/661)).
+
 ## 0.3.12-rc.1 - 2026-11-16
 
 The first release published from

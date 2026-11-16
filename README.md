@@ -31,6 +31,12 @@ If you find brane useful, perhaps because your tastes align with mine and I have
    npm install -g brane
    ```
 
+   npm 12 blocks dependencies' install scripts by default and may list
+   `onnxruntime-node`'s as blocked. brane doesn't need it: that script only
+   downloads CUDA binaries on Linux x64, and brane runs its embedding model
+   on the CPU. `better-sqlite3` and `onnxruntime-node` ship prebuilt
+   binaries for macOS, Linux and Windows. `brane doctor` checks the install.
+
 2. **Start the daemon:**
 
    ```sh
