@@ -81,6 +81,7 @@ import { registerFold, FoldRegistrationError } from "../folds.js";
 import { getAgentAdapter, sumCostReadings, type CostReading, type UsageEntriesReading } from "../agents.js";
 import { repriceLedger } from "../cost/reprice.js";
 import { initMemorySchema, searchHybrid } from "../memory/storage.js";
+import { narrativeMatchRanges } from "../memory/match-ranges.js";
 import { listWiki, locatePage, readWiki, readWikiSection, searchWiki, type WikiSource } from "../memory/wiki.js";
 import { disposeEmbeddingModel, embedText, preloadEmbeddingModel } from "../memory/embeddings.js";
 import { runIndex, hasUnindexedEvents, type IndexStats } from "../memory/index.js";
@@ -2829,6 +2830,9 @@ export async function startServer(config: DaemonConfig): Promise<void> {
 
         const queryVector = await embedText(query);
         const results = searchHybrid(db, queryVector, query, limit ?? 10, brane_ids);
+        // Where each hit matched, so the app can mark it in the snippet. The
+        // MCP tool leaves these out: an agent reads the whole content anyway.
+        const matches = narrativeMatchRanges(db, query, results);
 
         // Collect unique narrative IDs and fetch their metadata
         const nids = [...new Set(results.map((r) => r.narrative_id))];
@@ -2846,6 +2850,7 @@ export async function startServer(config: DaemonConfig): Promise<void> {
             seq: r.seq,
             content: r.content,
             score: Math.round(r.score * 100) / 100,
+            matches: matches.get(`${r.narrative_id}:${r.seq}`) ?? [],
           })),
           narratives: nids
             .filter((nid) => narrativeMap.has(nid))
@@ -6485,6 +6490,8 @@ async function startWikiSearch(
     const query = args.query as string;
     const limit = (args.limit as number) ?? 10;
     const results = await searchWiki(db, sources, query, limit);
+    // Match offsets are for the app's snippets; an agent reads the content.
+    for (const a of results) for (const h of a.hits) delete h.matches;
     sendToolResult(ws, callId, { query, results });
   } catch (err) {
     sendToolError(ws, callId, String(err));

@@ -56,6 +56,7 @@ import { useAppHost } from "@/lib/appHost";
 import { sortNarratives } from "@shared/narrative-sort";
 import { isAwaiting, awaitingGlow, AWAITING_STATUS, NOT_AWAITING_STATUS } from "@shared/narrative-status";
 import { isListScrollKey, listScrollTarget } from "@shared/list-scroll-keys";
+import { buildHitSnippet, type MatchRange, type SnippetOptions } from "@shared/hit-snippet";
 import { interruptSession } from "@/lib/terminal";
 
 // How long a keyed smooth scroll counts as still under way, for stacking the
@@ -332,9 +333,7 @@ function NarrativeCard({
                 onKeyDown={(e) => { if (e.key === "Enter") { e.stopPropagation(); onHitPress?.(item.id, hit.seq); } }}
                 style={{ cursor: "pointer" }}
               >
-                <Text style={styles.hitSnippet} numberOfLines={2}>
-                  {hit.content}
-                </Text>
+                <HitSnippet content={hit.content} matches={hit.matches} lines={2} />
               </div>
             ))}
           </View>
@@ -344,85 +343,39 @@ function NarrativeCard({
   );
 }
 
-/** A hit's snippet without its leading markdown heading (the heading is already
- *  shown as the `#anchor` label, so repeating it just wastes the snippet), with
- *  soft (single) line breaks collapsed to spaces like HTML — only blank lines
- *  separate paragraphs — so the prose flows and fills the width. Falls back to
- *  the raw content for heading-only sections. */
-function wikiHitSnippet(content: string): string {
-  const lines = content.split("\n");
-  let i = 0;
-  while (i < lines.length && (lines[i].trim() === "" || /^#{1,6}\s/.test(lines[i].trim()))) i++;
-  const body = lines.slice(i).join("\n").trim() || content.trim();
-  return body
-    .split(/\n[ \t]*\n+/) // paragraphs (blank-line separated)
-    .map((p) => p.replace(/\s*\n\s*/g, " ").replace(/[ \t]{2,}/g, " ").trim())
-    .filter(Boolean)
-    .join("\n");
-}
-
-const SNIPPET_STOPWORDS = new Set([
-  "the", "and", "for", "with", "that", "this", "from", "are", "was", "but", "not", "you",
-]);
-
-function escapeRegExp(s: string): string {
-  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
-/** Meaningful lowercased query terms for match-highlighting. */
-function queryTerms(query: string): string[] {
-  return (query.toLowerCase().match(/[\p{L}\p{N}]+/gu) ?? []).filter(
-    (t) => t.length >= 2 && !SNIPPET_STOPWORDS.has(t),
+/** A search hit's text, windowed onto where the query matched and with the
+ *  matches painted (see src/shared/hit-snippet.ts). The daemon says what
+ *  matched, from the index's own tokenizer; nothing here re-scans the text. */
+function HitSnippet({
+  content,
+  matches,
+  lines,
+  ...opts
+}: { content: string; matches?: readonly MatchRange[]; lines: number } & SnippetOptions) {
+  const segments = useMemo(
+    () => buildHitSnippet(content, matches, opts),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [content, matches, opts.stripHeading, opts.window, opts.lead],
   );
-}
-
-/**
- * Build snippet segments for a hit, windowed around the first query-term match
- * (with leading/trailing "…") and split so matched terms can be highlighted.
- * Pure-semantic hits (no literal term present) fall back to the section start.
- */
-function buildSnippetSegments(
-  content: string,
-  query: string,
-): Array<{ text: string; match: boolean }> {
-  const clean = wikiHitSnippet(content);
-  const terms = queryTerms(query);
-  const lower = clean.toLowerCase();
-
-  let pos = -1;
-  for (const t of terms) {
-    const idx = lower.indexOf(t);
-    if (idx >= 0 && (pos < 0 || idx < pos)) pos = idx;
-  }
-
-  const WINDOW = 220;
-  let start = 0;
-  if (pos > 60) {
-    start = pos - 50;
-    const sp = clean.indexOf(" ", start); // back up to a word boundary
-    if (sp >= 0 && sp < start + 15) start = sp + 1;
-  }
-  const end = Math.min(clean.length, start + WINDOW);
-  let slice = clean.slice(start, end);
-  if (start > 0) slice = `…${slice}`;
-  if (end < clean.length) slice = `${slice}…`;
-
-  if (terms.length === 0) return [{ text: slice, match: false }];
-  const re = new RegExp(
-    `(${terms.map(escapeRegExp).sort((a, b) => b.length - a.length).join("|")})`,
-    "giu",
+  return (
+    // The box carries the padding, not the clamped Text: a line clamp cuts at
+    // the padding edge, so vertical padding on the Text would leave the top
+    // of the next (hidden) line showing — invisible for plain text, a pink
+    // strip when that line holds a painted match.
+    <View style={styles.hitSnippetBox}>
+      <Text style={styles.hitSnippet} numberOfLines={lines}>
+        {segments.map((s, j) =>
+          s.match ? (
+            <Text key={j} style={styles.hitMatch}>
+              {s.text}
+            </Text>
+          ) : (
+            s.text
+          ),
+        )}
+      </Text>
+    </View>
   );
-  const segs: Array<{ text: string; match: boolean }> = [];
-  let last = 0;
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(slice)) !== null) {
-    if (m.index > last) segs.push({ text: slice.slice(last, m.index), match: false });
-    segs.push({ text: m[0], match: true });
-    last = m.index + m[0].length;
-    if (m.index === re.lastIndex) re.lastIndex++; // guard against zero-length matches
-  }
-  if (last < slice.length) segs.push({ text: slice.slice(last), match: false });
-  return segs;
 }
 
 /** Result ordering for a search section: by semantic relevance (best match
@@ -493,13 +446,11 @@ function SectionBar({
 
 function WikiResultsHeader({
   results,
-  query,
   collapsed,
   onToggle,
   onOpen,
 }: {
   results: WikiSearchArticle[];
-  query: string;
   collapsed: boolean;
   onToggle: () => void;
   onOpen: (source: string, slug: string, anchor?: string) => void;
@@ -530,17 +481,7 @@ function WikiResultsHeader({
             {a.hits.slice(0, 3).map((h, i) => (
               <Pressable key={i} role="button" onPress={() => onOpen(a.source, a.slug, h.anchor)}>
                 {!!h.anchor && <Text style={styles.wikiHitCitation}>#{h.anchor}</Text>}
-                <Text style={styles.hitSnippet} numberOfLines={3}>
-                  {buildSnippetSegments(h.content, query).map((s, j) =>
-                    s.match ? (
-                      <Text key={j} style={styles.hitMatch}>
-                        {s.text}
-                      </Text>
-                    ) : (
-                      s.text
-                    ),
-                  )}
-                </Text>
+                <HitSnippet content={h.content} matches={h.matches} lines={3} stripHeading />
               </Pressable>
             ))}
           </View>
@@ -2009,7 +1950,6 @@ export default function NarrativeList() {
                   <>
                     <WikiResultsHeader
                       results={wikiResults}
-                      query={searchQuery.trim()}
                       collapsed={wikiCollapsed}
                       onToggle={() => setWikiCollapsed((v) => !v)}
                       onOpen={(source, slug, anchor) => setWikiReader({ source, slug, anchor })}
@@ -2429,16 +2369,19 @@ const styles = StyleSheet.create({
     marginTop: 8,
     gap: 4,
   },
-  hitSnippet: {
-    color: "#b0a890",
-    fontSize: 12,
-    lineHeight: 17,
+  hitSnippetBox: {
     paddingLeft: 10,
     paddingVertical: 3,
     borderLeftWidth: 2,
     borderLeftColor: "rgba(255, 130, 180, 0.5)",
     backgroundColor: "rgba(255, 130, 180, 0.04)",
     borderRadius: 2,
+  },
+  // No padding here: see HitSnippet.
+  hitSnippet: {
+    color: "#b0a890",
+    fontSize: 12,
+    lineHeight: 17,
   },
   // Wiki search results section
   wikiSection: {

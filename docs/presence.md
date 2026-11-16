@@ -72,7 +72,7 @@ Less obvious than it looks:
    "http://www.freedesktop.org/standards/PolicyKit/1/policyconfig.dtd">
   <policyconfig>
     <vendor>brane</vendor>
-    <vendor_url>https://github.com/benjamn/brane</vendor_url>
+    <vendor_url>https://github.com/benjamn/brane-npm</vendor_url>
     <action id="dev.brane.confirm-presence">
       <description>Confirm you are at this machine for brane</description>
       <message>brane wants to confirm you are at this machine before it trusts a new passkey or device</message>

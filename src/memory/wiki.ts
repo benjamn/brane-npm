@@ -5,6 +5,7 @@ import * as sqliteVec from "sqlite-vec";
 import type Database from "better-sqlite3";
 import { VECTOR_DIM, embedBatch } from "./embeddings.js";
 import { prepareFtsQuery, tokenizeQuery } from "./storage.js";
+import { wikiMatchRanges, type MatchRange } from "./match-ranges.js";
 import { WIKI_SHARED_DIR, isSharedSlug, normalizeWikiSlug } from "../shared/wiki-links.js";
 
 /** Embeds a batch of texts into vectors. Injectable so tests can supply a
@@ -760,6 +761,10 @@ export interface WikiSearchHit {
   citation: string;
   content: string;
   score: number;
+  /** Where in `content` the query matched, as `[start, end)` string offsets
+   *  from the index's own tokenizer (see `match-ranges.ts`). Absent for a
+   *  hit found on meaning alone. */
+  matches?: MatchRange[];
 }
 
 /** Search results grouped by article (page), the way narrative results belong
@@ -936,6 +941,7 @@ export async function searchWiki(
   // narrative. This keeps the payload bounded: a query that matches dozens of
   // sections in a handful of pages returns `limit` chunks, not whole pages.
   const topRows = relevant.slice(0, Math.max(0, limit));
+  const matchesById = wikiMatchRanges(db, query, topRows.map((r) => r.chunk_id));
 
   const articles = new Map<string, WikiSearchArticle>();
   for (const r of topRows) {
@@ -947,6 +953,8 @@ export async function searchWiki(
       content: r.content,
       score,
     };
+    const matches = matchesById.get(r.chunk_id);
+    if (matches) hit.matches = matches;
     const existing = articles.get(key);
     if (existing) {
       existing.hits.push(hit);

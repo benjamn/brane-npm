@@ -127,7 +127,7 @@ const STOPWORDS = new Set(
 );
 
 /** Does this term carry retrieval signal? */
-function isContentTerm(term: string): boolean {
+export function isContentTerm(term: string): boolean {
   return term.length > 2 && !STOPWORDS.has(term.toLowerCase());
 }
 

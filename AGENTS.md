@@ -35,7 +35,7 @@ Brane is a TypeScript reimagining of the [organelle](https://github.com/benjamn/
 - **Never add `Signed-off-by:`**, on your own behalf or the operator's. Only a human can certify the Developer Certificate of Origin, and a sign-off written by an agent is a false certification. Responsibility for a change attaches to the human who submits or merges it.
 - **Keep the disclosure trailer.** Commits you write carry `Co-Authored-By: <agent> <model> <noreply@anthropic.com>` (Claude Code adds it). Never strip, rewrite, or backdate one, yours or another agent's.
 - **Never merge, and never approve a PR.** `main` is PR-only; open the PR, report CI, and stop. The human who merges is the one taking responsibility for the change.
-- **Never run `npm publish`** — see [Releasing](docs/releasing.md).
+- **Never run `npm publish`, `npm stage approve`, or `scripts/mirror-release.mjs --push`, and never approve a deployment** — see [Releasing](docs/releasing.md).
 
 ## Repository Layout
 
@@ -111,12 +111,17 @@ non-executable files) while `node dist/cli.js` keeps working.
 
 ### Releasing
 
-Publishing to npm is done by `.github/workflows/release.yml`, triggered by a
-published GitHub release, and only by it. **Agents never run `npm publish`.**
+Publishing to npm starts in `.github/workflows/release.yml` in
+`benjamn/brane-npm`, triggered by `scripts/mirror-release.mjs --push`
+carrying a new version there, and only by it. The workflow only *stages* the
+version; the operator publishes it by approving it on npmjs.com, with 2FA, and
+approves the app deploy (`brane-npm`'s `app` environment). **Agents never run
+`npm publish`, `npm stage approve` or `mirror-release.mjs --push`, and never
+approve a deployment.**
 The shared web app ships with it: a release deploys its tarball's
 `expo/dist`, and a merge to `main` deploys nothing (staging is Isolate on a
-daemon running `main`). The version bump, tag rule, dist-tag choice, app
-deploy and rollback, and why 0.3.0 and 0.3.1 have no provenance
+daemon running `main`). What `brane-npm` holds, the version bump, dist-tag choice, app
+deploy and rollback, and why no release so far has a provenance
 attestation are in [docs/releasing.md](docs/releasing.md).
 
 ## CLI Commands
@@ -300,7 +305,9 @@ change one of those, read its doc first.
 - [Doctor](docs/doctor.md) (`src/commands/doctor.ts`, `src/test/`): `brane
   doctor`, and the shipped-test-suite rules.
 - [Releasing](docs/releasing.md) (`.github/workflows/release.yml`,
-  `package.json` version): the npm release workflow.
+  `scripts/mirror-release.mjs`, `scripts/changelog.mjs`, `package.json`
+  version): `brane-npm`, one commit per release, and the npm release workflow
+  that runs there.
 
 **Data**
 

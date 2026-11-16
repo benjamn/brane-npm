@@ -756,6 +756,9 @@ export interface SearchHit {
   seq: number;
   content: string;
   score: number;
+  /** Where in `content` the query matched, `[start, end)` string offsets from
+   *  the search index's tokenizer. Absent from a daemon older than this field. */
+  matches?: Array<[number, number]>;
 }
 
 export async function searchNarratives(
@@ -786,6 +789,8 @@ export interface WikiSearchHit {
   citation: string;
   content: string;
   score: number;
+  /** As {@link SearchHit.matches}; absent for a hit found on meaning alone. */
+  matches?: Array<[number, number]>;
 }
 
 /** Search hits grouped by article (page), the way narrative hits group by

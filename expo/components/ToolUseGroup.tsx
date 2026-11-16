@@ -1,4 +1,4 @@
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
 import { Platform, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import type { ToolUse } from "@/lib/api";
 import { useHorizontalPanGuard } from "@/lib/panGuard";
@@ -12,7 +12,9 @@ import { inAppLinkProps, narrativeHref } from "@/lib/routes";
  * than any message. One row shape for every agent, with gaps where a vendor
  * can't fill them in: a missing field leaves its slot empty and NEVER changes
  * the layout, so the eye can't learn "short row = agent X". Failures are the
- * only thing that gets color, and a group containing one starts expanded.
+ * only thing that gets color — the color is the whole signal: a group with a
+ * failure starts collapsed like any other, so a reload closes every group
+ * (it used to open itself, and reopened on every reload).
  * `unknown` (started, will never resolve — e.g. a PreToolUse-only agent)
  * renders a dash, never a spinner.
  *
@@ -290,17 +292,9 @@ export default function ToolUseGroup({
   );
 
   const hasFailure = visible.some(({ row }) => isFailure(row));
-  const [expanded, setExpanded] = useState(hasFailure);
-  // `useState` reads its initializer once, so a failure that arrives *after*
-  // first render left the group collapsed and grey — reachable today, since
-  // coalescing flushes at max_batch and a burst sharing one anchor arrives in
-  // several frames (claude-8fkbabsx:9, finding 2). Follow hasFailure, but only
-  // until the operator has an opinion: once they've toggled, a late row must
-  // not reopen a group they deliberately closed.
-  const userToggledRef = useRef(false);
-  useEffect(() => {
-    if (hasFailure && !userToggledRef.current) setExpanded(true);
-  }, [hasFailure]);
+  // Every group starts collapsed, failures included: the red summary line is
+  // what marks a failure, and only the operator opens a group.
+  const [expanded, setExpanded] = useState(false);
 
   // Which rows are showing full detail, keyed by `dedup_key` — the identity
   // the list already keys on, so a row that re-renders with a new status
@@ -357,7 +351,6 @@ export default function ToolUseGroup({
         dataSet={{ chrome: "tools" }}
         aria-expanded={expanded}
         onPress={() => {
-          userToggledRef.current = true;
           setExpanded((wasOpen) => {
             // Collapsing the group collapses the rows inside it, so the
             // summary line is a single way back to quiet — reopening shows the

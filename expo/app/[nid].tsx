@@ -554,8 +554,18 @@ const InputBar = memo(function InputBar({
       if (reSeqs.length > 0) onDeselect();
       textRef.current = "";
       setHasText(false);
-      // Clear saved draft
+      // Clear saved draft — and cancel the debounced save still pending from
+      // the last keystroke. Tab-Enter routinely sends inside that 300 ms
+      // window, and a send that also returns inside it would otherwise be
+      // followed by the timer writing the sent text back to localStorage,
+      // where the next restore (a reloaded tab, a fresh screen for this
+      // narrative) would put it in the composer as if it had never gone.
+      // Only on success: a failed send keeps its text and its pending save.
       if (Platform.OS === "web") {
+        if (draftTimerRef.current) {
+          clearTimeout(draftTimerRef.current);
+          draftTimerRef.current = null;
+        }
         try { localStorage.removeItem(draftKey); } catch {}
       }
       // Clear the native input

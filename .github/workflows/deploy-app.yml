@@ -12,6 +12,13 @@ name: Deploy app
 # (not pre-release) publish. Run it by hand to redeploy after a Cloudflare
 # failure, or to roll back: `npm dist-tag add <name>@<version> latest`, then
 # dispatch that version.
+#
+# The Cloudflare token is a secret of the `app` environment, not of the
+# repository, and the deploy job waits there for the operator's approval. A
+# repository secret is readable by any workflow a pushed commit carries; this
+# one is not, until the operator approves the job asking for it. It is not
+# passed in by the caller: a reusable workflow's job in an environment reads
+# that environment's secrets itself.
 on:
   workflow_call:
     inputs:
@@ -19,9 +26,6 @@ on:
         description: Published version to deploy (a leading v is ignored)
         required: true
         type: string
-    secrets:
-      CLOUDFLARE_API_TOKEN:
-        required: true
   workflow_dispatch:
     inputs:
       version:
@@ -33,9 +37,41 @@ permissions:
   contents: read
 
 jobs:
+  # GitHub creates an environment a job names that does not exist yet, with no
+  # protection rules, and the job would read whatever secret it holds without
+  # waiting. So nothing deploys unless the app environment exists and has a
+  # required reviewer. A token that cannot read it is a refusal too. This
+  # guards against a mistake in the settings; against a pushed commit that
+  # rewrites this file, only the reviewer itself does (docs/releasing.md).
+  gate:
+    name: Check the deploy waits for approval
+    if: github.repository == 'benjamn/brane-npm'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - name: Require a reviewer on the app environment
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if ! reviewers=$(gh api "repos/$GITHUB_REPOSITORY/environments/app" \
+              --jq '[.protection_rules[]? | select(.type == "required_reviewers") | .reviewers[]?] | length'); then
+            echo "Could not read the app environment; it must exist, with a required reviewer, before anything deploys (docs/releasing.md)." >&2
+            exit 1
+          fi
+          if [ "$reviewers" -lt 1 ]; then
+            echo "The app environment has no required reviewer, so a deploy would not wait for approval (docs/releasing.md)." >&2
+            exit 1
+          fi
+          echo "The app environment requires approval ($reviewers reviewer(s))."
+
   deploy:
     name: Deploy the app
+    needs: gate
+    if: github.repository == 'benjamn/brane-npm'
     runs-on: ubuntu-latest
+    environment: app
     # Two deploys never race; the second waits for the first. On the job, not
     # the workflow: a called workflow's top-level concurrency is applied to the
     # caller's run, which would queue the whole Release behind a dispatch.

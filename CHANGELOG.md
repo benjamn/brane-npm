@@ -1,10 +1,45 @@
 # Changelog
 
-Notable changes to brane, by published version. Each version's full notes
-are on the [GitHub releases](https://github.com/benjamn/brane/releases)
-page, which is also what triggers its publish (see
-[docs/releasing.md](docs/releasing.md)). This file is the summary that
-travels in the npm tarball.
+Notable changes to brane, by published version. From 0.3.12-rc.0 on,
+each version's section is also its [GitHub
+release](https://github.com/benjamn/brane-npm/releases) notes and its commit
+message in `benjamn/brane-npm`, the repository npm publishes from (see
+[docs/releasing.md](docs/releasing.md)), with pull request links removed.
+This file travels in the npm tarball.
+
+## 0.3.12-rc.0 - 2026-11-16
+
+The first release published from
+[`benjamn/brane-npm`](https://github.com/benjamn/brane-npm), as a
+prerelease under the `next` dist-tag (`npm install -g brane@next`), so
+`latest` stays at 0.3.11 until 0.3.12 itself.
+
+- Releases are published from `benjamn/brane-npm`, whose history is one
+  commit per release; from this release on, each commit's tree is exactly
+  the released one. `package.json`'s
+  `repository`, `homepage` and `bugs` now point there, as do `SECURITY.md`'s
+  vulnerability reports, and `package.json` names its `author`
+  ([#654](https://github.com/benjamn/brane/pull/654),
+  [#655](https://github.com/benjamn/brane/pull/655)).
+- A release is staged on npm by trusted publishing and published only when
+  a maintainer approves it on npmjs.com with 2FA; the shared app deploys a
+  release only after a second approval
+  ([#656](https://github.com/benjamn/brane/pull/656),
+  [#657](https://github.com/benjamn/brane/pull/657)).
+- Search marks where each hit matched, using the index's own stemming, and
+  shows the part of a long narration or wiki section where the matches
+  are, rather than its first two lines
+  ([#652](https://github.com/benjamn/brane/pull/652)).
+- A chat tool-use group with a failed call starts collapsed like any
+  other; its red summary line still marks the failure, and a group you
+  closed stays closed on reload
+  ([#651](https://github.com/benjamn/brane/pull/651)).
+- A message sent just after typing no longer comes back as a draft in the
+  composer after switching away and returning
+  ([#653](https://github.com/benjamn/brane/pull/653)).
+
+Published while `benjamn/brane-npm` is private, so like 0.3.0–0.3.11 it
+carries no npm provenance attestation.
 
 ## 0.3.11 - 2026-11-06
 

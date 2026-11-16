@@ -42,7 +42,7 @@ until someone lists it. An agent also may not revive or prompt a
 | `POST` | `/api/run` | Run non-agent command (`{ command, fold_path, terminal_size? }`) |
 | `GET` | `/api/run-history` | Commands utility sessions have run before (by basename), most-recent first — the spawn dialog's Utility list; derived from `narratives`, nothing stored |
 | `POST` | `/api/revive/:nid` | Revive a dead agent session (`{ prompt?, no_prompt?, agent? }`) — see [Revive API](#revive-api) |
-| `POST` | `/api/search` | Semantic search over narrative history (`{ query, limit?, brane_ids? }`) |
+| `POST` | `/api/search` | Semantic search over narrative history (`{ query, limit?, brane_ids? }`); each hit carries `matches`, the offsets to mark — see [Marking the Hits](memory-search.md#marking-the-hits) |
 | `POST` | `/api/cost/backfill` | Sweep the usage ledger over every narrative with a bound session (`{ dry_run? }`) — see [Cost Ledger](cost-ledger.md) |
 | `POST` | `/api/cost/reprice` | Re-price recorded ledger rows under the current price table and move each card total by the correction (`{ dry_run? }`) — see [Re-pricing](cost-ledger.md#re-pricing) |
 | `POST` | `/api/tokens` | Mint a device token (`{ label? }` → `{ token, id, label }`); only its hash is kept, so this response is the one copy. `brane meld` calls it for every QR — see [Token Rotation](token-rotation.md). From the shell it waits for the [presence check](presence.md#the-gate) (403, 409 or 429 when refused); an agent's token gets 403 unasked |

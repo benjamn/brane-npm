@@ -47,7 +47,8 @@ describe machinery.
 ## Local to the brane fold, not shipped
 
 The brane checkout's `wiki/` holds further pages that are either
-brane-internal or still settling: `brane-ontology`, `why-tailscale`,
-and `how-to-brane`. They are local pages of that fold — readable
-by agents working in the checkout, not published with the package and
-not visible from other folds.
+brane-internal or still settling: `brane-ontology` and
+`why-tailscale`. They are local pages of that fold — readable by
+agents working in the checkout, not published with the package and
+not visible from other folds. They are not private: the source
+repository npm publishes from, `benjamn/brane-npm`, carries them.

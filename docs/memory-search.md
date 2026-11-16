@@ -73,3 +73,25 @@ reproduces it, with hand-chosen vectors. Deliberately **not** an aggregate
 accuracy figure: the same probe read 52%, 50% and 37% across one afternoon
 purely as new events were indexed, so a percentage over the live archive would be
 a flaky test. A percentage says something regressed; these say which thing.
+
+## Marking the Hits
+
+A hit is a whole chunk, often a long narration, and a result row in the app
+shows two or three lines of it. So `POST /api/search` and `POST
+/api/wiki/search` return, beside each hit's `content`, `matches`: the
+`[start, end)` string offsets where the query matched. The app windows the
+snippet onto the densest run of them and paints them (`buildHitSnippet` in
+`src/shared/hit-snippet.ts`). A hit found on meaning alone has no matches and
+shows its opening, unmarked.
+
+**The index says what matched, not the client.** The offsets come from FTS5's
+own `highlight()`, run over just the returned rows (`src/memory/match-ranges.ts`)
+against every quoted phrase and every content term, ORed. Both indexes tokenize
+with `porter unicode61` and match terms as prefixes, so they find `restarted`
+for `restart`; the substring scanner the app used before missed every stem the
+index matched, and marked `the` inside `other`. Stopwords are left unmarked, as
+the ANY arm drops them, unless the query has nothing else.
+
+The MCP tools leave `matches` out: an agent reads the whole content.
+`src/test/match-ranges.test.ts` pins the offsets (stems, phrases, text after an
+emoji) and `src/test/hit-snippet.test.ts` the windowing.

@@ -4,7 +4,7 @@ Brane is a local-first system. Your data never leaves your machine unless you ex
 
 ## Reporting a vulnerability
 
-Report it privately, through GitHub's [private vulnerability reporting](https://github.com/benjamn/brane/security/advisories/new) (the repository's **Security** tab, then **Report a vulnerability**). Only the maintainer sees the report. Don't open an issue for it: issues are public.
+Report it privately, through GitHub's [private vulnerability reporting](https://github.com/benjamn/brane-npm/security/advisories/new) (the repository's **Security** tab, then **Report a vulnerability**). Only the maintainer sees the report. Don't open an issue for it: issues are public.
 
 Brane has one maintainer and no support commitment, so there is no promised response time. The report that gets fixed fastest says which version (`brane --version`), what the attacker needs to start with (a tailnet peer, a process on the machine, a melded device, an agent session), and what they end up with.
 

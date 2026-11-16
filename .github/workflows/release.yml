@@ -1,31 +1,146 @@
 name: Release
 
-# Publishing happens when a GitHub release is published, so the release notes
-# and the published version are created in the same step. A bare tag push does
-# not publish anything, and nothing here runs on push or pull_request.
+# Publishing happens in benjamn/brane-npm, and only there. That repository
+# receives one commit per release, pushed by scripts/mirror-release.mjs from
+# the private repository, together with its v<version> tag; a push to its main
+# whose package.json names a version npm does not have yet is the release.
+# A push whose version is already published is never published again. In the
+# private repository, which carries this same file, every job is skipped by
+# the repository check.
 #
-# There is no npm token anywhere in this repository or its secrets. The job
-# authenticates to npm with a short-lived OIDC token (trusted publishing).
+# There is no npm token anywhere in either repository or its secrets. The job
+# authenticates to npm with a short-lived OIDC token (trusted publishing,
+# configured on npmjs.com for benjamn / brane-npm / release.yml, environment
+# npm, with only `npm stage publish` allowed).
 #
-# There is no --provenance flag. npm only attests builds from a public
-# repository, and this one stays private until brane is announced, so the flag
-# would fail every publish. Trusted publishing adds provenance automatically
-# once the repository is public.
+# The workflow stages; only the operator publishes. `npm stage publish` puts
+# the version in npm's stage queue, where nobody can install it, and it reaches
+# the registry only when a maintainer approves it on npmjs.com (or with
+# `npm stage approve`), behind a 2FA challenge that no OIDC token can answer.
+# The trusted publisher allows staging and nothing else, so whatever can push
+# to brane-npm, or rewrite this file in a pushed commit, can at most put a
+# version in the queue for the operator to reject (docs/releasing.md).
 #
-# An ordinary release also puts its web app on the shared app host, from the
-# tarball it just published (deploy-app.yml). A pre-release does not: the
-# shared app serves latest only.
+# There is no --provenance flag. npm attests builds from a public repository
+# by itself, staged ones included, and leaves attestation out for a private
+# one. brane-npm's first release after it goes public gets provenance with no
+# change here, as long as package.json's repository.url names it
+# (src/test/release-mirror.test.ts).
+#
+# The dist-tag comes from the version: a semver prerelease (0.4.0-rc.1) stages
+# under next, anything else under latest, and npm fixes the tag when the
+# version is staged. Once the operator approves it, the GitHub release is
+# created from the version's CHANGELOG.md section, and an ordinary release puts
+# its web app on the shared app host from the published tarball
+# (deploy-app.yml, which waits for the operator's approval in the `app`
+# environment). A prerelease deploys nothing.
+#
+# Nothing tells GitHub that a version was approved, so the run waits for it on
+# the registry for an hour after staging. Approved later than that, dispatch
+# this workflow on main: the plan finds the version on npm with no GitHub
+# release yet, and finishes the release. The plan makes a dispatch safe on any
+# commit: a version already on npm is never staged again.
 on:
-  release:
-    types: [published]
+  push:
+    branches: [main]
+  workflow_dispatch:
 
 permissions:
   contents: read
 
+# Two releases never race; the second waits for the first. GitHub keeps at
+# most one run pending behind a running one, and a newer one cancels it; a
+# cancelled release is run again by dispatch.
+concurrency:
+  group: release
+  cancel-in-progress: false
+
 jobs:
-  publish:
-    name: Publish to npm
+  # What this commit's release still needs, if anything. Both depend on the tag
+  # v<version> naming this commit. stage: the version is not on npm. The plan
+  # cannot see npm's stage queue, which needs a login no OIDC token has, so a
+  # version already staged is found only by the stage step failing (npm stages
+  # a version once). finish: the version is on npm but has
+  # no GitHub release yet, because it was approved after the run that staged it
+  # stopped waiting, or that run failed after the approval. A version missing
+  # from npm whose tag is absent or elsewhere is a red run: mirror-release.mjs
+  # pushes the commit and tag atomically.
+  plan:
+    name: Plan
+    if: github.repository == 'benjamn/brane-npm'
     runs-on: ubuntu-latest
+    outputs:
+      name: ${{ steps.plan.outputs.name }}
+      version: ${{ steps.plan.outputs.version }}
+      prerelease: ${{ steps.plan.outputs.prerelease }}
+      dist-tag: ${{ steps.plan.outputs.dist-tag }}
+      stage: ${{ steps.plan.outputs.stage }}
+      finish: ${{ steps.plan.outputs.finish }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Plan
+        id: plan
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          name=$(node -p 'require("./package.json").name')
+          version=$(node -p 'require("./package.json").version')
+          echo "name=$name" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          case "$version" in
+            *-*) prerelease=true dist_tag=next ;;
+            *) prerelease=false dist_tag=latest ;;
+          esac
+          echo "prerelease=$prerelease" >> "$GITHUB_OUTPUT"
+          echo "dist-tag=$dist_tag" >> "$GITHUB_OUTPUT"
+          tagged=
+          if git fetch --quiet --depth=1 origin "refs/tags/v$version:refs/tags/v$version" 2>/dev/null; then
+            tagged=$(git rev-parse "v$version^{commit}")
+          fi
+          # A version npm lacks, like a package it lacks, is an E404. Any other
+          # failure (the registry unreachable) is not an answer, and is a red
+          # run rather than a guess.
+          on_npm=false
+          if published=$(npm view "$name@$version" version 2>npm-view.err); then
+            if [ -n "$published" ]; then on_npm=true; fi
+          elif ! grep -q E404 npm-view.err; then
+            cat npm-view.err >&2
+            echo "Could not ask npm whether $name@$version is published." >&2
+            exit 1
+          fi
+          if [ "$on_npm" = true ]; then
+            echo "stage=false" >> "$GITHUB_OUTPUT"
+            if [ "$tagged" = "$GITHUB_SHA" ] && ! gh release view "v$version" >/dev/null 2>&1; then
+              echo "$name@$version is on npm with no GitHub release yet; finishing it."
+              echo "finish=true" >> "$GITHUB_OUTPUT"
+            else
+              echo "$name@$version is already on npm; nothing to do."
+              echo "finish=false" >> "$GITHUB_OUTPUT"
+            fi
+            exit 0
+          fi
+          echo "finish=false" >> "$GITHUB_OUTPUT"
+          if [ -z "$tagged" ]; then
+            echo "Tag v$version is missing; push the release with scripts/mirror-release.mjs." >&2
+            exit 1
+          fi
+          if [ "$tagged" != "$GITHUB_SHA" ]; then
+            echo "Tag v$version names $tagged, not this commit ($GITHUB_SHA)." >&2
+            exit 1
+          fi
+          echo "stage=true" >> "$GITHUB_OUTPUT"
+
+  # The only job that can mint an OIDC token, and all npm lets that token do is
+  # stage. It runs in the npm environment because the trusted publisher names
+  # it; the environment needs no reviewer, since the approval that matters is
+  # on npmjs.com.
+  stage:
+    name: Stage on npm
+    needs: plan
+    if: needs.plan.outputs.stage == 'true'
+    runs-on: ubuntu-latest
+    environment: npm
     env:
       # Embedding model cache dir (read by src/memory/embedder.ts). Lives in
       # the workspace so actions/cache can persist it across runs; the tests
@@ -35,15 +150,13 @@ jobs:
     permissions:
       contents: read
       # Required for npm trusted publishing: lets the job mint the short-lived
-      # OIDC token that npm exchanges for publish rights.
+      # OIDC token that npm exchanges for the right to stage.
       id-token: write
 
     steps:
       - uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.release.tag_name }}
 
-      # Trusted publishing needs Node >= 22.14 and npm >= 11.5.1, which is
+      # Staging needs npm >= 11.15.0 (trusted publishing alone needs 11.5.1),
       # newer than the npm bundled with any Node the runners provide.
       - uses: actions/setup-node@v4
         with:
@@ -57,21 +170,6 @@ jobs:
         run: |
           npm install -g npm@latest
           npm --version
-
-      - name: Check the release tag against package.json
-        run: |
-          tag='${{ github.event.release.tag_name }}'
-          name=$(node -p 'require("./package.json").name')
-          version=$(node -p 'require("./package.json").version')
-          if [ "$tag" != "v$version" ]; then
-            echo "Release tag $tag does not match package.json version $version." >&2
-            echo "Tags must be the package version prefixed with v." >&2
-            exit 1
-          fi
-          if [ -n "$(npm view "$name@$version" version 2>/dev/null)" ]; then
-            echo "$name@$version is already published to npm." >&2
-            exit 1
-          fi
 
       - name: Install dependencies
         run: npm ci
@@ -96,31 +194,113 @@ jobs:
 
       # The file list is in the run log, so a release that shipped the wrong
       # files can be diagnosed from the run rather than from the registry.
-      - name: Show what will be published
+      - name: Show what will be staged
         run: npm pack --dry-run
 
-      # A release marked as a pre-release publishes under the next dist-tag; an
-      # ordinary release publishes under latest. Which dist-tag moves is
-      # therefore a visible choice made in the GitHub release form.
-      - name: Publish
+      # npm's Staged Packages page shows each staged version's SHASUM, not the
+      # commit or run that staged it, so this prints the one to compare it with
+      # before approving (docs/releasing.md, "The gates").
+      - name: Stage
+        env:
+          DIST_TAG: ${{ needs.plan.outputs.dist-tag }}
         run: |
-          if [ '${{ github.event.release.prerelease }}' = 'true' ]; then
-            tag=next
-          else
-            tag=latest
+          shasum=$(npm pack --dry-run --json | node -p 'JSON.parse(require("fs").readFileSync(0, "utf8"))[0].shasum')
+          echo "Staging under the $DIST_TAG dist-tag; the tarball's shasum is $shasum."
+          npm stage publish --tag "$DIST_TAG"
+          echo "::notice title=Staged, not published::Before approving it on npmjs.com (Staged Packages), check its SHASUM is $shasum. Reject it there otherwise."
+
+  # Waits for the operator's approval on npmjs.com to show on the registry:
+  # the version published and its dist-tag pointing at it. It holds no token
+  # and only reads the public registry. Not approved within the hour, it stops
+  # green; dispatching release.yml after the approval finishes the release.
+  approval:
+    name: Wait for approval on npm
+    needs: [plan, stage]
+    runs-on: ubuntu-latest
+    timeout-minutes: 70
+    outputs:
+      approved: ${{ steps.wait.outputs.approved }}
+    steps:
+      - name: Wait for the version on the registry
+        id: wait
+        env:
+          NAME: ${{ needs.plan.outputs.name }}
+          VERSION: ${{ needs.plan.outputs.version }}
+          DIST_TAG: ${{ needs.plan.outputs.dist-tag }}
+        run: |
+          deadline=$((SECONDS + 3600))
+          while [ "$SECONDS" -lt "$deadline" ]; do
+            published=$(npm view "$NAME@$VERSION" version 2>/dev/null || true)
+            tagged=$(npm view "$NAME" "dist-tags.$DIST_TAG" 2>/dev/null || true)
+            if [ "$published" = "$VERSION" ] && [ "$tagged" = "$VERSION" ]; then
+              echo "$NAME@$VERSION is published, and is $DIST_TAG."
+              echo "approved=true" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            sleep 30
+          done
+          echo "approved=false" >> "$GITHUB_OUTPUT"
+          echo "::notice title=Not approved within the hour::$NAME@$VERSION is still staged, or was rejected (this job cannot see npm's stage queue). After approving it on npmjs.com, dispatch release.yml on main to create the GitHub release and deploy."
+
+  # The release notes come after the approval and in their own job, so a
+  # failure here is a re-run of this job, never a second publish. A release
+  # finished by a later dispatch gets them the same way. A version that was
+  # rejected never reaches npm, and gets none.
+  release-notes:
+    name: Create the GitHub release
+    needs: [plan, approval]
+    if: >-
+      !cancelled() &&
+      needs.plan.result == 'success' &&
+      (needs.plan.outputs.finish == 'true' || needs.approval.outputs.approved == 'true')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      - name: Create the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.plan.outputs.version }}
+          PRERELEASE: ${{ needs.plan.outputs.prerelease }}
+        run: |
+          if gh release view "v$VERSION" >/dev/null 2>&1; then
+            echo "The GitHub release v$VERSION already exists."
+            exit 0
           fi
-          echo "Publishing under the $tag dist-tag."
-          npm publish --tag "$tag"
+          previous=$(git describe --tags --abbrev=0 "v$VERSION^" 2>/dev/null || true)
+          node scripts/changelog.mjs notes "$VERSION" "$GITHUB_REPOSITORY" "${previous#v}" > notes.md
+          cat notes.md
+          flags=()
+          if [ "$PRERELEASE" = 'true' ]; then flags+=(--prerelease); fi
+          gh release create "v$VERSION" --verify-tag --title "brane $VERSION" --notes-file notes.md "${flags[@]}"
 
   # A separate job, so a Cloudflare failure is a re-run of this job (or a
   # dispatch of deploy-app.yml), never a second release: publishing cannot be
-  # undone, deploying can be repeated.
+  # undone, deploying can be repeated. Its Cloudflare token lives in the `app`
+  # environment, which waits for the operator, so a pushed commit cannot read
+  # it. A deploy that failed after its release was finished is redeployed by
+  # dispatching deploy-app.yml (docs/releasing.md).
   deploy-app:
     name: Deploy the app
-    needs: publish
-    if: ${{ !github.event.release.prerelease }}
+    needs: [plan, approval]
+    if: >-
+      !cancelled() &&
+      needs.plan.result == 'success' &&
+      needs.plan.outputs.prerelease != 'true' &&
+      (needs.plan.outputs.finish == 'true' || needs.approval.outputs.approved == 'true')
+    # A called workflow can only lower the permissions it is given: its gate job
+    # reads the app environment's rules.
+    permissions:
+      contents: read
+      actions: read
     uses: ./.github/workflows/deploy-app.yml
     with:
-      version: ${{ github.event.release.tag_name }}
-    secrets:
-      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      version: ${{ needs.plan.outputs.version }}

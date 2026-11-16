@@ -1,6 +1,6 @@
 {
   "name": "brane",
-  "version": "0.3.11",
+  "version": "0.3.12-rc.0",
   "description": "Userspace daemon and CLI for narrative agent sessions",
   "keywords": [
     "agents",
@@ -11,9 +11,9 @@
     "cli",
     "llm"
   ],
-  "homepage": "https://github.com/benjamn/brane#readme",
+  "homepage": "https://github.com/benjamn/brane-npm#readme",
   "bugs": {
-    "url": "https://github.com/benjamn/brane/issues"
+    "url": "https://github.com/benjamn/brane-npm/issues"
   },
   "funding": {
     "type": "github",
@@ -21,8 +21,9 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/benjamn/brane.git"
+    "url": "git+https://github.com/benjamn/brane-npm.git"
   },
+  "author": "Ben Newman <brane@eloper.dev>",
   "type": "module",
   "bin": {
     "brane": "./dist/cli.js"
