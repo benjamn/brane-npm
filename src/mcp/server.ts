@@ -329,7 +329,10 @@ const TOOLS: McpToolDefinition[] = [
   },
   {
     name: "list_protocols",
-    description: "List available protocol documents.",
+    description:
+      "List the protocols you can read, across your namespaces: fold (your fold's .brane/protocols), home (~/.brane/protocols) and brane (built-ins). " +
+      "Each protocol carries `from` and `path` (the file in force) and `layers` (every namespace that has the name, most local first, like `which -a`). " +
+      "`ignored` lists files that define nothing, and why.",
     inputSchema: {
       type: "object",
       properties: {},
@@ -337,13 +340,22 @@ const TOOLS: McpToolDefinition[] = [
   },
   {
     name: "read_protocol",
-    description: "Read a protocol document by name.",
+    description:
+      "Read a protocol by its /command name, as written. A bare name (`review`) resolves to its first match in fold, then home, then brane; " +
+      "a qualified one (`brane.review`) reads that namespace only; a namespace's own name (`brane`, `home`, `fold`) returns a generated page listing it. " +
+      "The result's `content` is the protocol in force; `layers` lists every file with that name that resolves, most local first, and any of them can be read with `from` or the qualified name. " +
+      "A file of that name awaiting the operator's approval is not in force: it is listed in `pending`, never in `layers`, and `content` opens by naming it; tell the operator if it matters.",
     inputSchema: {
       type: "object",
       properties: {
         name: {
           type: "string",
-          description: "Protocol name (e.g., 'LIVE_loop', 'ramify')",
+          description: "Protocol name as written after the slash (e.g. 'LIVE_loop', 'ramify', 'brane.review', 'home')",
+        },
+        from: {
+          type: "string",
+          enum: ["fold", "home", "brane"],
+          description: "Read this namespace's file rather than the one in force; the same as qualifying the name.",
         },
         no_prelude: {
           type: "boolean",

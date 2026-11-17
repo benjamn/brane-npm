@@ -16,7 +16,11 @@
  *   asks;
  * - `revoke-device`: revoking a device token, which cuts the operator off a
  *   device — an agent loop could otherwise sign out their phone;
- * - `rotate`: signing out every other device (`POST /api/token/rotate`).
+ * - `rotate`: signing out every other device (`POST /api/token/rotate`);
+ * - `approve-protocol`: putting a `home` or `fold` protocol file in force
+ *   (`POST /api/protocols/approve`, src/daemon/protocol-routes.ts), which
+ *   instructs every agent that reads it. An agent could otherwise write a
+ *   protocol and approve it.
  *
  * And one asked of a **device**, the only act a device token is prompted
  * for: `enroll`, a credential no hardware attestation vouched for
@@ -56,7 +60,7 @@
 import type { PresenceResult } from "../presence.js";
 import type { TokenRecord } from "./token-ring.js";
 
-export type GatedAct = "meld" | "meld-remote" | "revoke-device" | "rotate" | "enroll";
+export type GatedAct = "meld" | "meld-remote" | "revoke-device" | "rotate" | "enroll" | "approve-protocol";
 
 /** What the OS prompt says. macOS shows it as "osascript is trying to <it>",
  *  hence the lowercase verb phrase. */
@@ -66,6 +70,7 @@ export const PRESENCE_PROMPTS: Readonly<Record<GatedAct, string>> = {
   "revoke-device": "sign out a device from brane",
   rotate: "sign out every other device from brane",
   enroll: "add a passkey or security key to brane",
+  "approve-protocol": "approve a protocol for brane's agents",
 };
 
 /** How a caller holding `record` stands before a gated act: a device goes

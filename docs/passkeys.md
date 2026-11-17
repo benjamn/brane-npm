@@ -2,7 +2,7 @@
 
 A melded device must prove the operator is holding it before it acts, and
 the daemon is the only judge of that proof. This page is the design, and
-the record of what is built: **phases 2 and 3 of six**, the gate
+the record of what is built: **phases 2 to 4 of six**, the gate
 (`src/daemon/verification-gate.ts`) and passkeys and keys: the WebAuthn
 verifier (`src/webauthn/`), the enrolled credentials
 (`src/db/credentials.ts`), the ceremonies
@@ -124,7 +124,7 @@ and cuts nobody off:
 
 | Free | Where |
 |---|---|
-| Every read, **named**, never "every `GET`" | `GET /api/status`, `/api/branes`, `/api/protocols`, `/api/folds`, `/api/narratives` and `/recent`, `/api/narratives/:id` and its `/events`, `/export`, `/tool_uses`, `/tool_uses/:key`, `/api/payloads/:nid/*`, `/api/files` and `/list`, `/find`, `/api/wiki/read`, `/api/wiki/asset`, `/api/spawn-history`, `/api/run-history`, `/api/tokens` (the Devices list), `/api/absorb/survey`; `POST /api/search`, `/api/wiki/search`, `/api/diagram`, `/api/highlight`, `/api/memory/index`. A WebSocket upgrade is a `GET` too: `GET /ws/control` and `GET /ws/terminal/:nid` are free to open, and each message is then judged on its own; `GET /ws/mcp` under a device token is an act (below). So no rule by method: a blanket "every `GET`" would free that upgrade and any acting `GET` added later (claude-vxnhxcg9:9) |
+| Every read, **named**, never "every `GET`" | `GET /api/status`, `/api/branes`, `/api/protocols` and `/pending`, `/api/folds`, `/api/narratives` and `/recent`, `/api/narratives/:id` and its `/events`, `/export`, `/tool_uses`, `/tool_uses/:key`, `/api/payloads/:nid/*`, `/api/files` and `/list`, `/find`, `/api/wiki/read`, `/api/wiki/asset`, `/api/spawn-history`, `/api/run-history`, `/api/tokens` (the Devices list), `/api/absorb/survey`; `POST /api/search`, `/api/wiki/search`, `/api/diagram`, `/api/highlight`, `/api/memory/index`. A WebSocket upgrade is a `GET` too: `GET /ws/control` and `GET /ws/terminal/:nid` are free to open, and each message is then judged on its own; `GET /ws/mcp` under a device token is an act (below). So no rule by method: a blanket "every `GET`" would free that upgrade and any acting `GET` added later (claude-vxnhxcg9:9) |
 | Terminal housekeeping | `/ws/terminal/:nid` messages `start`, `stop`, `resize`, `refresh` |
 | The verification routes themselves | `POST /api/verify/begin`, `/api/verify/challenge`, `/api/verify/webauthn`, the OIDC pair, `/api/verify/end`; `GET /api/credentials` (the list), and the enrollment page's `POST /api/credentials/challenge` and `POST /api/credentials`, which carry an approval rather than a token; `POST /api/presence/cancel`, a device's cancel of a prompt at the Mac |
 | Operator housekeeping | registering and archiving folds and branes, archiving a narrative, absorb, cost backfill and reprice, the tool-use hook: reversible, nothing executes, nothing leaves the machine. Listed so the choice is visible; moving one across the line is a one-row change (open question 4) |
@@ -142,6 +142,7 @@ the line can be argued with:
 | Dial the MCP bridge with a **device** token | `GET /ws/mcp` under a device token | The daemon mints an external narrative and hands back its **agent token** in `welcome.bind_secret` (`mintExternalNarrativeWithSecret`), and agent tokens are never gated, so this is a mint, not a read (claude-vxnhxcg9:6, finding 1). Only `brane mcp --token` does it; the app never does. **Fresh class.** A reconnect that presents the secret is an agent, not a device. |
 | Revoke, rotate, forget | `POST /api/tokens/:id/revoke`, `POST /api/token/rotate`, `POST /api/token/forget` | Cuts the operator off. Answers [Token Rotation](token-rotation.md)'s open question: a verified operator guards revoking, as it guards every act. |
 | Enroll or revoke a credential | `POST /api/credentials/begin` (the approval the enrollment page redeems), `POST /api/credentials/:id/revoke` | Changes who can verify. **Fresh class**, so with the gate on an existing credential approves every new one; enrollment also needs presence or attestation, below. |
+| Approve or revoke a protocol | `POST /api/protocols/approve` (`approve-protocol`), `POST /api/protocols/revoke` (`revoke-protocol`) | Puts a `home` or `fold` protocol file in force for every agent that reads it ([Protocols](protocols.md#approval)). Approve is **fresh class**, and from the shell the presence gate asks as well. An operator who set `verification.fresh` before this act existed should add `approve-protocol` to it. |
 
 Reads stay on the device token. Whether an unverified device should keep
 them is the operator's call; **the default is yes** (claude-bu1kt8a5:16,
@@ -357,6 +358,9 @@ these with something weaker than the phone's own lock.
 | 22 | The switch prints every credential before it flips | So a key enrolled while the gate was off, by anyone holding a device token, is seen before it can verify anything | claude-vxnhxcg9:25, :26 |
 | 23 | The RP ID is read from the certificate the daemon serves | It is what the browser sees; Tailscale can be blind at the moment the cert is fine | claude-vxnhxcg9:44 |
 | 24 | A verification offers one button per kind enrolled, sharing the challenge: **Passkey** asks `userVerification: "required"` of the unattested credentials, **Security key** asks `"discouraged"` of the attested ones; one kind, one "Verify" button | The ask must match the check, and a prompt takes one `userVerification`. `"preferred"` let a passkey provider on the operator's iPhone answer with touch alone, which the verifier refuses from any unattested credential, until the gate had to be turned off from the shell; and `"preferred"` still collects the PIN of a key that has one, against decision 8 (Chromium's [advice on preferred UV](https://chromium.googlesource.com/chromium/src/+/404ca6f/content/browser/webauth/uv_preferred.md)). Every unattested credential verified the user at enrollment, so `"required"` never asks one for what it cannot do | claude-oci3rpdp:16, :18, :20; claude-933bjhez:4 |
+| 25 | What verified a device is recorded by credential row id, on the token row, in a signal's `meta` and in the daemon log, and resolved to a label only for display | A label is free text that can change; the id is the credential. The record is written by the gate's one check site, so a route added later is covered without a line of its own | this page, The record |
+| 26 | The Signal API is called from the ceremony page, never the app, and never with an empty list | Only the RP ID's origin may; an empty list hides every passkey | this page, The Signal API |
+| 27 | The rename warning fires when the daemon learns its hostname (startup, cert reload), is reported in status and the credentials list, and makes the switch refuse when nothing can verify | A rename cannot be undone from the daemon's side; what it can do is say so before anyone is locked out | this page, The rename warning |
 
 ## Daemon side
 
@@ -379,7 +383,7 @@ two minutes, so the page's prefetch never invalidates an answer in flight
 **Config** (`brane config`): `verification` = `off` (default) | `passkey` |
 `oidc`; `verification.window` in minutes, default 10, 0 to 1440;
 `verification.fresh`, the fresh class by act name, default
-`mint,mcp-dial,enroll,revoke-credential`; `verification.oidc.issuer`,
+`mint,mcp-dial,enroll,revoke-credential,approve-protocol`; `verification.oidc.issuer`,
 `verification.oidc.client_id`, `verification.oidc.subject`. The first three
 are built and validated (`configValueRefusal`); the daemon re-reads them at
 most once a second, since the CLI writes them to the database directly. A
@@ -429,7 +433,7 @@ machine's, or will have been an act (claude-vxnhxcg9:9).
 | `GET /api/verify/oidc/start`, `GET /api/verify/oidc/callback` | The redirect out and back, with the approval in `state`. |
 | `POST /api/verify/end` | Clear `verified_until` on the caller's token. **Built** (phase 2): bodiless, free, `{ ended }`, a no-op for anything but a device token. |
 | `POST /api/credentials/begin`, `POST /api/credentials/challenge`, `POST /api/credentials` | **Built.** Enrollment: `begin` is the act (fresh class) and hands out an approval of purpose `enroll`; the page redeems it for creation options (`attestation: "direct"`, the operator's random handle, every enrolled credential excluded) and posts the new credential, which waits on the presence check at the Mac unless its hardware attestation verified (decision 14). |
-| `GET /api/credentials`, `POST /api/credentials/:id/revoke` | **Built.** The list, without key material; revoking, an act (fresh class). |
+| `GET /api/credentials`, `POST /api/credentials/:id/revoke` | **Built.** The list, without key material, with `rp_id`, the host a credential must be enrolled for (The rename warning); revoking, an act (fresh class). |
 
 None of these is added to `AGENT_ROUTES`.
 
@@ -451,12 +455,75 @@ root, is simply unattested, never an error: the credential's own key is
 still the credential, it just cannot stand in for the Mac's dialog. iCloud
 passkeys send none and fall back to the presence check.
 
-**The record** (phase 4, not built: today only the token row keeps
-`verified_by`). A signal written by a verified device carries
-`verified_by` in its event `meta`; spawn, revive, mint and revoke log it
-with the act. The Devices list shows each device's verified state and
-which credential last verified it. With OIDC, that is a human identity on
-every act in an append-only log, which is what a reviewer asks for.
+**The record** (phase 4). **Built.** The token row keeps the last proof
+(`verified_at`, `verified_by`, `verified_method`), and `DbTokenStore.lastProof`
+reads it back whether or not the window is still open: `spend` and
+`endVerification` clear only the window columns, so who proved it survives
+the window, a fresh-class spend, and a window of zero. `VerificationGate.proof`
+hands it to a route *after* the check has passed, and returns null while the
+gate is off (nothing was proved) and for any token but a device's. A
+`human_signal` from a device under the gate carries it as
+`meta.verified = { by, method, at }` (`by` the credential's row id, never its
+label, which can change; `signalEventFields` takes it from the gate, never from
+the request), from both `POST /api/narratives/:id/signal` and the control
+socket. Every other HTTP act is logged once with the proof it passed the gate
+on (`passed the gate: POST /api/spawn …`; the gate's verdict, written before
+the route runs, so a route that then refuses, or a presence prompt that is
+declined, is still on that line), in the one place the gate runs
+(`classifyRoute(...).kind === "act"`),
+so spawn, run, revive, mint, revoke and the credential routes get it without
+a line each; the control socket logs its `signal`, and a device's `/ws/mcp`
+dial logs as the mint it is. A terminal's keystrokes are never logged. The
+Devices list (`GET /api/tokens`, `brane token list`, the app's Devices layer)
+shows each device's `verified: { at, until, by, by_id, method }`, `by` resolved
+to the credential's label (marked "(revoked)" once it is), `until` null once
+the window has ended. Both lists show the label in quotes (`proofName`,
+`src/shared/verification-hop.ts`): it says where the passkey was enrolled,
+which under another device's row otherwise reads as where the proof came
+from. The body's `gated` says whether the gate is on, so
+"never verified" is shown only when it means something. With OIDC (phase
+5), that is a human identity on every act in an append-only log, which is
+what a reviewer asks for.
+
+**The Signal API** (phase 4). **Built.** Only the RP ID's own origin may
+tell a password manager which passkeys still exist, so the call lives in the
+`/verify` page, not the app: every challenge response, and the success body of
+a proof or an enrollment, carries `accepted: { rpId, userId, credentialIds }`,
+every live credential for the RP with the operator's user handle, and the
+page passes it to `PublicKeyCredential.signalAllAcceptedCredentials`. A
+credential revoked from the Devices view is therefore dropped from the phone
+at its next ceremony here. `accepted` is left out when there are none, since an
+empty list would hide every passkey. An assertion by a credential the daemon
+no longer knows (reason `credential`) gets `signalUnknownCredential` with the
+id the browser used. Feature-detected; where the browser lacks the API
+nothing happens (Chrome 132+; Safari 26 in part; Firefox none).
+
+**The rename warning** (phase 4, open question 2 settled). **Built**
+(`src/daemon/verification-rename.ts`). A credential is bound to the host it
+was enrolled for, so renaming the machine or the tailnet orphans every
+passkey, and nothing can migrate them. The moments: when the daemon learns
+its hostname, at startup once the certificate is read and on every
+certificate reload, it records the host in `meta` (`verification.rp_id`) and
+logs a warning naming each other host and how many credentials it has, once
+per distinct warning (`RenameWatch`: a reload that says the same thing is
+quiet, a change in the counts is not); with the gate already on and
+nothing usable the line says every device is locked out and that the way
+out is `brane config verification off` from the shell, since enrolling is
+an act and no device can add the credential that would let it act. `GET
+/api/status` reports `verification.rp_id`, `rp_mismatch` (the other hosts)
+and `usable_credentials` (how many are enrolled for the served host), `GET
+/api/credentials` reports `rp_id`, the app's credentials list marks each
+orphan with the host it was enrolled for, and the lock sheet, when the gate
+is on and nothing usable is enrolled, says so and what to run from the
+shell instead of offering Verify (`noCredentialCanVerify`,
+`src/shared/verification-hop.ts`). And `brane config verification passkey`
+refuses when no live credential matches the recorded host, since the switch
+would lock every device out at once, and marks the orphans in the list it
+prints. The CLI has no certificate to read, which is why the daemon records
+the host for it; the host recorded is the one the ceremony would use, so a
+certificate provisioned after a blind start, while the protocol stays HTTP,
+records nothing. Pinned by `src/test/verification-rename.test.ts` and
+`src/test/verification-hop.test.ts`.
 
 ## The hop
 
@@ -515,7 +582,10 @@ Learned on the phone, then confirmed by the research below:
    its state; a `403` opens the sheet, a successful hop closes it and
    retries what was refused. Feature-detect with
    `PublicKeyCredential.getClientCapabilities()` to choose which buttons to
-   show, never to block.
+   show, never to block. When status says no enrolled credential can answer
+   on this daemon (`usable_credentials: 0` with the gate on), the sheet
+   offers no Verify: it says what to run from the daemon's shell (The
+   rename warning, under Daemon side).
 6. **Background ends the window.** `visibilitychange` to hidden sends
    `POST /api/verify/end`, bodiless, on the device token.
 7. **Ask for what the daemon will check** (decision 24). The challenge
@@ -525,6 +595,11 @@ Learned on the phone, then confirmed by the research below:
    reason `user-verification` under `"required"` means the authenticator
    ignored the request, so the page says that, and does not promise that
    another tap will differ.
+8. **Tell the password manager what still exists.** Pass the daemon's
+   `accepted` list to `signalAllAcceptedCredentials` on every challenge and
+   after every success, and a refused credential to
+   `signalUnknownCredential`; feature-detect, and never send an empty list
+   (The Signal API, under Daemon side).
 
 ## What a security review sees
 
@@ -540,6 +615,14 @@ Against the checklist a review runs (claude-bu1kt8a5:8):
 - A human identity on every act: the OIDC tier, recorded on the token and
   on the act.
 - An append-only, verbatim event log.
+- What a token holder learns before verifying: since phase 4 the verify
+  challenge (`POST /api/verify/begin`, free) carries every live
+  credential's id and the user handle, as `accepted` for the Signal API,
+  where before only the gated enroll challenge disclosed them in
+  `excludeCredentials`. Not a secret in WebAuthn's model (a username-first
+  sign-in hands `allowCredentials` to anyone who types the name), and the
+  Signal API cannot work without them; but it is one more thing a stolen
+  device token reads.
 
 And what it cannot paper over: an agent is a shell as the operator's
 account, like every coding agent on a laptop, which is why the phone-side
@@ -647,7 +730,8 @@ from vendor blogs are marked.
 - **Passkey autofill (conditional UI) adds little**: brane has no username
   field and the ceremony is rare.
 - **The RP ID cannot change.** Renaming the machine or the tailnet orphans
-  every passkey; recovery covers it, and phase 4 warns first.
+  every passkey; recovery covers it, and the daemon warns (The rename
+  warning, under Daemon side).
 - **WebAuthn refuses a page with a certificate error**, and the HTTP
   fallback can never run a ceremony.
 
@@ -657,8 +741,11 @@ from vendor blogs are marked.
    shows a code, the trusted one approves with Face ID. Not designed; includes
    how the approval returns to an app saved to the home screen, which may
    open Safari. Until then a second credential enrolls at the Mac.
-2. **Renames**: the daemon records each credential's RP ID and should warn
-   before a hostname change; the exact moment is undecided.
+2. ~~**Renames**~~: settled in phase 4 (The rename warning, under Daemon
+   side): the daemon warns when it learns its hostname, reports the
+   mismatch in status and the credentials list, and the switch refuses
+   when nothing can verify. It cannot warn *before* a rename, which
+   happens outside brane.
 3. **Untried**: Mac Safari and Firefox; Android; the presence check's
    Windows/WSL and polkit backends; a YubiKey's attestation and its
    signature as a presence method (claude-pbg4whll:63); OIDC against a real
@@ -715,9 +802,15 @@ Nothing locks anyone out until phase 3, and only when switched on.
    window. Then `brane config verification passkey` turns the gate on.
    Driven end to end against a sandbox daemon (claude-vxnhxcg9:51); to be
    lived with on the real phone and the real key before merging.
-4. **Policy and visibility.** The Devices list shows verified state and the
-   verifying credential; acts record it; stale-credential cleanup through
-   the Signal API; the rename warning.
+4. ~~**Policy and visibility.**~~ Built: the Devices list shows each
+   device's last proof and whether its window is open; signals carry it in
+   `meta.verified` and every other act is logged with it, from the gate's one
+   check site; the Signal API from the ceremony page; the rename warning
+   at startup and cert reload, in status, in the credentials list, and as
+   a refusal of the switch (The record, The Signal API, The rename
+   warning, under Daemon side). Tests: `src/test/verification-rename.test.ts`,
+   and the proof cases in `token-devices`, `signal-source`,
+   `verification-gate`, `verification-ceremony` and `verify-page`.
 5. **OIDC.** Issuer, client id and subject in config; the redirect through
    the daemon's page; `auth_time` against the window; identity on the token
    and on acts; `verification oidc` as the org switch.

@@ -16,6 +16,7 @@ import {
   withToken,
 } from "@shared/api-request";
 import { daemonFromHash, withoutConnectionHash, withoutConnectionParams } from "@shared/view-url";
+import type { ProtocolNamespace } from "@shared/protocol-names";
 import { formatSeqModeParam, formatSeqParam, type SeqSelectionMode } from "@shared/export-selection";
 import { verificationRefusal, type StatusVerification, type VerificationKind } from "@shared/verification-hop";
 import { lastTerminalSize } from "./terminal";
@@ -849,9 +850,11 @@ export interface WikiSectionRead {
 
 export async function readWikiSection(
   conn: ConnectionParams,
-  opts: { source?: string; slug: string; anchor?: string; window?: number; braneIds?: string[] },
+  opts: { source?: string; slug: string; anchor?: string; window?: number; braneIds?: string[]; nid?: string },
 ): Promise<WikiSectionRead> {
   const params = new URLSearchParams({ slug: opts.slug });
+  // A narrative's fold protocols are a source (`protocols:fold`) only for it.
+  if (opts.nid) params.set("nid", opts.nid);
   if (opts.source) params.set("source", opts.source);
   if (opts.anchor) params.set("anchor", opts.anchor);
   if (opts.window != null) params.set("window", String(opts.window));
@@ -872,13 +875,58 @@ export interface ProtocolInfo {
   name: string;
   description: string;
   version: string;
+  /** The namespace and path of the file in force. Absent from older daemons,
+   *  which serve built-ins only. */
+  from?: ProtocolNamespace;
+  path?: string;
+  /** Every namespace with this name, most local first. */
+  layers?: Array<{ from: ProtocolNamespace; path: string }>;
 }
 
-/** The protocol library. Chat linkifies a `/command` only when its name is in
- *  here, so slashes in prose don't turn into dead links. Protocol pages are
- *  read back through `readWikiSection` with `source: "protocols"`. */
-export async function listProtocols(conn: ConnectionParams): Promise<ProtocolInfo[]> {
-  const res = await fetchWithTimeout(apiUrl(conn, "/api/protocols"), {
+export interface ProtocolCatalog {
+  protocols: ProtocolInfo[];
+  /** Files that define nothing, and why; `pending` marks the ones waiting
+   *  only for the operator's approval. */
+  ignored: Array<{ from: ProtocolNamespace; path: string; reason: string; pending?: { sha256: string; changed: boolean } }>;
+  /** Every name that resolves to a file, bare and qualified (`brane.idle`). */
+  commands: string[];
+}
+
+/** Approve a `home` or `fold` protocol file, pinned to the hash of the text
+ *  the operator was shown (docs/protocols.md#approval). Bodiless, so no
+ *  preflight. A 409 means the file changed since; read it again. */
+export async function approveProtocolFile(conn: ConnectionParams, path: string, sha256: string): Promise<void> {
+  const query = new URLSearchParams({ path, sha256 }).toString();
+  const res = await fetchWithTimeout(apiUrl(conn, `/api/protocols/approve?${query}`), {
+    method: "POST",
+    headers: NO_HEADERS,
+  });
+  if (res.ok) return;
+  const data = await res.json().catch(() => ({}));
+  throw new Error(data.error ?? `Approve ${res.status}`);
+}
+
+/** Protocol files awaiting approval, each with its text and, if it changed,
+ *  the text approved before: what the reader diffs. */
+export async function listPendingProtocols(
+  conn: ConnectionParams,
+): Promise<Array<{ from: ProtocolNamespace; path: string; sha256: string; content: string; approved_content?: string }>> {
+  const res = await fetchWithTimeout(apiUrl(conn, "/api/protocols/pending"), { headers: NO_HEADERS });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error(data.error ?? `Pending protocols ${res.status}`);
+  }
+  return (await res.json()).pending ?? [];
+}
+
+/** The protocol library as narrative `nid` sees it (its fold's protocols,
+ *  then the operator's, then brane's), or without `nid` the operator's and
+ *  brane's. Chat linkifies a `/command` only when its name is in `commands`,
+ *  so slashes in prose don't turn into dead links. Protocol pages are read
+ *  back through `readWikiSection` with a `protocols` source. */
+export async function listProtocols(conn: ConnectionParams, nid?: string): Promise<ProtocolCatalog> {
+  const path = nid ? `/api/protocols?${new URLSearchParams({ nid }).toString()}` : "/api/protocols";
+  const res = await fetchWithTimeout(apiUrl(conn, path), {
     headers: NO_HEADERS,
   });
   if (!res.ok) {
@@ -886,7 +934,8 @@ export async function listProtocols(conn: ConnectionParams): Promise<ProtocolInf
     throw new Error(data.error ?? `Protocols ${res.status}`);
   }
   const data = await res.json();
-  return data.protocols ?? [];
+  const protocols: ProtocolInfo[] = data.protocols ?? [];
+  return { protocols, ignored: data.ignored ?? [], commands: data.commands ?? protocols.map((p) => p.name) };
 }
 
 /** Build a URL to a wiki asset (e.g. a relative image in a wiki page), served
@@ -1231,14 +1280,22 @@ export interface DeviceToken {
   /** A meld QR nobody has scanned yet; it lapses at `expires_at`. */
   unused: boolean;
   expires_at: number | null;
+  /** The last proof of the operator on this device (docs/passkeys.md, "The
+   *  record"): when, by which credential (`by` its label, `by_id` its id)
+   *  and how; `until` is null once the window has ended. Null for a device
+   *  never verified, and for every other kind. */
+  verified: { at: number; until: number | null; by: string; by_id: string; method: string } | null;
 }
 
-/** The Devices list. Resolves null on a 404, a daemon from before the list. */
-export async function listDeviceTokens(conn: ConnectionParams): Promise<DeviceToken[] | null> {
+/** The Devices list, and whether the verification gate is on (so "never
+ *  verified" means something). Resolves null on a 404, a daemon from before
+ *  the list. */
+export async function listDeviceTokens(conn: ConnectionParams): Promise<{ tokens: DeviceToken[]; gated: boolean } | null> {
   const res = await fetchWithTimeout(apiUrl(conn, "/api/tokens"), { headers: NO_HEADERS });
   if (res.status === 404) return null;
   if (!res.ok) throw new Error(`Devices ${res.status}`);
-  return ((await res.json()) as { tokens: DeviceToken[] }).tokens;
+  const body = (await res.json()) as { tokens: DeviceToken[]; gated?: boolean };
+  return { tokens: body.tokens, gated: body.gated ?? false };
 }
 
 /** Sign out one device. Bodiless, like `rotateToken`, so no preflight. A 404
@@ -1325,12 +1382,16 @@ export interface EnrolledCredential {
   last_used_at: number | null;
 }
 
-/** The enrolled passkeys and keys. Null on a 404, a daemon from before them. */
-export async function listCredentials(conn: ConnectionParams): Promise<EnrolledCredential[] | null> {
+/** The enrolled passkeys and keys, and the host they must be enrolled for
+ *  (`rp_id`, null without TLS or on a daemon from before it): a credential
+ *  whose `rp_id` differs was orphaned by a rename and cannot verify here.
+ *  Null on a 404, a daemon from before them. */
+export async function listCredentials(conn: ConnectionParams): Promise<{ credentials: EnrolledCredential[]; rp_id: string | null } | null> {
   const res = await fetchWithTimeout(apiUrl(conn, "/api/credentials"), { headers: NO_HEADERS });
   if (res.status === 404) return null;
   if (!res.ok) throw new Error(`Credentials ${res.status}`);
-  return ((await res.json()) as { credentials: EnrolledCredential[] }).credentials;
+  const body = (await res.json()) as { credentials: EnrolledCredential[]; rp_id?: string | null };
+  return { credentials: body.credentials, rp_id: body.rp_id ?? null };
 }
 
 /** Revoke a credential: it can no longer verify. An act, so the gate may ask

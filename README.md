@@ -148,13 +148,35 @@ and anything that fits on a laptop is still wide enough that brane treats
 hosted inference as the default. Run a local model with a brane-compatible
 CLI whenever that calculus changes for you.
 
-## Further reading
+## Documentation
 
-- [DESIGN.md](DESIGN.md): architecture, storage, the ID scheme, threading
+All of this ships in the npm package as well as this repository, so every
+install carries the docs for the version it runs:
+
+- [AGENTS.md](AGENTS.md): the index. It lists the rules for every change and
+  has one line per subsystem pointing into `docs/`
 - [docs/](docs/): one page per subsystem, from the daemon's API to terminal
   mirroring
+- [DESIGN.md](DESIGN.md): architecture, storage, the ID scheme, threading
+- [SECURITY.md](SECURITY.md): the threat model
 - [protocols/](protocols/): the protocols agents follow, starting with
   [the LIVE loop](protocols/LIVE_loop.md)
+- [wiki/shared/](wiki/shared/): why brane is shaped the way it is
+
+### Ask an agent
+
+The quickest way in is to ask. Every brane agent, in any fold and of any
+type, is told where its install's docs live (`whoami` reports
+`install_dir`) and to read them rather than guess. So signal it as you would
+ask a colleague:
+
+- "How does `brane meld` decide what URL goes in the QR code?"
+- "What happens to my phone's session when I run `brane token rotate`?"
+- "What did we decide last week about the deploy script?" (this one is
+  answered by searching your own narratives, not the docs)
+
+When the agent's fold is some other project, say "brane's own docs", so it
+doesn't go looking in that project's.
 
 ## Contributing
 

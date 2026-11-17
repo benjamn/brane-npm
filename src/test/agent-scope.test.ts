@@ -172,6 +172,11 @@ describe("agentRequestRefusal, as the HTTP handler and the upgrade ask it", () =
 const serverSource = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "src", "daemon", "server.ts");
 
 const CLOSED_TO_AGENTS = new Set([
+  // Approving protocols is the operator's (docs/protocols.md#approval); an
+  // agent sees what is pending on /home and /fold.
+  "GET /api/protocols/pending",
+  "POST /api/protocols/approve",
+  "POST /api/protocols/revoke",
   "GET /api/absorb/survey",
   "POST /api/absorb",
   "PATCH /api/branes/archive",

@@ -25,6 +25,7 @@ interface ChangelogModule {
   changelogSection(changelog: string, version: string): string;
   stripPullRequestLinks(markdown: string): string;
   wrapForCommit(markdown: string, width?: number): string;
+  unwrapForRelease(markdown: string): string;
   releaseNotes(o: { changelog: string; name: string; version: string; repo: string; previous?: string }): string;
 }
 
@@ -102,12 +103,20 @@ describe("the publishing repository", () => {
     // The trusted publisher allows no dist-tag changes; nor does the workflow.
     assert.doesNotMatch(yml, /\bnpm dist-tag\b/, "nothing moves a dist-tag");
     assert.doesNotMatch(yml, /CLOUDFLARE_API_TOKEN/, "release.yml never handles the Cloudflare token");
-    // No secrets: block at all, so `secrets: inherit` cannot hand the called
-    // deploy the repository's secrets either.
+    // No secrets: block at all, so `secrets: inherit` cannot hand anything
+    // the repository's secrets either.
     assert.doesNotMatch(yml, /^\s+secrets:/m, "release.yml passes no secrets");
+    // The deploy is dispatched, never called: a called workflow's secrets are
+    // only what its caller passes, so 0.3.12's first deploy, made by a call,
+    // ran with an empty token. A dispatched run's job in `app` reads it.
+    assert.doesNotMatch(yml, /uses:\s*\.\/\.github\/workflows\//, "release.yml calls no workflow");
+    assert.match(jobs.get("deploy-app")!, /gh workflow run deploy-app\.yml\b/);
+    assert.match(jobs.get("deploy-app")!, /^\s+actions:\s*write\s*$/m);
 
     const deployYml = join(root, ".github", "workflows", "deploy-app.yml");
-    const deploy = workflowJobs(readFileSync(deployYml, "utf8").replace(/^\s*#.*$/gm, ""));
+    const deployText = readFileSync(deployYml, "utf8").replace(/^\s*#.*$/gm, "");
+    assert.doesNotMatch(deployText, /workflow_call/, "deploy-app.yml is dispatched, not called");
+    const deploy = workflowJobs(deployText);
     assert.deepEqual([...deploy.keys()], ["gate", "deploy"]);
     // Both run only in brane-npm, so a dispatch in the private repository (or
     // a fork) cannot create an unprotected app environment and deploy from it.
@@ -178,6 +187,71 @@ describe("scripts/changelog.mjs", () => {
     assert.ok(lines.every((line) => line.length <= 40), wrapped);
     assert.ok(lines.slice(1).some((line) => line.startsWith("  word")), wrapped);
     assert.match(wrapped, /\n- short\n\nAfter the list\.$/);
+  });
+
+  // GitHub renders a release body's newlines as line breaks: 0.3.12-rc.1,
+  // rc.2 and 0.3.12 went out with CHANGELOG.md's 76-column wrapping showing.
+  it("unwraps paragraphs and bullets for a release body, and nothing else", async (t) => {
+    if (!existsSync(CHANGELOG_MJS)) return t.skip("source is not present (an installed package)");
+    const { unwrapForRelease } = await loadChangelog();
+    const source = [
+      "A paragraph",
+      "wrapped twice",
+      "here.",
+      "",
+      "- A bullet",
+      "  continued.",
+      "  - A nested bullet",
+      "    continued.",
+      "- Next bullet.",
+      "1. Numbered",
+      "   continued.",
+      "",
+      "### A heading",
+      "> A quote",
+      "> continued.",
+      "",
+      "Hard break\\",
+      "after a backslash.",
+      "",
+      "```",
+      "fenced",
+      "  code",
+      "```",
+      "After the fence",
+      "too.",
+    ].join("\n");
+    assert.equal(
+      unwrapForRelease(source),
+      [
+        "A paragraph wrapped twice here.",
+        "",
+        "- A bullet continued.",
+        "  - A nested bullet continued.",
+        "- Next bullet.",
+        "1. Numbered continued.",
+        "",
+        "### A heading",
+        "> A quote",
+        "> continued.",
+        "",
+        "Hard break\\",
+        "after a backslash.",
+        "",
+        "```",
+        "fenced",
+        "  code",
+        "```",
+        "After the fence too.",
+      ].join("\n"),
+    );
+  });
+
+  it("writes release notes with one line per bullet, after dropping PR links", async (t) => {
+    if (!existsSync(CHANGELOG_MJS)) return t.skip("source is not present (an installed package)");
+    const { releaseNotes } = await loadChangelog();
+    const notes = releaseNotes({ changelog, name: "brane", version: "0.4.0-rc.1", repo: "benjamn/brane-npm" });
+    assert.match(notes, /\n\n- One thing changed\.\n- Two links, wrapped\.\n\nA closing paragraph\.\n$/);
   });
 
   it("writes release notes with install lines and a compare link", async (t) => {

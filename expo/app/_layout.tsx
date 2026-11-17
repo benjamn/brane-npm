@@ -6,7 +6,6 @@ import {
   parseConnectionParams,
   probeDaemon,
   clearStoredConnection,
-  listProtocols,
   rotateToken,
   forgetDeviceToken,
   setUnauthorizedListener,
@@ -41,6 +40,8 @@ import { checkMeldHost, isFirstMeld, meldRefusalMessage } from "@shared/tailnet"
 import { installNoPan } from "@/lib/noPan";
 import { installVerification, noteVerified, refreshStatus, requireVerification } from "@/lib/verification";
 import LockSheet from "@/components/LockSheet";
+import { useProtocolView } from "@/lib/protocols";
+import type { ProtocolNamespace } from "@shared/protocol-names";
 
 // Before the first tap: iOS must never move the page under the app, whether
 // to reveal a focused field or on a drag nothing else takes.
@@ -87,6 +88,9 @@ interface BraneContextValue {
    *  linkify a `/command` only when it's in here, so the set has to be loaded
    *  before anything can light up — it arrives empty and fills in. */
   protocols: Set<string>;
+  /** For each protocol name, the namespaces that have it, most local first:
+   *  what `protocolReaderTarget` needs to open the file in force. */
+  protocolLayers: Record<string, ProtocolNamespace[]>;
   /** Every narrative id the daemon knows, from the control channel's `state`
    *  frame. Sent unprompted on connect, covers archived narratives too, and
    *  rides the socket a screen already needs — so it is the cheapest and most
@@ -135,6 +139,7 @@ const BraneContext = createContext<BraneContextValue>({
   onMeta: () => () => {},
   onToolUses: () => () => {},
   protocols: new Set<string>(),
+  protocolLayers: {},
   narrativeIds: new Set<string>(),
 });
 
@@ -638,22 +643,9 @@ export default function RootLayout() {
     return () => { toolUsesListeners.delete(cb); };
   }, [toolUsesListeners]);
 
-  // The protocol library changes only when the daemon's checkout does, so one
-  // fetch per connection is plenty.
-  const [protocols, setProtocols] = useState<Set<string>>(() => new Set());
-  useEffect(() => {
-    if (!conn) {
-      setProtocols(new Set());
-      return;
-    }
-    let cancelled = false;
-    listProtocols(conn)
-      .then((list) => {
-        if (!cancelled) setProtocols(new Set(list.map((p) => p.name)));
-      })
-      .catch(() => {});
-    return () => { cancelled = true; };
-  }, [conn]);
+  // The operator's and brane's protocols. A chat screen fetches its own view,
+  // which adds its fold's (`useProtocolView(conn, nid)`).
+  const protocolView = useProtocolView(conn);
 
   const contextValue = useMemo(() => ({
     conn,
@@ -678,9 +670,10 @@ export default function RootLayout() {
     onStatus,
     onMeta,
     onToolUses,
-    protocols,
+    protocols: protocolView.commands,
+    protocolLayers: protocolView.layers,
     narrativeIds,
-  }), [conn, connected, daemons, activeDaemon, activeBraneId, switchDaemon, switchBrane, handleAddDaemon, handleRemoveDaemon, handleArchiveDaemon, handleReconnectDaemon, handleForgetDaemon, handleRotateToken, subscribe, unsubscribe, subscribeActivity, unsubscribeActivity, onActivity, onHint, onStatus, onMeta, onToolUses, protocols]);
+  }), [conn, connected, daemons, activeDaemon, activeBraneId, switchDaemon, switchBrane, handleAddDaemon, handleRemoveDaemon, handleArchiveDaemon, handleReconnectDaemon, handleForgetDaemon, handleRotateToken, subscribe, unsubscribe, subscribeActivity, unsubscribeActivity, onActivity, onHint, onStatus, onMeta, onToolUses, protocolView]);
 
   return (
     <BraneContext.Provider value={contextValue}>

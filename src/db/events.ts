@@ -23,6 +23,11 @@ export interface EventSession {
  */
 export interface EventMeta {
   summary?: string;
+  /** On a `human_signal` from a device under the verification gate: the
+   *  proof that let it through, by credential row id (or `oidc:<sub>`),
+   *  method and time (docs/passkeys.md, "The record"). Absent with the gate
+   *  off, and from this machine's shell, which is never gated. */
+  verified?: { by: string; method: string; at: number };
   session_id?: string;
   session?: EventSession;
   model?: string;

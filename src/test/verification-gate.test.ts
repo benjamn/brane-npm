@@ -342,6 +342,31 @@ describe("the store and the gate together", () => {
     assert.deepEqual(store.verification(device.id, clock.t), NEVER);
   });
 
+  it("keeps who proved it for the record after the window ends, and says nothing while off or for an agent", () => {
+    const { db, store, device, agent, gate, clock } = deviceAndGate();
+    assert.equal(gate.proof(device), null, "never verified");
+    assert.equal(store.lastProof(device.id), null);
+    store.verify(device.id, { now: T0, windowMs: 10 * 60_000, freshMs: FRESH_WINDOW_MS, by: "cred-1", method: "webauthn:attested" });
+    const proof = { by: "cred-1", method: "webauthn:attested", at: T0 };
+    assert.deepEqual(gate.proof(device), proof);
+    assert.equal(gate.proof(agent), null, "an agent is never gated, so never proved");
+
+    // A fresh-class act spends the freshness, a window of zero the window;
+    // the record of who gave the proof survives both, and an early end.
+    assert.equal(gate.refuseRoute(device, "POST", "/api/tokens"), null);
+    assert.deepEqual(gate.proof(device), proof);
+    clock.t = T0 + 10 * 60_000;
+    assert.deepEqual(gate.proof(device), proof, "after the window");
+    store.endVerification(device.id);
+    assert.deepEqual(gate.proof(device), proof, "after an early end");
+
+    db.prepare("INSERT OR REPLACE INTO meta (key, value) VALUES ('config.verification', 'off')").run();
+    assert.equal(gate.proof(device), null, "with the gate off nothing was proved, whatever the row says");
+
+    store.revoke([device.id], clock.t);
+    assert.equal(store.lastProof(device.id), null, "a revoked row is no device");
+  });
+
   it("never gates an agent token, and verify() refuses to mark one", () => {
     const { store, agent, gate } = deviceAndGate();
     assert.equal(gate.refuseRoute(agent, "POST", "/api/spawn"), null);

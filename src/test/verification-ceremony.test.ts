@@ -139,6 +139,32 @@ describe("verify", () => {
     assert.deepEqual(s.tokens.verification(s.laptop.id, T0), { verifiedUntil: null, freshUntil: null });
   });
 
+  it("hands the page every credential it still accepts, for the Signal API, and nothing when there are none", async () => {
+    const s = setup();
+    const userId = Buffer.alloc(32, 7).toString("base64url");
+    const empty = s.ceremonies.challenge(approvalOf(s.ceremonies.begin(s.phone.id, "enroll")), "enroll").body as Body;
+    assert.equal("accepted" in empty, false, "an empty list would hide every passkey");
+
+    const key = new SoftAuthenticator(RP.rpId, RP.origin);
+    const enrolled = (await enroll(s, key)).body as Body;
+    assert.deepEqual(enrolled.accepted, { rpId: RP.rpId, userId, credentialIds: [key.id.toString("base64url")] }, "the enrollment's reply names the new one");
+
+    const approval = approvalOf(s.ceremonies.begin(s.phone.id, "verify"));
+    const options = s.ceremonies.challenge(approval, "verify").body as Body;
+    assert.deepEqual(options.accepted, { rpId: RP.rpId, userId, credentialIds: [key.id.toString("base64url")] });
+    const proof = s.ceremonies.finishVerify({ approval, credential: key.get(options.publicKey.challenge) }).body as Body;
+    assert.deepEqual(proof.accepted.credentialIds, [key.id.toString("base64url")]);
+
+    // Revoked from the Devices view: the next challenge leaves it out, which
+    // is what has the phone drop it; a credential on another host is not ours here.
+    const second = new SoftAuthenticator(RP.rpId, RP.origin);
+    await enroll(s, second);
+    const [first] = s.credentials.list();
+    s.credentials.revoke(first.id, T0);
+    const next = s.ceremonies.challenge(approvalOf(s.ceremonies.begin(s.phone.id, "verify")), "verify").body as Body;
+    assert.deepEqual(next.accepted.credentialIds, [second.id.toString("base64url")]);
+  });
+
   it("verifies only the token that asked, whatever the body names (claude-vxnhxcg9:25 #3)", async () => {
     const s = setup();
     const key = new SoftAuthenticator(RP.rpId, RP.origin);

@@ -293,25 +293,30 @@ jobs:
           if [ "$PRERELEASE" = 'true' ]; then flags+=(--prerelease); fi
           gh release create "v$VERSION" --verify-tag --title "brane $VERSION" --notes-file notes.md "${flags[@]}"
 
-  # A separate job, so a Cloudflare failure is a re-run of this job (or a
-  # dispatch of deploy-app.yml), never a second release: publishing cannot be
-  # undone, deploying can be repeated. Its Cloudflare token lives in the `app`
-  # environment, which waits for the operator, so a pushed commit cannot read
-  # it. A deploy that failed after its release was finished is redeployed by
-  # dispatching deploy-app.yml (docs/releasing.md).
+  # Starts the app deploy as a run of its own: it dispatches deploy-app.yml,
+  # whose job in the `app` environment waits for the operator and then reads
+  # the Cloudflare token there. Not a reusable-workflow call: a called
+  # workflow's secrets are only what the caller passes, so the token would be
+  # empty (deploy-app.yml). Publishing cannot be undone and deploying can be
+  # repeated, so a Cloudflare failure is a re-run of that run, or another
+  # dispatch, never a second release (docs/releasing.md).
   deploy-app:
-    name: Deploy the app
+    name: Start the app deploy
     needs: [plan, approval]
     if: >-
       !cancelled() &&
       needs.plan.result == 'success' &&
       needs.plan.outputs.prerelease != 'true' &&
       (needs.plan.outputs.finish == 'true' || needs.approval.outputs.approved == 'true')
-    # A called workflow can only lower the permissions it is given: its gate job
-    # reads the app environment's rules.
+    runs-on: ubuntu-latest
     permissions:
-      contents: read
-      actions: read
-    uses: ./.github/workflows/deploy-app.yml
-    with:
-      version: ${{ needs.plan.outputs.version }}
+      # A GITHUB_TOKEN may trigger workflow_dispatch, unlike most events.
+      actions: write
+    steps:
+      - name: Dispatch deploy-app.yml
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.plan.outputs.version }}
+        run: |
+          gh workflow run deploy-app.yml --repo "$GITHUB_REPOSITORY" --ref "$GITHUB_REF_NAME" -f version="$VERSION"
+          echo "::notice title=App deploy dispatched::Approve the app deployment on the Deploy app run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/workflows/deploy-app.yml"

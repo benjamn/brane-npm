@@ -30,7 +30,9 @@ checkout itself. `package.json` `files` ships the single directory
 `wiki/shared`, which is what makes the tarball the same set of pages the
 daemon serves. Source labels are the fold's basename, disambiguated in
 registration order (`brane`, `brane~2`) by `wikiFoldLabels` so a label is
-stable across callers; `protocols` is reserved.
+stable across callers; `protocols` is reserved, and the protocol namespaces
+serve the reader as `protocols`, `protocols:home` and `protocols:fold`
+([Protocols](protocols.md#the-app)).
 
 **Links are filesystem-relative, and shared → local is a citation, not a
 promise.** From `shared/a.md`, `b.md` is `shared/b.md` and `../c.md` is the

@@ -51,6 +51,8 @@ export const ACT_NAMES = [
   "forget",
   "enroll",
   "revoke-credential",
+  "approve-protocol",
+  "revoke-protocol",
 ] as const;
 export type ActName = (typeof ACT_NAMES)[number];
 
@@ -59,7 +61,7 @@ export type ActName = (typeof ACT_NAMES)[number];
  *  `FRESH_WINDOW_MS` **and not yet spent**: a passing fresh-class act clears
  *  `fresh_until`, so one proof buys one such act, and one verified window
  *  cannot buy access after it closes (docs/passkeys.md, "The fresh class"). */
-export const DEFAULT_FRESH_ACTS: readonly ActName[] = ["mint", "mcp-dial", "enroll", "revoke-credential"];
+export const DEFAULT_FRESH_ACTS: readonly ActName[] = ["mint", "mcp-dial", "enroll", "revoke-credential", "approve-protocol"];
 export const DEFAULT_WINDOW_MINUTES = 10;
 export const MAX_WINDOW_MINUTES = 24 * 60;
 /** How recent a proof must be for a fresh-class act, and how long a proof
@@ -73,6 +75,7 @@ export const FREE_ROUTES: readonly string[] = [
   "GET /api/status",
   "GET /api/branes",
   "GET /api/protocols",
+  "GET /api/protocols/pending",
   "GET /api/folds",
   "GET /api/narratives",
   "GET /api/narratives/recent",
@@ -140,6 +143,8 @@ export const ACT_ROUTES: ReadonlyArray<readonly [route: string, act: ActName]> =
   ["POST /api/token/forget", "forget"],
   ["POST /api/credentials/begin", "enroll"],
   ["POST /api/credentials/:id/revoke", "revoke-credential"],
+  ["POST /api/protocols/approve", "approve-protocol"],
+  ["POST /api/protocols/revoke", "revoke-protocol"],
 ];
 
 /** Control-socket messages that read: subscriptions and their undoing.
@@ -184,11 +189,28 @@ export const APP_ANSWERS_REFUSALS = true;
 export function configValueRefusal(
   key: string,
   value: string,
-  opts: { credentials: number; appAnswersRefusals?: boolean },
+  opts: {
+    /** Live credentials that can verify here: enrolled for the host the
+     *  daemon serves, or any when that host is not yet known. */
+    credentials: number;
+    /** Live credentials enrolled for another host, by that host: what a
+     *  rename of the machine or the tailnet leaves behind
+     *  (src/daemon/verification-rename.ts). */
+    orphaned?: ReadonlyMap<string, number>;
+    rpId?: string | null;
+    appAnswersRefusals?: boolean;
+  },
 ): string | null {
   switch (key) {
     case "verification":
       if (!(VERIFICATION_MODES as readonly string[]).includes(value)) return `verification must be one of ${VERIFICATION_MODES.join(", ")}`;
+      if (value !== "off" && opts.credentials === 0 && opts.orphaned && opts.orphaned.size > 0 && opts.rpId) {
+        const was = [...opts.orphaned].map(([host, n]) => `${n} enrolled for ${host}`).join(", ");
+        return (
+          `Every enrolled credential is bound to another hostname (${was}) and this daemon serves ${opts.rpId}, ` +
+          "so none can verify here and switching verification on would lock every device out; enroll one on this host first, from the app's Devices view"
+        );
+      }
       if (value !== "off" && opts.credentials === 0) {
         return "No credential is enrolled, so switching verification on would lock every device out; enroll one first, from the app's Devices view";
       }
@@ -255,6 +277,15 @@ export function readVerificationConfig(db: Database.Database, warn: (message: st
 
 /** What the daemon holds per token: until when it is verified, and until
  *  when its last proof counts as fresh. Null means never. */
+/** What last proved the operator on a device token: the credential's row id
+ *  (or `oidc:<sub>`), the method, and when. The record an act keeps
+ *  (docs/passkeys.md, "The record"). */
+export interface Proof {
+  by: string;
+  method: string;
+  at: number;
+}
+
 export interface VerificationState {
   verifiedUntil: number | null;
   freshUntil: number | null;
@@ -324,6 +355,9 @@ export interface VerificationReader {
    *  pass, whatever awaits between the gate and the act
    *  (claude-bu1kt8a5:44). */
   spend(id: string, what: "fresh" | "all", now: number): boolean;
+  /** The last proof on a live device token, whether or not its window is
+   *  still open; null for a row never verified, and for any other kind. */
+  lastProof(id: string): Proof | null;
 }
 
 /** What a passing act spends: nothing, its freshness, or the whole proof. */
@@ -393,5 +427,16 @@ export class VerificationGate {
    *  does not know, which is still an act. */
   refuseAct(record: { id: string; kind: TokenKind }, act: ActName | null): VerificationRefusal | null {
     return this.check(record, act);
+  }
+
+  /** What let this device's act through, for the record the act keeps
+   *  (docs/passkeys.md, "The record"): the credential, the method, and when.
+   *  Read after the check has passed. Null while the gate is off, since
+   *  nothing was proved, and for any token but a device's. Under a window of
+   *  zero the check has already spent the window; the proof's identity
+   *  outlives it, so the record is still written. */
+  proof(record: { id: string; kind: TokenKind }): Proof | null {
+    if (this.config().mode === "off" || record.kind !== "device") return null;
+    return this.store.lastProof(record.id);
   }
 }

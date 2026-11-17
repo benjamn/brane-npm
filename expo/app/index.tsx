@@ -41,6 +41,7 @@ import {
   type ConnectionParams,
 } from "@/lib/api";
 import WikiReader, { type WikiTarget } from "@/components/WikiReader";
+import { protocolReaderTarget } from "@shared/protocol-names";
 import { MarkdownLinksProvider } from "@/components/MarkdownLinks";
 import type { DaemonEntry } from "@/lib/registry";
 import { RECYCLE_STEP, RecycleGlyph, useDetentSpin } from "@/components/RecycleSpinner";
@@ -1352,6 +1353,7 @@ export default function NarrativeList() {
     onActivity,
     subscribeActivity,
     unsubscribeActivity,
+    protocolLayers,
   } = useBrane();
   // Whether this page is the daemon's own bundle, and if so where Isolate
   // hops out to: the host the daemon reports, never one the app knows. Asked
@@ -1928,7 +1930,10 @@ export default function NarrativeList() {
         <MarkdownLinksProvider
           knownNarrativeIds={knownNarrativeIds}
           onNarrativePress={(nid, seq) => router.push(seq != null ? `/${nid}?scrollToSeq=${seq}` : `/${nid}`)}
-          onProtocolPress={(name) => setWikiReader({ source: "protocols", slug: name })}
+          onProtocolPress={(name) => {
+            const target = protocolReaderTarget(name, protocolLayers);
+            if (target) setWikiReader(target);
+          }}
         >
           <PullToRefresh
             refreshing={refreshing}

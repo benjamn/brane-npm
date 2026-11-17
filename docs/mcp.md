@@ -92,7 +92,7 @@ Core tools available via MCP:
 | **narrative_info** | Get narrative info: browse recent narratives or get details on specific ones |
 | **list_peers** | List active LIVE-loop agent peers, grouped by fold |
 | **list_branes** | List all branes hosted by this daemon (caller's home first) — use to expand `narrative_search` / `narrative_info` across branes |
-| **list_protocols** / **read_protocol** | Access protocol documents |
+| **list_protocols** / **read_protocol** | Access protocols across the `fold`, `home` and `brane` namespaces; `read_protocol` takes `/command` names as written (`brane.review`) and returns `layers` — see [Protocols](protocols.md) |
 
 ## Narrative Metadata
 

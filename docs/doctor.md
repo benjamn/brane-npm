@@ -32,5 +32,13 @@ first start, and removing the leftover is the operator's to do, with the
 `rm` line printed (`leftoverTokenFile()`; see [No local
 token](token-rotation.md#no-local-token)).
 
+The `protocols` line reads the library as an agent spawned in the current
+directory would see it: this directory's `.brane/protocols` (if any),
+`~/.brane/protocols`, and this install's built-ins. It names every protocol
+outside `brane` and what it shadows, and turns to a warning listing each
+ignored file and why (`protocolsCheck()`; see [Protocols](protocols.md#trust)):
+a protocol there instructs agents with no diff to review, so this is the one
+place they all show.
+
 `--no-suite` runs only the environment checks; `--suite-only` runs only the
 tests (`brane doctor --suite-only` is the one-liner for a bug report).

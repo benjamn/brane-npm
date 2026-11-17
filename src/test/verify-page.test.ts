@@ -16,6 +16,13 @@ describe("the /verify page", () => {
     assert.doesNotThrow(() => new Function(script));
   });
 
+  it("tells the password manager what the daemon still accepts, and what it no longer knows", () => {
+    assert.match(script, /signalAllAcceptedCredentials\(\{ rpId: accepted\.rpId, userId: accepted\.userId, allAcceptedCredentialIds: accepted\.credentialIds \}\)/);
+    assert.match(script, /signalUnknownCredential\(\{ rpId: rpId, credentialId: credentialId \}\)/);
+    // Never with an empty list, which would hide every passkey.
+    assert.match(script, /!accepted\.credentialIds\.length/);
+  });
+
   it("runs exactly that script under its CSP", () => {
     const hash = createHash("sha256").update(script).digest("base64");
     assert.match(verifyPageHeaders()["Content-Security-Policy"], new RegExp(`script-src 'sha256-${hash.replace(/[+/]/g, "\\$&")}'`));

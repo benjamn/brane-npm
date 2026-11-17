@@ -30,6 +30,9 @@ function detail(c: EnrolledCredential): string {
 
 export default function CredentialsSection({ conn, visible }: { conn: ConnectionParams | null; visible: boolean }) {
   const [list, setList] = useState<EnrolledCredential[] | null>(null);
+  // The host a credential must be enrolled for; one enrolled for another was
+  // orphaned by a rename (docs/passkeys.md, "The rename warning").
+  const [rpId, setRpId] = useState<string | null>(null);
   const [unsupported, setUnsupported] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [pageUrl, setPageUrl] = useState<string | null>(null);
@@ -42,7 +45,8 @@ export default function CredentialsSection({ conn, visible }: { conn: Connection
     try {
       const l = await listCredentials(conn);
       setUnsupported(l === null);
-      setList(l ?? []);
+      setList(l?.credentials ?? []);
+      setRpId(l?.rp_id ?? null);
     } catch (err) {
       setError(String(err));
     }
@@ -130,6 +134,11 @@ export default function CredentialsSection({ conn, visible }: { conn: Connection
             <View style={{ flex: 1 }}>
               <Text style={styles.rowTitle} numberOfLines={1}>{c.label}</Text>
               <Text style={styles.rowDetail}>{detail(c)}</Text>
+              {rpId !== null && c.rp_id !== rpId && (
+                <Text style={styles.warn}>
+                  Enrolled for {c.rp_id}; this daemon is now {rpId}, so it cannot verify here. Add one on this host.
+                </Text>
+              )}
             </View>
             <Pressable
               style={[styles.revoke, confirming === c.id && styles.revokeConfirm, revoking !== null && { opacity: 0.5 }]}

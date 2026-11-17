@@ -30,6 +30,20 @@ describe("signalEventFields", () => {
     assert.deepEqual(fields, { content: "hi", source: "web", re: [3] });
   });
 
+  it("records the proof the gate let the sender through on, in meta, and nothing when there was none", () => {
+    const proof = { by: "cred-1", method: "webauthn", at: 1_700_000_000_000 };
+    assert.deepEqual(signalEventFields({ source: "web" }, { content: "go" }, undefined, proof), {
+      content: "go",
+      source: "web",
+      re: undefined,
+      meta: { verified: proof },
+    });
+    // The gate is off, or the sender is this machine's shell: no meta at all,
+    // never an empty one.
+    assert.equal("meta" in signalEventFields({ source: "local" }, { content: "go" }, undefined, null), false);
+    assert.equal("meta" in signalEventFields({ source: "web" }, { content: "go" }), false);
+  });
+
   it("carries stored payload paths, and nothing else from the request", () => {
     const fields = signalEventFields(
       { source: "local" },

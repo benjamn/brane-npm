@@ -78,6 +78,7 @@ describe("who the gate holds", () => {
       "revoke-device": "sign out a device from brane",
       rotate: "sign out every other device from brane",
       enroll: "add a passkey or security key to brane",
+      "approve-protocol": "approve a protocol for brane's agents",
     });
   });
 });

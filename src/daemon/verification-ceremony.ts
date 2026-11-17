@@ -231,6 +231,7 @@ export class Ceremonies {
           purpose,
           publicKey: { challenge, rpId: rp.rpId, timeout: CHALLENGE_TTL_MS, kinds: verifyKinds(live) },
           enrolled: live.length,
+          ...this.accepted(rp, live),
         },
       };
     }
@@ -248,8 +249,21 @@ export class Ceremonies {
           excludeCredentials: live.map(descriptorOf),
         },
         enrolled: live.length,
+        ...this.accepted(rp, live),
       },
     };
+  }
+
+  /** For the page's Signal API call (docs/passkeys.md, Research): every
+   *  credential this daemon still accepts for the RP, with the operator's
+   *  user handle, as `accepted`. The page hands it to
+   *  `signalAllAcceptedCredentials`, which has a password manager drop any
+   *  passkey of ours it holds that is not in the list: the one revoked from
+   *  the Devices view, an origin that may not say so itself. Left out when
+   *  there are none, since an empty list would hide every passkey. */
+  private accepted(rp: RelyingParty, live: readonly CredentialRow[]): { accepted?: { rpId: string; userId: string; credentialIds: string[] } } {
+    if (live.length === 0) return {};
+    return { accepted: { rpId: rp.rpId, userId: b64u(this.deps.userHandle()), credentialIds: live.map((c) => b64u(c.credential_id)) } };
   }
 
   /** `POST /api/verify/webauthn`: an assertion, checked against the
@@ -291,7 +305,7 @@ export class Ceremonies {
       const verifiedUntil = now + (windowMs > 0 ? windowMs : FRESH_WINDOW_MS);
       this.deps.log?.(`[verification] ${a.tokenId} verified by ${cred.id} (${cred.label}) until ${new Date(verifiedUntil).toISOString()}`);
       this.deps.onVerified?.(a.tokenId, verifiedUntil);
-      return { status: 200, body: { verified: true, verified_until: verifiedUntil, credential: cred.id } };
+      return { status: 200, body: { verified: true, verified_until: verifiedUntil, credential: cred.id, ...this.accepted(rp, this.deps.credentials.live(rp.rpId)) } };
     } catch (err) {
       return this.failed(approval, a, err, by);
     }
@@ -366,7 +380,7 @@ export class Ceremonies {
       return { status: 409, body: { error: "this credential was enrolled meanwhile" } };
     }
     this.deps.log?.(`[verification] enrolled ${listing.id} (${listing.label}) by ${enrolledBy}`);
-    return { status: 200, body: { credential: listing } };
+    return { status: 200, body: { credential: listing, ...this.accepted(rp, this.deps.credentials.live(rp.rpId)) } };
   }
 
   /** Pending approvals, for the suite. */

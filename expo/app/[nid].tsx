@@ -53,8 +53,12 @@ import { narrativeHref, fileHref, inAppLinkProps } from "@/lib/routes";
 import { downloadUrl, downloadNameFor } from "@/lib/download";
 import FilesView, { parseRelLink, type FilesViewHandle } from "@/components/FilesView";
 import SpawnDialog from "@/components/SpawnDialog";
+import Lightbox from "@/components/Lightbox";
+import { galleryPaths } from "@shared/lightbox-gallery";
 import CopyButton from "@/components/CopyButton";
 import WikiReader, { type WikiTarget } from "@/components/WikiReader";
+import { protocolReaderTarget, protocolSourceLabel } from "@shared/protocol-names";
+import { useProtocolView } from "@/lib/protocols";
 import { MarkdownLinksProvider } from "@/components/MarkdownLinks";
 import { isSystemEvent, systemLine, agentTypeOf } from "@shared/narrative-format";
 import { collectKnownNids } from "@shared/known-nids";
@@ -1006,7 +1010,7 @@ export default function ChatView() {
     line?: string;
   }>();
   const router = useRouter();
-  const { conn, subscribe, unsubscribe, onHint, onMeta, onStatus, onToolUses, narrativeIds } = useBrane();
+  const { conn, subscribe, unsubscribe, onHint, onMeta, onStatus, onToolUses, narrativeIds, protocolLayers: braneProtocolLayers } = useBrane();
   const [events, setEvents] = useState<NarrativeEvent[]>([]);
   // What a screen reader hears when a message lands: the newest event, as
   // "speaker: first 240 characters", through a polite live region. Nothing
@@ -1176,6 +1180,16 @@ export default function ChatView() {
   }, [visibleTabs]);
   const swipeEnabled = visibleTabs.length === 1;
   const [lightboxUrl, setLightboxUrl] = useState<string | null>(null);
+  // The images the lightbox can step through: every image payload loaded in
+  // the chat, oldest first. Worked out only while it's open, so a new
+  // arrival costs nothing the rest of the time; older history paged in while
+  // it's open just lengthens the list.
+  const lightboxOpen = lightboxUrl !== null;
+  const lightboxGallery = useMemo(
+    () => (lightboxOpen && conn ? galleryPaths(events).map((path) => payloadUrl(conn, path)) : []),
+    [lightboxOpen, events, conn],
+  );
+  const closeLightbox = useCallback(() => setLightboxUrl(null), []);
   const [qrVisible, setQrVisible] = useState(false);
   // Twin dialog opens in place over this narrative — canceling returns here,
   // not to the list.
@@ -1830,9 +1844,20 @@ export default function ChatView() {
     });
   }, [writeUrl, activeTab, filesPath, filesLine, filesLineEnd]);
 
+  // This narrative's protocol library (its fold's, then the operator's, then
+  // brane's): what its chat links, and which file a tapped `/command` opens.
+  // Until it has loaded (or if it never does), the connection-wide view
+  // stands in: the operator's and brane's protocols, without the fold's.
+  const protocolView = useProtocolView(conn, nid);
+  const protocolLayers = protocolView.loaded ? protocolView.layers : braneProtocolLayers;
+
   // Which protocol the reader is showing, if any — set by tapping a `/command`
-  // in a message.
-  const [protocolReader, setProtocolReader] = useState<string | null>(null);
+  // in a message, resolved the way this narrative's agent would resolve it.
+  const [protocolReader, setProtocolReader] = useState<WikiTarget | null>(null);
+  const openProtocol = useCallback(
+    (name: string) => setProtocolReader(protocolReaderTarget(name, protocolLayers)),
+    [protocolLayers],
+  );
 
   const handleNarrativePress = useCallback((targetNid: string, seq?: number) => {
     // This narrative, by name alone, is where you already are. With a seq it
@@ -2131,7 +2156,9 @@ export default function ChatView() {
     <MarkdownLinksProvider
       knownNarrativeIds={knownNarrativeIds}
       onNarrativePress={handleNarrativePress}
-      onProtocolPress={setProtocolReader}
+      knownProtocols={protocolView.loaded ? protocolView.commands : undefined}
+      protocolLayers={protocolView.loaded ? protocolView.layers : undefined}
+      onProtocolPress={openProtocol}
     >
       <Stack.Screen options={HIDE_NAV_HEADER} />
       <NarrativeHeader
@@ -2169,6 +2196,32 @@ export default function ChatView() {
         isIsolated={isolated}
         canIsolate={!isolated || !!appHost}
       />
+      {/* Protocol files here that agents ignore until approved
+          (docs/protocols.md#approval): the way in to reading and approving
+          them. */}
+      {protocolView.pending.length > 0 && (
+        <Pressable
+          role="button"
+          style={styles.protocolPendingBanner}
+          onPress={() => {
+            const p = protocolView.pending[0];
+            // Every pending file, in order: the reader walks them, so one
+            // the operator skips doesn't block the rest.
+            setProtocolReader({
+              source: protocolSourceLabel(p.from),
+              slug: p.name,
+              pending: { path: p.path, queue: protocolView.pending.map((q) => q.path) },
+            });
+          }}
+        >
+          <Text style={styles.protocolPendingText}>
+            {protocolView.pending.length === 1
+              ? `${protocolView.pending[0].path} awaits your approval`
+              : `${protocolView.pending.length} protocol files await your approval`}
+            {" — review"}
+          </Text>
+        </Pressable>
+      )}
       {/* Not a tablist: the pins and scroll arrows sit between the tabs, and a
           tablist may own only tabs (axe aria-required-children). The labels
           are toggle buttons that say which pane is showing. */}
@@ -2513,24 +2566,12 @@ export default function ChatView() {
         // A utility session has no chat to read — its whole life is the terminal.
         onSpawned={(narrative) => { setShowUtility(false); router.push(`/${narrative.id}?tab=terminal`); }}
       />
-      <Modal
-        visible={lightboxUrl !== null}
-        transparent
-        animationType="fade"
-        onRequestClose={() => setLightboxUrl(null)}
-      >
-        <Pressable style={styles.lightboxBackdrop} role="button" aria-label="Close image" onPress={() => setLightboxUrl(null)}>
-          {lightboxUrl && (
-            <Image
-              source={{ uri: lightboxUrl }}
-              aria-label="Image"
-              style={styles.lightboxImage}
-              resizeMode="contain"
-            />
-          )}
-          <Text style={styles.lightboxHint}>Tap anywhere to close</Text>
-        </Pressable>
-      </Modal>
+      <Lightbox
+        uri={lightboxUrl}
+        gallery={lightboxGallery}
+        onNavigate={setLightboxUrl}
+        onClose={closeLightbox}
+      />
       {protocolReader && conn && (
         <MarkdownLinksProvider
           onNarrativePress={(targetNid, seq) => {
@@ -2540,8 +2581,10 @@ export default function ChatView() {
         >
           <WikiReader
             conn={conn}
-            target={{ source: "protocols", slug: protocolReader }}
+            target={protocolReader}
+            nid={nid}
             onClose={() => setProtocolReader(null)}
+            onApproved={protocolView.refresh}
           />
         </MarkdownLinksProvider>
       )}
@@ -2577,6 +2620,15 @@ const styles = StyleSheet.create({
   },
   headerHidden: {
     display: "none",
+  },
+  protocolPendingBanner: {
+    paddingVertical: 6,
+    paddingHorizontal: 12,
+    backgroundColor: "rgba(201, 179, 122, 0.12)",
+  },
+  protocolPendingText: {
+    color: "#c9b37a",
+    fontSize: 12,
   },
   tabBar: {
     flexDirection: "row",
@@ -3015,22 +3067,6 @@ const styles = StyleSheet.create({
   switcherCancelText: {
     color: "#888",
     fontSize: 15,
-  },
-  lightboxBackdrop: {
-    flex: 1,
-    backgroundColor: "rgba(0, 0, 0, 0.95)",
-    justifyContent: "center",
-    alignItems: "center",
-    padding: 8,
-  },
-  lightboxImage: {
-    width: "100%",
-    height: "92%",
-  },
-  lightboxHint: {
-    color: "#888",
-    fontSize: 14,
-    marginTop: 20,
   },
   reloadButton: {
     paddingHorizontal: 8,

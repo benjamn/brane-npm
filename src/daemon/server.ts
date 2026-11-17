@@ -6,7 +6,7 @@ import { execFile, execFileSync } from "node:child_process";
 import { join, dirname, extname, resolve, relative, basename } from "node:path";
 import { fileURLToPath } from "node:url";
 import { readFile, writeFile, readdir, stat } from "node:fs/promises";
-import { readFileSync, writeFileSync, readdirSync, copyFileSync, existsSync, statSync } from "node:fs";
+import { readFileSync, writeFileSync, copyFileSync, existsSync, statSync } from "node:fs";
 import { hostname as osHostname, userInfo as osUserInfo, homedir } from "node:os";
 import { gzip } from "node:zlib";
 import { pipeline } from "node:stream";
@@ -52,7 +52,11 @@ import {
   type CodexLogCursor,
 } from "../codex-tool-log.js";
 import { randomBase36 } from "../ids.js";
-import { getBraneId, getPayloadsDir, getTokenFilePath, fromPortablePath, toPortablePath, claimDaemon } from "../db/schema.js";
+import { getBraneDir, getBraneId, getPayloadsDir, getTokenFilePath, fromPortablePath, toPortablePath, claimDaemon } from "../db/schema.js";
+import { listProtocols, loadProtocolLibrary, protocolNamespaces, readProtocol, type NamespaceDir, type ProtocolLibrary } from "../protocols.js";
+import { protocolSourceLabel } from "../shared/protocol-names.js";
+import { liveApprovals } from "../db/protocol-approvals.js";
+import { approvalRequest, approvalScopeFrom, approveProtocolRoute, protocolApprovalsReport, revokeProtocolRoute, type ApprovalScope } from "./protocol-routes.js";
 import { TokenRing, type AuthResult, type TokenRecord } from "./token-ring.js";
 import { signalEventFields, signalStanding } from "./signal-source.js";
 import { AGENT_LOOPBACK_REFUSAL, AGENT_REVIVE_REFUSAL, agentRefusal, agentReviveRefusal } from "./agent-scope.js";
@@ -62,6 +66,7 @@ import {
   VerificationGate,
   verificationStatus,
   verifyFrame,
+  classifyRoute,
   type VerificationRefusal,
 } from "./verification-gate.js";
 import { archiveRefusal } from "./archive-gate.js";
@@ -115,6 +120,7 @@ import { YUBICO_FIDO_INTERMEDIATES, YUBICO_FIDO_ROOTS } from "../webauthn/yubico
 import { describeUserAgent } from "../user-agent.js";
 import { SWITCH_TICK_MS, settleSwitch } from "./verification-switch.js";
 import { certificateHost } from "./verification-ceremony.js";
+import { RenameWatch, orphanedCredentials, recordRpId, usableCredentials } from "./verification-rename.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const STATIC_DIR = join(__dirname, "..", "..", "expo", "dist");
@@ -959,11 +965,16 @@ export async function startServer(config: DaemonConfig): Promise<void> {
   // one the daemon booted with (claude-9o0vgfvb:5, finding 5).
   let currentTlsOpts: { cert: Buffer; key: Buffer } | undefined;
   let lastCertStatus: CertStatus | null = null;
+  // Set once the credential store exists: records the served hostname for
+  // the CLI's switch and warns about credentials enrolled for another
+  // (src/daemon/verification-rename.ts). Called where the cert is read.
+  let noteRpId: (() => void) | null = null;
   const certMgr = new CertManager({
     certPath: getTlsCertPath(),
     keyPath: getTlsKeyPath(),
     onReload: (cert, key) => {
       currentTlsOpts = { cert, key };
+      noteRpId?.();
       for (const s of tlsServersForReload) {
         try { s.setSecureContext({ cert, key }); } catch (err) {
           console.error(`Failed to hot-reload TLS cert on bound server: ${(err as Error).message}`);
@@ -1186,6 +1197,25 @@ export async function startServer(config: DaemonConfig): Promise<void> {
   // the daemon's TLS hostname, so without a certificate there is no
   // ceremony at all.
   const credentialStore = new DbCredentialStore(db);
+  // The host recorded is the one the ceremony would use (`relyingParty`):
+  // a certificate provisioned after a blind start, while the protocol stays
+  // HTTP, serves no ceremony, so it records nothing, as status reports
+  // nothing.
+  const renameWatch = new RenameWatch();
+  noteRpId = () => {
+    const host = relyingParty()?.rpId ?? null;
+    recordRpId(db, host);
+    if (!host) return;
+    const warning = renameWatch.check(credentialStore.live(), host, verificationGate.config().mode);
+    if (warning) console.warn(warning);
+  };
+  /** The served host, the credentials enrolled for another, and how many
+   *  can verify here, for `/api/status` and the credentials list. */
+  const rpReport = (): { rp_id: string | null; rp_mismatch: string[]; usable_credentials: number | null } => {
+    const rpId = relyingParty()?.rpId ?? null;
+    const live = credentialStore.live();
+    return { rp_id: rpId, rp_mismatch: [...orphanedCredentials(live, rpId).keys()], usable_credentials: usableCredentials(live, rpId) };
+  };
   const relyingParty = (): RelyingParty | null => {
     // The hostname the served certificate names: what the browser sees, so
     // what the RP ID must be. Read from the cert itself rather than from
@@ -1510,6 +1540,15 @@ export async function startServer(config: DaemonConfig): Promise<void> {
       sendJson(res, verifyRefused.status, verifyRefused.body);
       return;
     }
+    // The record (docs/passkeys.md): a device's act under the gate is
+    // logged with the proof that let it through. Reads are not acts; the
+    // control socket logs its own signals; a terminal's keystrokes are
+    // never logged. This is the gate's verdict, before the route runs: the
+    // route may still refuse (a bad body, presence declined) or 404.
+    if (classifyRoute(req.method ?? "GET", path).kind === "act") {
+      const proof = verificationGate.proof(auth.record);
+      if (proof) console.log(`[verification] passed the gate: ${req.method} ${path} for device "${auth.record.label}": verified by ${proof.by} (${proof.method}) at ${new Date(proof.at).toISOString()}`);
+    }
 
     // Route: GET /api/status
     if (path === "/api/status" && req.method === "GET") {
@@ -1530,6 +1569,9 @@ export async function startServer(config: DaemonConfig): Promise<void> {
         verification: {
           ...verificationStatus(verificationGate.config()),
           ...(auth.record.kind === "device" ? { verified_until: tokenStore.verification(auth.record.id, Date.now()).verifiedUntil } : {}),
+          // The host credentials must be enrolled for, and any host live
+          // credentials were enrolled for instead (a rename orphans them).
+          ...rpReport(),
         },
         // Listening on the address over HTTPS, but the HTTP fallback (the
         // local/LAN path) is not up there yet.
@@ -1829,7 +1871,7 @@ export async function startServer(config: DaemonConfig): Promise<void> {
         if (Array.isArray(rawPayloads) && rawPayloads.length > 0) {
           payloadPaths = await storePayloads(narrativeId, rawPayloads);
         }
-        const fields = signalEventFields(standing, request, payloadPaths);
+        const fields = signalEventFields(standing, request, payloadPaths, verificationGate.proof(auth.record));
         const event = appendEvent(db, narrativeId, "human_signal", fields);
         // Auto-unarchive narratives when signaled into
         db.prepare("UPDATE narratives SET archived = 0 WHERE id = ? AND archived = 1").run(narrativeId);
@@ -2504,7 +2546,10 @@ export async function startServer(config: DaemonConfig): Promise<void> {
     // Route: GET /api/tokens — the Devices list: every live token, with
     // where it was first presented from and whether it is the requester.
     if (path === "/api/tokens" && req.method === "GET") {
-      const listed = listTokensRoute(tokenStore, auth.record, Date.now(), new Set([...viewerSockets.values()].flat()));
+      const listed = listTokensRoute(tokenStore, auth.record, Date.now(), new Set([...viewerSockets.values()].flat()), {
+        labelOf: (id) => credentialStore.labelOf(id),
+        gated: verificationGate.config().mode !== "off",
+      });
       sendJson(res, listed.status, listed.body);
       return;
     }
@@ -2627,9 +2672,11 @@ export async function startServer(config: DaemonConfig): Promise<void> {
       return;
     }
 
-    // Route: GET /api/credentials — the enrolled credentials, no key material.
+    // Route: GET /api/credentials — the enrolled credentials, no key material,
+    // and the host they must be enrolled for, so the list can mark the ones
+    // a rename orphaned.
     if (path === "/api/credentials" && req.method === "GET") {
-      sendJson(res, 200, { credentials: credentialStore.list() });
+      sendJson(res, 200, { credentials: credentialStore.list(), rp_id: relyingParty()?.rpId ?? null });
       return;
     }
 
@@ -2868,8 +2915,71 @@ export async function startServer(config: DaemonConfig): Promise<void> {
     // Route: GET /api/protocols
     // The protocol library, for clients that need to know which `/command`
     // names exist — the chat linkifier only links commands that resolve.
+    // `?nid=` scopes it to that narrative's fold, through the same resolver its
+    // `read_protocol` uses, so the chat links exactly what the agent can read.
     if (path === "/api/protocols" && req.method === "GET") {
-      sendJson(res, 200, handleListProtocols());
+      sendJson(res, 200, listProtocols(protocolLibraryFor(db, url.searchParams.get("nid")), toPortablePath));
+      return;
+    }
+
+    // Route: GET /api/protocols/pending
+    // Every `home` and `fold` protocol file awaiting the operator's approval,
+    // with its text (and, when it changed, the text approved before), and
+    // every live approval. docs/protocols.md#approval.
+    if (path === "/api/protocols/pending" && req.method === "GET") {
+      sendJson(res, 200, protocolApprovalsReport(db, protocolApprovalScope(db)));
+      return;
+    }
+
+    // Route: POST /api/protocols/approve { path, sha256 }
+    // Put a `home` or `fold` protocol file in force, pinned to the text the
+    // operator read. Agents never (off AGENT_ROUTES); a device through the
+    // verification gate; this machine's shell after the presence check.
+    if (path === "/api/protocols/approve" && req.method === "POST") {
+      const signal = whileConnected(res);
+      parseBody(req)
+        .then(async (raw) => {
+          const request = approvalRequest(raw, url.searchParams);
+          if ("error" in request) {
+            sendJson(res, 400, { error: request.error });
+            return;
+          }
+          const body = request.body;
+          const caller = gateCaller(auth.record, req);
+          const answer = await approveProtocolRoute(
+            { db, gate: presenceGate, scope: protocolApprovalScope(db) },
+            caller,
+            body,
+            signal,
+          );
+          if (answer.status === 200) {
+            console.log(`[protocols] ${caller.by} approved ${(answer.body as { path: string }).path}`);
+          }
+          sendAnswer(res, answer);
+        })
+        .catch((err) => sendJson(res, 500, { error: String(err) }));
+      return;
+    }
+
+    // Route: POST /api/protocols/revoke { path }
+    // Withdraw an approval: the file is ignored again until re-approved.
+    if (path === "/api/protocols/revoke" && req.method === "POST") {
+      parseBody(req)
+        .then((raw) => {
+          let body: unknown;
+          try {
+            body = JSON.parse(raw || "{}");
+          } catch {
+            sendJson(res, 400, { error: "Invalid JSON body" });
+            return;
+          }
+          const answer = revokeProtocolRoute({ db, scope: protocolApprovalScope(db) }, body);
+          if (answer.status === 200) {
+            console.log(`[protocols] ${gateCaller(auth.record, req).by} revoked approval of ${(answer.body as { path: string }).path}`);
+          }
+          sendAnswer(res, answer);
+        })
+        .catch((err) => sendJson(res, 500, { error: String(err) }));
       return;
     }
 
@@ -2895,7 +3005,8 @@ export async function startServer(config: DaemonConfig): Promise<void> {
     // Route: GET /api/wiki/read
     // Neighbor-aware section read: returns one section's content plus a window
     // of the surrounding headings (prev/next) so a reader can walk the page.
-    // Params: slug (required), source?, anchor?, window?, brane_ids? (csv).
+    // Params: slug (required), source?, anchor?, window?, brane_ids? (csv),
+    // nid? (adds that narrative's fold protocols as source `protocols:fold`).
     if (path === "/api/wiki/read" && req.method === "GET") {
       try {
         const slug = url.searchParams.get("slug");
@@ -2905,7 +3016,7 @@ export async function startServer(config: DaemonConfig): Promise<void> {
         }
         const braneIdsParam = url.searchParams.get("brane_ids");
         const braneIds = braneIdsParam ? braneIdsParam.split(",").filter(Boolean) : undefined;
-        const sources = resolveReadableSourcesForBranes(db, braneIds);
+        const sources = resolveReadableSourcesForBranes(db, braneIds, url.searchParams.get("nid"));
 
         let source = url.searchParams.get("source") ?? undefined;
         if (!source) {
@@ -2954,7 +3065,7 @@ export async function startServer(config: DaemonConfig): Promise<void> {
         }
         const braneIdsParam = url.searchParams.get("brane_ids");
         const braneIds = braneIdsParam ? braneIdsParam.split(",").filter(Boolean) : undefined;
-        const src = resolveReadableSourcesForBranes(db, braneIds).find((s) => s.source === sourceLabel);
+        const src = resolveReadableSourcesForBranes(db, braneIds, url.searchParams.get("nid")).find((s) => s.source === sourceLabel);
         if (!src) {
           sendJson(res, 404, { error: `Unknown wiki source: ${sourceLabel}` });
           return;
@@ -2998,6 +3109,7 @@ export async function startServer(config: DaemonConfig): Promise<void> {
     ? { cert: readFileSync(getTlsCertPath()), key: readFileSync(getTlsKeyPath()) }
     : undefined;
   currentTlsOpts = tlsOpts;
+  noteRpId?.();
   // `tls` decides the protocol for the daemon's whole life; `currentTlsOpts`
   // supplies only the cert material. Keying the protocol on the latter would
   // let a listener created after a blind-start cert provision come up HTTPS
@@ -3120,6 +3232,9 @@ export async function startServer(config: DaemonConfig): Promise<void> {
             socket.destroy();
             return;
           }
+          // A mint, so the record keeps what proved it (docs/passkeys.md).
+          const proof = verificationGate.proof(auth.record);
+          if (proof) console.log(`[verification] GET /ws/mcp by device "${auth.record.label}": verified by ${proof.by} (${proof.method}) at ${new Date(proof.at).toISOString()}`);
         }
         const bind = resolveMcpBind(db, braneId, nid, bindSecret, auth.record.id);
         if (bind.rejected) {
@@ -3565,7 +3680,7 @@ function handleControlSocket(
   ws: WebSocket,
   /** The token this socket authenticated with: who its signals are from,
    *  and whose verification each act is checked against. */
-  sender: Pick<TokenRecord, "id" | "kind">,
+  sender: Pick<TokenRecord, "id" | "kind" | "label">,
   db: Database.Database,
   controlClients: Set<ControlClient>,
   mcpClients: Set<McpBridgeClient>,
@@ -3577,7 +3692,7 @@ function handleControlSocket(
   presence?: PendingPresence | null,
   /** The verification gate, when the daemon has one: an act from an
    *  unverified device is dropped and answered with a `verify` frame. */
-  verification?: Pick<VerificationGate, "refuseAct">,
+  verification?: Pick<VerificationGate, "refuseAct" | "proof">,
 ): void {
   const client: ControlClient = {
     ws,
@@ -3656,7 +3771,9 @@ function handleControlSocket(
             // Auto-unarchive narratives when signaled into
             db.prepare("UPDATE narratives SET archived = 0 WHERE id = ? AND archived = 1").run(narrativeId);
             const append = (payloadPaths?: string[]) => {
-              const fields = signalEventFields(standing, msg, payloadPaths);
+              const proof = verification?.proof(sender) ?? null;
+              if (proof) console.log(`[verification] signal into ${narrativeId} by device "${sender.label}": verified by ${proof.by} (${proof.method}) at ${new Date(proof.at).toISOString()}`);
+              const fields = signalEventFields(standing, msg, payloadPaths, proof);
               const event = appendEvent(db, narrativeId, "human_signal", fields);
               announceEvent(narrativeId, event, fields.source, notifyListenWaiters, recordEventMentions);
             };
@@ -5715,11 +5832,24 @@ function handleMcpToolCall(
         break;
       }
       case "list_protocols": {
-        sendToolResult(client.ws, callId, handleListProtocols());
+        // `commands` and `namespaces` are for the app's linkifier; an agent
+        // reads this at startup, so it gets only what it uses.
+        const { protocols, ignored } = listProtocols(protocolLibraryFor(db, client.narrativeId), toPortablePath);
+        sendToolResult(client.ws, callId, { protocols, ignored });
         break;
       }
       case "read_protocol": {
-        sendToolResult(client.ws, callId, handleReadProtocol(args));
+        try {
+          const read = readProtocol(protocolLibraryFor(db, client.narrativeId), args.name as string, {
+            from: args.from as string | undefined,
+            noPrelude: args.no_prelude === true,
+            display: toPortablePath,
+            installDir: INSTALL_DIR,
+          });
+          sendToolResult(client.ws, callId, read);
+        } catch (err) {
+          sendToolError(client.ws, callId, err instanceof Error ? err.message : String(err));
+        }
         break;
       }
       case "narrative_search": {
@@ -6233,53 +6363,43 @@ function checkForEvents(
   return { events, arrived };
 }
 
-function handleListProtocols(): unknown {
-  try {
-    // The prelude is listed like any protocol. It is prepended to every
-    // read, but it is also a page of its own, and the chat linkifier only
-    // links `/prelude` if it's in this list.
-    const files = readdirSync(PROTOCOLS_DIR).filter((f) => f.endsWith(".md"));
-    const protocols = files.map((f) => {
-      const name = f.replace(/\.md$/, "");
-      const content = readFileSync(join(PROTOCOLS_DIR, f), "utf-8");
-      const lines = content.split("\n");
-      const descLine = lines.find(
-        (l) => l.trim().length > 0 && !l.startsWith("#") && !l.startsWith("---"),
-      );
-      return {
-        name,
-        description: descLine?.trim() ?? name,
-        version: "1.0.0",
-      };
-    });
-    return { protocols };
-  } catch {
-    return { protocols: [] };
-  }
+/** The caller's protocol namespaces, most local first: its fold's, the
+ *  operator's `~/.brane/protocols`, and the built-ins (`protocolNamespaces`).
+ *  See docs/protocols.md. */
+function protocolNamespacesFor(foldAbs: string | undefined): NamespaceDir[] {
+  return protocolNamespaces(foldAbs, join(getBraneDir(), "protocols"), PROTOCOLS_DIR);
 }
 
-function handleReadProtocol(args: Record<string, unknown>): unknown {
-  const name = args.name as string;
-  const filePath = join(PROTOCOLS_DIR, `${name}.md`);
-  try {
-    const content = readFileSync(filePath, "utf-8");
-    // Prepend prelude unless no_prelude is set or reading the prelude itself
-    let result = content;
-    if (name !== "prelude" && !args.no_prelude) {
-      try {
-        const prelude = readFileSync(join(PROTOCOLS_DIR, "prelude.md"), "utf-8");
-        result = prelude + "\n---\n\n" + content;
-      } catch {
-        // No prelude file — return content as-is
-      }
-    }
-    return { name, content: result };
-  } catch {
-    return {
-      name,
-      content: `Protocol '${name}' not found. Use list_protocols to see available protocols.`,
-    };
-  }
+/** A narrative's fold as an absolute path, if it has one. */
+function narrativeFoldAbs(db: Database.Database, nid: string | null | undefined): string | undefined {
+  if (!nid) return undefined;
+  const row = db.prepare("SELECT fold_path FROM narratives WHERE id = ?").get(nid) as
+    | { fold_path: string | null }
+    | undefined;
+  return row?.fold_path ? resolve(fromPortablePath(row.fold_path)) : undefined;
+}
+
+/** The library as the narrative `nid` sees it: what its `read_protocol`
+ *  resolves, and so what the app links in its chat. No `nid`: home and the
+ *  built-ins. Scanned on every call, so a new or edited file takes effect at
+ *  once. */
+function protocolLibraryFor(db: Database.Database, nid: string | null | undefined): ProtocolLibrary {
+  const approvals = liveApprovals(db);
+  return loadProtocolLibrary(protocolNamespacesFor(narrativeFoldAbs(db, nid)), {
+    approved: (abs) => approvals.get(toPortablePath(abs))?.sha256,
+    display: toPortablePath,
+  });
+}
+
+/** Where protocol files may be approved: `~/.brane/protocols` and every
+ *  registered fold's `.brane/protocols` (src/daemon/protocol-routes.ts). */
+function protocolApprovalScope(db: Database.Database): ApprovalScope {
+  return approvalScopeFrom(db, {
+    homeDir: join(getBraneDir(), "protocols"),
+    braneDir: PROTOCOLS_DIR,
+    toPortable: toPortablePath,
+    fromPortable: fromPortablePath,
+  });
 }
 
 // ── Wiki (list / read / search) ─────────────────────────────────────────
@@ -6424,14 +6544,21 @@ function resolveWikiSourcesForBranes(
   return sources;
 }
 
-const PROTOCOL_SOURCE_LABEL = "protocols";
-const PROTOCOL_SOURCE: WikiSource = { source: PROTOCOL_SOURCE_LABEL, dir: PROTOCOLS_DIR };
+const PROTOCOL_SOURCE_LABEL = protocolSourceLabel("brane");
 
+/** Every wiki source the app's reader may open: the wikis, plus each protocol
+ *  namespace as its own source (`protocols`, `protocols:home`, and, given a
+ *  narrative with a fold, `protocols:fold`), so the reader shows one file per
+ *  page and a shadowed file stays openable. */
 function resolveReadableSourcesForBranes(
   db: Database.Database,
   braneIds: string[] | undefined,
+  nid?: string | null,
 ): WikiSource[] {
-  return [...resolveWikiSourcesForBranes(db, braneIds), PROTOCOL_SOURCE];
+  const protocolSources = protocolNamespacesFor(narrativeFoldAbs(db, nid)).map(
+    (ns): WikiSource => ({ source: protocolSourceLabel(ns.from), dir: ns.dir }),
+  );
+  return [...resolveWikiSourcesForBranes(db, braneIds), ...protocolSources];
 }
 
 function handleReadWiki(

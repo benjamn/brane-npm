@@ -7,6 +7,55 @@ message in `benjamn/brane-npm`, the repository npm publishes from (see
 [docs/releasing.md](docs/releasing.md)), with pull request links removed.
 This file travels in the npm tarball.
 
+## 0.3.13 - 2026-11-17
+
+- Protocols come from three namespaces, searched most local first: a
+  project's `<fold>/.brane/protocols/`, the operator's
+  `~/.brane/protocols/`, and brane's built-ins. A bare `/review` resolves
+  to the first match and `/brane.review` names one namespace, so a local
+  protocol can build on the built-in it replaces. `read_protocol` returns
+  every file with the name as `layers`, and `prelude`, `LIVE_loop`,
+  `keeper` and `twin` cannot be overridden
+  ([#666](https://github.com/benjamn/brane/pull/666)).
+- A `home` or `fold` protocol is in force only once the operator has
+  approved its exact text, and an edit puts it out of force until the new
+  text is approved. `brane protocol pending`, `approve <path>` and
+  `revoke <path>` do it from the shell, where approving waits for Touch
+  ID; in the app, a chat whose fold has pending files shows a banner that
+  opens each file's raw text, or the diff against what was approved, and
+  walks several in one pass with Skip. An agent that reads a protocol with
+  a pending file is told so, and `brane doctor` lists what waits
+  ([#669](https://github.com/benjamn/brane/pull/669),
+  [#670](https://github.com/benjamn/brane/pull/670),
+  [#671](https://github.com/benjamn/brane/pull/671),
+  [#673](https://github.com/benjamn/brane/pull/673)).
+- Operator verification, phase 4 of 6, still off unless switched on: a
+  message sent from a verified device records which credential proved it,
+  every other act is logged with its proof, and the Devices list and
+  `brane token list` show what last verified each device. The `/verify`
+  page tells a password manager which passkeys the daemon still accepts,
+  so one revoked in Devices is dropped from the phone, and a daemon whose
+  hostname changed says which passkeys that orphaned and refuses to switch
+  verification on with none usable
+  ([#644](https://github.com/benjamn/brane/pull/644),
+  [#671](https://github.com/benjamn/brane/pull/671)).
+- The lightbox steps to the chat's other images without closing: ‹ / ›
+  buttons, the ← / → keys or a swipe, with a counter
+  ([#668](https://github.com/benjamn/brane/pull/668)).
+- `brane token list` prints devices and this machine in full and counts
+  agents' tokens in one closing line; `--agents` lists them
+  ([#671](https://github.com/benjamn/brane/pull/671)).
+- The README says where the documentation is, in the repository and in
+  every install, and how to ask an agent about brane
+  ([#667](https://github.com/benjamn/brane/pull/667)).
+- Releasing: the app deploy is dispatched as a run of its own, so it can
+  read its token after the operator approves it, and release notes are
+  unwrapped to one line per paragraph and bullet
+  ([#664](https://github.com/benjamn/brane/pull/664),
+  [#665](https://github.com/benjamn/brane/pull/665)).
+- Three of the membrane's captions are reworded
+  ([#672](https://github.com/benjamn/brane/pull/672)).
+
 ## 0.3.12 - 2026-11-16
 
 The first stable release published from

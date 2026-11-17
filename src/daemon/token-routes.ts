@@ -153,6 +153,40 @@ export interface DeviceListing extends TokenListing {
   /** Narratives this token last launched (spawned, ran or revived). */
   agents: LaunchedAgent[];
   expires_at: number | null;
+  /** The last proof of the operator on this device (docs/passkeys.md, "The
+   *  record"): when, by what (`by` is the credential's label, resolved by
+   *  the caller; `by_id` its row id, or `oidc:<sub>` in both), and how.
+   *  `until` is null once the window has ended. Null for a device never
+   *  verified, and for every other kind. */
+  verified: DeviceProof | null;
+}
+
+export interface DeviceProof {
+  at: number;
+  until: number | null;
+  by: string;
+  by_id: string;
+  method: string;
+}
+
+export interface ListOptions {
+  /** A credential's label by its row id, for `verified.by`; the id itself
+   *  when it resolves to nothing. */
+  labelOf?: (id: string) => string | null;
+  /** Whether the verification gate is on, so a list can say "never
+   *  verified" only when that means something. */
+  gated?: boolean;
+}
+
+function deviceProof(t: TokenListing, now: number, labelOf: ListOptions["labelOf"]): DeviceProof | null {
+  if (t.kind !== "device" || t.verified_at === null || t.verified_by === null || t.verified_method === null) return null;
+  return {
+    at: t.verified_at,
+    until: t.verified_until !== null && t.verified_until > now ? t.verified_until : null,
+    by: labelOf?.(t.verified_by) ?? t.verified_by,
+    by_id: t.verified_by,
+    method: t.verified_method,
+  };
 }
 
 function withoutExternals(store: Pick<DbTokenStore, "externalsOf">, rootId: string, ids: string[]): string[] {
@@ -167,10 +201,12 @@ export function listTokensRoute(
   requester: TokenRecord,
   now: number = Date.now(),
   connected: ReadonlySet<string> = new Set(),
-): { status: 200; body: { tokens: DeviceListing[] } } {
+  opts: ListOptions = {},
+): { status: 200; body: { tokens: DeviceListing[]; gated: boolean } } {
   const launched = store.launched();
   const tokens = store.list(now).map((t) => ({
     ...t,
+    verified: deviceProof(t, now, opts.labelOf),
     device: describeUserAgent(t.user_agent),
     last_device: describeUserAgent(t.last_user_agent),
     minted_by_device:
@@ -187,7 +223,7 @@ export function listTokensRoute(
     descendants: t.kind !== "local" && t.id !== requester.id ? withoutExternals(store, t.id, store.descendants(t.id, requester.id)) : [],
     agents: launched.get(t.id) ?? [],
   }));
-  return { status: 200, body: { tokens } };
+  return { status: 200, body: { tokens, gated: opts.gated ?? false } };
 }
 
 /** What a revoke would do, or why it is refused, without doing it: the

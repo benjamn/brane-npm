@@ -5,7 +5,9 @@ import { existsSync, readdirSync, readFileSync, realpathSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import type Database from "better-sqlite3";
-import { openDatabase, getDaemonAddress, getTokenFilePath } from "../db/schema.js";
+import { openDatabase, getBraneDir, getDaemonAddress, getTokenFilePath, toPortablePath } from "../db/schema.js";
+import { loadProtocolLibrary, protocolNamespaces, type ProtocolLibrary } from "../protocols.js";
+import { liveApprovals } from "../db/protocol-approvals.js";
 import { ACCOUNT_HASH_PREFIX, readTokenFile, tokenFileStanding } from "../db/tokens.js";
 import { readDaemonSocket } from "../daemon/client.js";
 import { accountDirTrust } from "../daemon/local-socket.js";
@@ -31,7 +33,7 @@ const require = createRequire(import.meta.url);
 const pkg = require("../../package.json") as { version: string; engines?: { node?: string } };
 
 type Status = "ok" | "warn" | "fail";
-interface Check {
+export interface Check {
   name: string;
   status: Status;
   detail: string;
@@ -211,6 +213,64 @@ function checkTokenFile(): Check | null {
   }
 }
 
+/** What `brane doctor` says about the protocol library: which protocols the
+ *  operator (and, when run inside one, this fold) adds, which built-ins they
+ *  shadow, and every file ignored and why. Protocols outside `brane` instruct
+ *  agents with no diff to review, so the operator should be able to see them
+ *  all in one place. Pure, for the test suite. */
+export function protocolsCheck(lib: ProtocolLibrary, display: (p: string) => string): Check {
+  const added: string[] = [];
+  let builtins = 0;
+  for (const [name, layers] of [...lib.entries].sort(([a], [b]) => a.localeCompare(b))) {
+    if (layers[0].from === "brane") {
+      builtins++;
+      continue;
+    }
+    const shadows = layers.slice(1).map((l) => `/${l.from}.${name}`);
+    added.push(`/${layers[0].from}.${name}${shadows.length > 0 ? ` (shadows ${shadows.join(", ")})` : ""}`);
+  }
+  const parts = [`${builtins} built-in`];
+  if (added.length > 0) parts.push(`added: ${added.join(", ")}`);
+  const pending = lib.ignored.filter((i) => i.pending);
+  if (pending.length > 0) {
+    parts.push(
+      `awaiting approval (\`brane protocol approve <path>\`): ${pending
+        .map((i) => `${display(i.path)}${i.pending!.changed ? " (changed)" : ""}`)
+        .join(", ")}`,
+    );
+  }
+  const ignored = lib.ignored.filter((i) => !i.pending).map((i) => `${display(i.path)} (${i.reason})`);
+  if (ignored.length > 0) parts.push(`ignored: ${ignored.join(", ")}`);
+  return { name: "protocols", status: lib.ignored.length === 0 ? "ok" : "warn", detail: parts.join("; ") };
+}
+
+/** The library as an agent spawned here would see it, read straight from
+ *  disk: this directory's `.brane/protocols` (if any), `~/.brane/protocols`,
+ *  and this install's built-ins. */
+function checkProtocols(): Check {
+  const namespaces = protocolNamespaces(process.cwd(), join(getBraneDir(), "protocols"), join(INSTALL_DIR, "protocols"), {
+    foldOnlyIfExists: true,
+  });
+  // Which files the operator has approved lives in the database; without it
+  // every home or fold file would read as pending, so say that instead.
+  let approvals: Map<string, { sha256: string }>;
+  try {
+    const db = openDatabase();
+    try {
+      approvals = liveApprovals(db);
+    } finally {
+      db.close();
+    }
+  } catch (err) {
+    return { name: "protocols", status: "warn", detail: `could not read approvals from ~/.brane/brane.db: ${String(err)}` };
+  }
+  const lib = loadProtocolLibrary(namespaces, {
+    approved: (abs) => approvals.get(toPortablePath(abs))?.sha256,
+    display: toPortablePath,
+  });
+  return protocolsCheck(lib, toPortablePath);
+}
+
 function printChecks(checks: Check[]): void {
   const width = Math.max(...checks.map((c) => c.name.length));
   for (const c of checks) {
@@ -263,7 +323,7 @@ export const doctorCommand = defineCommand({
     let failed = false;
     if (!args["suite-only"]) {
       console.log(`brane ${pkg.version} at ${INSTALL_DIR}\n`);
-      const checks = [checkNode(), checkTmux(), checkTailscale(), checkDaemon(), checkTokenFile()].filter(
+      const checks = [checkNode(), checkTmux(), checkTailscale(), checkDaemon(), checkTokenFile(), checkProtocols()].filter(
         (c): c is Check => c !== null,
       );
       printChecks(checks);

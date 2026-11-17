@@ -23,6 +23,7 @@ import { ActivityIndicator, Modal, Pressable, ScrollView, StyleSheet, Text, View
 import { listDeviceTokens, revokeDeviceToken, type ConnectionParams, type DeviceToken } from "@/lib/api";
 import { relPart } from "@shared/narrative-format";
 import { originHost } from "@shared/app-origin";
+import { proofName } from "@shared/verification-hop";
 import CredentialsSection from "./CredentialsSection";
 
 function ago(ms: number): string {
@@ -46,7 +47,12 @@ function rowTitle(t: DeviceToken): string {
   return t.remote_addr ? `Device at ${t.remote_addr}` : "Device not seen yet";
 }
 
-function rowDetail(t: DeviceToken): string {
+/** "4 min" until a verified window ends. */
+function minutesLeft(until: number): string {
+  return `${Math.max(1, Math.ceil((until - Date.now()) / 60_000))} min`;
+}
+
+function rowDetail(t: DeviceToken, gated: boolean): string {
   const added = `${t.kind === "agent" ? "started" : "added"} ${ago(t.created_at)}${t.minted_by_device ? ` by ${t.minted_by_device}` : ""}`;
   if (t.unused) {
     if (t.expires_at === null) return added;
@@ -55,6 +61,16 @@ function rowDetail(t: DeviceToken): string {
   }
   const seen = t.connected ? "connected now" : t.last_used_at !== null ? `seen ${ago(t.last_used_at)}` : "never used";
   const parts = [seen];
+  // Under the verification gate: what last proved the operator on this
+  // device, and whether that window is still open (docs/passkeys.md, "The
+  // record"). With the gate off a device is never verified, so nothing is
+  // said; with it on, a device that never has is said to be.
+  if (t.verified) {
+    const name = proofName(t.verified);
+    parts.push(t.verified.until !== null ? `verified with ${name}, ${minutesLeft(t.verified.until)} left` : `verified ${ago(t.verified.at)} with ${name}`);
+  } else if (gated && t.kind === "device") {
+    parts.push("never verified");
+  }
   if (t.remote_addr) parts.push(t.remote_addr);
   // Which copy of the app the device runs: the hosted shell, a staging or
   // fork hostname, or a daemon's own bundle. A label, never a gate.
@@ -91,6 +107,7 @@ export default function DevicesLayer({
   connected: boolean;
 }) {
   const [tokens, setTokens] = useState<DeviceToken[] | null>(null);
+  const [gated, setGated] = useState(false);
   const [unsupported, setUnsupported] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [confirming, setConfirming] = useState<string | null>(null);
@@ -106,7 +123,8 @@ export default function DevicesLayer({
     try {
       const list = await listDeviceTokens(conn);
       setUnsupported(list === null);
-      setTokens(list ?? []);
+      setTokens(list?.tokens ?? []);
+      setGated(list?.gated ?? false);
     } catch (err) {
       setError(String(err));
     }
@@ -177,7 +195,7 @@ export default function DevicesLayer({
                       {rowTitle(t)}
                       {t.current ? <Text style={styles.thisDevice}>  this device</Text> : null}
                     </Text>
-                    <Text style={styles.rowDetail}>{rowDetail(t)}</Text>
+                    <Text style={styles.rowDetail}>{rowDetail(t, gated)}</Text>
                     {t.kind === "device" && <Text style={styles.rowLabel}>"{t.label}"</Text>}
                     {elsewhereNote(t) && <Text style={styles.rowWarn}>{elsewhereNote(t)}</Text>}
                     {t.origin === "adopted" && t.kind === "device" && (
@@ -290,7 +308,7 @@ function CascadePanel({
           <Pressable key={id} style={styles.cascadeRow} role="checkbox" aria-checked={checked} onPress={() => onToggle(id)}>
             <Text style={[styles.checkbox, checked && styles.checkboxOn]}>{checked ? "☑" : "☐"}</Text>
             <Text style={styles.cascadeText} numberOfLines={2}>
-              {d ? `${rowTitle(d)} · ${rowDetail(d)}` : id}
+              {d ? `${rowTitle(d)} · ${rowDetail(d, false)}` : id}
             </Text>
           </Pressable>
         );

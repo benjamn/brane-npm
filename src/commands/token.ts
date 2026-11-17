@@ -7,6 +7,7 @@ import {
 } from "../daemon/client.js";
 import { announcePresenceWait } from "./meld.js";
 import { originHost } from "../shared/app-origin.js";
+import { proofName } from "../shared/verification-hop.js";
 
 /** What `POST /api/token/rotate` answers this shell. */
 export interface RotateResponse {
@@ -88,17 +89,32 @@ export interface TokenListRow {
   agents?: Array<{ id: string; status: string | null }>;
   unused: boolean;
   expires_at: number | null;
+  /** The last proof of the operator on a device (docs/passkeys.md). */
+  verified?: { at: number; until: number | null; by: string; by_id: string; method: string } | null;
 }
 
 function formatTime(ms: number): string {
   return new Date(ms).toISOString().slice(0, 16).replace("T", " ") + "Z";
 }
 
+/** The line that stands in for the agents' blocks. */
+export function agentTokensLine(count: number): string {
+  return count === 1
+    ? "1 agent token (brane token list --agents to show it)"
+    : `${count} agent tokens (brane token list --agents to show them)`;
+}
+
 /** The Devices list as text: one block per token, the id first so it can be
- *  pasted into `brane token revoke`. */
-export function formatTokenList(tokens: TokenListRow[]): string {
+ *  pasted into `brane token revoke`. Agents' tokens are one per narrative
+ *  session, so on a busy daemon they outnumber the devices several times
+ *  over and bury them; unless `showAgents`, they are folded into one closing
+ *  line. An agent's token seen from a second address is a finding, not
+ *  routine, and keeps its block either way. */
+export function formatTokenList(tokens: TokenListRow[], gated = false, showAgents = false): string {
   if (tokens.length === 0) return "No live tokens.";
-  return tokens
+  const folded = showAgents ? [] : tokens.filter((t) => t.kind === "agent" && t.elsewhere_at == null);
+  const blocks = tokens
+    .filter((t) => !folded.includes(t))
     .map((t) => {
       const name =
         t.kind === "local" ? "this machine (CLI)" : t.kind === "agent" ? `agent ${t.owner_nid ?? t.label}` : t.device ?? "unknown device";
@@ -116,6 +132,12 @@ export function formatTokenList(tokens: TokenListRow[]): string {
         `${t.id}  ${name}${marks.length ? ` [${marks.join("; ")}]` : ""}`,
         `    "${t.label}", created ${formatTime(t.created_at)}${t.minted_by_device ? ` by ${t.minted_by_device}` : ""}, ${seen}${t.remote_addr ? `, from ${t.remote_addr}` : ""}${t.app_origin ? `, via ${originHost(t.app_origin)}` : ""}`,
       ];
+      if (t.verified) {
+        const v = t.verified;
+        lines.push(`    verified ${formatTime(v.at)} with ${proofName(v)} (${v.method})${v.until !== null ? `, until ${formatTime(v.until)}` : ", window ended"}`);
+      } else if (gated && t.kind === "device" && !t.unused) {
+        lines.push("    never verified");
+      }
       if (t.descendants?.length) lines.push(`    added ${t.descendants.length} device(s): ${t.descendants.join(", ")} (revoke --cascade takes them too)`);
       const running = (t.agents ?? []).filter((a) => a.status !== "ended");
       if (running.length) lines.push(`    started ${running.length} running agent(s): ${running.map((a) => a.id).join(", ")}`);
@@ -124,21 +146,25 @@ export function formatTokenList(tokens: TokenListRow[]): string {
         lines.push(`    ! also used from another address${where ? ` (latest: ${where})` : ""}, ${formatTime(t.elsewhere_at)}`);
       }
       return lines.join("\n");
-    })
-    .join("\n");
+    });
+  if (folded.length > 0) blocks.push(agentTokensLine(folded.length));
+  return blocks.join("\n");
 }
 
 const listCommand = defineCommand({
   meta: {
     name: "list",
-    description: "List the daemon's live tokens: this machine's, and one per melded device",
+    description: "List the daemon's live tokens: this machine's, one per melded device, and how many agents hold one",
   },
-  async run() {
+  args: {
+    agents: { type: "boolean", description: "Also list each agent session's token, not only how many there are", default: false },
+  },
+  async run({ args }) {
     try {
       const endpoint = await resolveDaemonEndpoint();
       warnIfVersionMismatch(endpoint);
-      const { tokens } = await daemonRequest<{ tokens: TokenListRow[] }>(endpoint, "/api/tokens");
-      console.log(formatTokenList(tokens));
+      const { tokens, gated } = await daemonRequest<{ tokens: TokenListRow[]; gated?: boolean }>(endpoint, "/api/tokens");
+      console.log(formatTokenList(tokens, gated ?? false, args.agents));
     } catch (err) {
       console.error(err instanceof Error ? err.message : String(err));
       process.exit(1);

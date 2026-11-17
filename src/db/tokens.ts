@@ -6,7 +6,7 @@
  */
 
 import type Database from "better-sqlite3";
-import type { VerificationState } from "../daemon/verification-gate.js";
+import type { Proof, VerificationState } from "../daemon/verification-gate.js";
 import { randomUUID } from "node:crypto";
 import { chmodSync, readFileSync, writeFileSync } from "node:fs";
 import {
@@ -217,6 +217,15 @@ export interface TokenListing {
   minted_by: string | null;
   /** For an agent token, the narrative it belongs to. */
   owner_nid: string | null;
+  /** The last proof of the operator on a device token (docs/passkeys.md,
+   *  "The record"): until when it counts, when it was given, by which
+   *  credential (or `oidc:<sub>`) and how. The window columns are cleared
+   *  when it ends or is spent; who gave it stays. Null on a row never
+   *  verified, and on every other kind. */
+  verified_until: number | null;
+  verified_at: number | null;
+  verified_by: string | null;
+  verified_method: string | null;
   minted_by_kind: TokenKind | null;
   minted_by_user_agent: string | null;
   /** A minted device token nobody has presented yet: a meld QR still on
@@ -248,12 +257,15 @@ interface TokenRow {
   owner_nid: string | null;
   verified_until: number | null;
   fresh_until: number | null;
+  verified_at: number | null;
+  verified_by: string | null;
+  verified_method: string | null;
 }
 
 const ROW_COLUMNS =
   "id, kind, label, origin, created_at, last_used_at, user_agent, remote_addr, " +
   "last_user_agent, last_remote_addr, app_origin, last_app_origin, elsewhere_at, minted_by, owner_nid, " +
-  "verified_until, fresh_until";
+  "verified_until, fresh_until, verified_at, verified_by, verified_method";
 
 /** `ROW_COLUMNS` qualified as `t.`, plus what the minting token is, for the list. */
 const LISTING_COLUMNS =
@@ -380,6 +392,18 @@ export class DbTokenStore implements TokenStore {
       ? "UPDATE tokens SET verified_until = NULL, fresh_until = NULL WHERE id = ? AND kind = 'device' AND revoked_at IS NULL AND verified_until > ?"
       : "UPDATE tokens SET fresh_until = NULL WHERE id = ? AND kind = 'device' AND revoked_at IS NULL AND fresh_until > ?";
     return this.db.prepare(sql).run(id, now).changes === 1;
+  }
+
+  /** What last verified a live device token, for the record an act keeps:
+   *  the credential (or `oidc:<sub>`), the method, and when. Outlives the
+   *  window: `spend` and `endVerification` clear only the window columns.
+   *  Null for a row never verified, and for any other kind. */
+  lastProof(id: string): Proof | null {
+    const row = this.db
+      .prepare("SELECT verified_at, verified_by, verified_method FROM tokens WHERE id = ? AND kind = 'device' AND revoked_at IS NULL")
+      .get(id) as { verified_at: number | null; verified_by: string | null; verified_method: string | null } | undefined;
+    if (!row || row.verified_at === null || row.verified_by === null || row.verified_method === null) return null;
+    return { by: row.verified_by, method: row.verified_method, at: row.verified_at };
   }
 
   /** The app backgrounded, or the operator locked it: the window ends now.

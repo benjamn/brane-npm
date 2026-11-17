@@ -5,8 +5,9 @@
 //
 // As a command:
 //   node scripts/changelog.mjs notes <version> <repo> [<previous-version>]
-// prints the release notes for <version>: the install lines, the section, and
-// a compare link on github.com/<repo> when a previous version is given.
+// prints the release notes for <version>: the install lines, the section
+// unwrapped to one line per paragraph and bullet, and a compare link on
+// github.com/<repo> when a previous version is given.
 import { readFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 
@@ -71,8 +72,41 @@ function fill(text, width, indent) {
   return lines.join("\n");
 }
 
+// GitHub renders a release body's newlines as line breaks, as it does an
+// issue comment's, so CHANGELOG.md's hard wrapping would show on the release
+// page. Joins each paragraph's and list item's continuation lines onto it;
+// blank lines, list items at any depth, headings, quotes, tables, fenced code
+// and hard breaks (a trailing backslash or two spaces) keep their lines.
+export function unwrapForRelease(markdown) {
+  const out = [];
+  let fence = null; // the opening run of ``` or ~~~ while inside a fence
+  let open = false; // whether the last line is paragraph text a line can join
+  for (const line of markdown.split("\n")) {
+    const marker = /^\s*(`{3,}|~{3,})/.exec(line)?.[1];
+    if (fence !== null) {
+      out.push(line);
+      if (marker && marker[0] === fence[0] && marker.length >= fence.length) fence = null;
+      continue;
+    }
+    if (marker) {
+      fence = marker;
+      out.push(line);
+      open = false;
+      continue;
+    }
+    const starts = line.trim() === "" || /^\s*(?:[-*+]|\d+[.)])(?:\s|$)|^\s*[#>|]/.test(line);
+    if (open && !starts) {
+      out[out.length - 1] += " " + line.trim();
+    } else {
+      out.push(line);
+    }
+    open = line.trim() !== "" && !/^\s*[#|]/.test(line) && !/(?:\\| {2})$/.test(line);
+  }
+  return out.join("\n");
+}
+
 export function releaseNotes({ changelog, name, version, repo, previous }) {
-  const section = stripPullRequestLinks(changelogSection(changelog, version));
+  const section = unwrapForRelease(stripPullRequestLinks(changelogSection(changelog, version)));
   let notes = "```\n" +
     `npm install -g ${name}@${version}\n` +
     `${name} daemon restart\n` +

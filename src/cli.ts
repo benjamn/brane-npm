@@ -19,6 +19,7 @@ import { configCommand } from "./commands/config.js";
 import { certifyCommand } from "./commands/certify.js";
 import { absorbCommand } from "./commands/absorb.js";
 import { doctorCommand } from "./commands/doctor.js";
+import { protocolCommand } from "./commands/protocol.js";
 
 // dist/cli.js sits one level below package.json both in the checkout and in
 // the published tarball, so the version the CLI reports is the version that
@@ -48,6 +49,7 @@ const main = defineCommand({
     config: configCommand,
     certify: certifyCommand,
     doctor: doctorCommand,
+    protocol: protocolCommand,
     absorb: absorbCommand,
   },
 });

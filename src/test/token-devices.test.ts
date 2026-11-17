@@ -19,7 +19,8 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describeUserAgent } from "../user-agent.js";
-import { formatTokenList } from "../commands/token.js";
+import { formatTokenList, type TokenListRow } from "../commands/token.js";
+import { DbCredentialStore } from "../db/credentials.js";
 
 const T0 = Date.UTC(2026, 9, 3, 12);
 const IPHONE_SAFARI =
@@ -122,6 +123,43 @@ describe("GET /api/tokens", () => {
     const { store, phone, laptop } = setup();
     store.revoke([laptop.id], T0 + 1);
     assert.equal(listTokensRoute(store, phone, T0 + 2).body.tokens.some((t) => t.id === laptop.id), false);
+  });
+
+  it("shows each device's last proof with the credential's label, and whether its window is still open", () => {
+    const { ring, store, local, phone, laptop } = setup();
+    // Presented once each, so neither lapses as an unscanned QR below.
+    ring.authenticate("phone", T0 + 1, { userAgent: IPHONE_SAFARI });
+    ring.authenticate("laptop", T0 + 1, { userAgent: MAC_CHROME });
+    const labelOf = (id: string) => (id === "cred-1" ? "Passkey from Safari on iPhone" : null);
+    const opts = { labelOf, gated: true };
+    const before = listTokensRoute(store, phone, T0 + 2, new Set(), opts).body;
+    assert.equal(before.gated, true);
+    assert.equal(before.tokens.find((t) => t.id === phone.id)!.verified, null, "never verified");
+    assert.equal(listTokensRoute(store, phone, T0 + 2).body.gated, false, "off unless the caller says");
+
+    assert.equal(store.verify(phone.id, { now: T0 + 5, windowMs: 10 * 60_000, freshMs: 60_000, by: "cred-1", method: "webauthn" }), true);
+    const open = listTokensRoute(store, phone, T0 + 6, new Set(), opts).body.tokens;
+    assert.deepEqual(open.find((t) => t.id === phone.id)!.verified, {
+      at: T0 + 5,
+      until: T0 + 5 + 10 * 60_000,
+      by: "Passkey from Safari on iPhone",
+      by_id: "cred-1",
+      method: "webauthn",
+    });
+    assert.equal(open.find((t) => t.id === laptop.id)!.verified, null, "another device's row says nothing");
+    assert.equal(open.find((t) => t.id === local.id)!.verified, null, "this machine is never verified");
+
+    // The window ends: the row still says who proved it, and that it is over.
+    const ended = listTokensRoute(store, phone, T0 + 5 + 10 * 60_000, new Set(), opts).body.tokens.find((t) => t.id === phone.id)!;
+    assert.equal(ended.verified?.until, null);
+    assert.equal(ended.verified?.by, "Passkey from Safari on iPhone");
+    // Ended early, the same.
+    store.endVerification(phone.id);
+    assert.equal(listTokensRoute(store, phone, T0 + 7, new Set(), opts).body.tokens.find((t) => t.id === phone.id)!.verified?.until, null);
+
+    // OIDC (phase 5) stores its subject as the credential; no label resolves, so it is shown as is.
+    store.verify(phone.id, { now: T0 + 8, windowMs: 10 * 60_000, freshMs: 60_000, by: "oidc:00u1abc", method: "oidc" });
+    assert.equal(listTokensRoute(store, phone, T0 + 9, new Set(), opts).body.tokens.find((t) => t.id === phone.id)!.verified?.by, "oidc:00u1abc");
   });
 });
 
@@ -290,6 +328,84 @@ describe("formatTokenList", () => {
     assert.match(text, /^L {2}this machine \(CLI\) \[this request\]/m);
     assert.match(text, /^Q {2}unknown device \[unscanned, lapses 2026-10-03 12:10Z\]/m);
     assert.match(text, /never used/);
+  });
+
+  it("says what last verified each device, with the window open or ended, and under the gate who never was", () => {
+    const device = (id: string, verified: TokenListRow["verified"]) => ({
+      id, kind: "device" as const, label: "melded", origin: "minted" as const, created_at: T0, last_used_at: T0, device: "Safari on iPhone",
+      remote_addr: "100.101.1.2", current: false, unused: false, expires_at: null, verified,
+    });
+    const proof = { at: T0 + 60_000, by: "Passkey from Safari on iPhone", by_id: "cred-1", method: "webauthn" };
+    const open = formatTokenList([device("A", { ...proof, until: T0 + 11 * 60_000 })]);
+    assert.match(open, /^ {4}verified 2026-10-03 12:01Z with "Passkey from Safari on iPhone" \(webauthn\), until 2026-10-03 12:11Z$/m);
+    const ended = formatTokenList([device("B", { ...proof, until: null })]);
+    assert.match(ended, /^ {4}verified 2026-10-03 12:01Z with "Passkey from Safari on iPhone" \(webauthn\), window ended$/m);
+    // "never verified" is a finding only under the gate, and only for a device that has been presented.
+    const never = device("C", null);
+    assert.match(formatTokenList([never], true), /^ {4}never verified$/m);
+    assert.doesNotMatch(formatTokenList([never]), /never verified/, "gate off: nothing to say");
+    assert.doesNotMatch(formatTokenList([{ ...never, unused: true, expires_at: T0 + UNUSED_TOKEN_LAPSE_MS }], true), /never verified/, "an unscanned QR");
+    assert.doesNotMatch(formatTokenList([{ ...never, id: "L", kind: "local", device: "node" }], true), /never verified/, "this machine");
+  });
+});
+
+describe("formatTokenList and agents' tokens", () => {
+  const row = (id: string, over: Partial<TokenListRow>): TokenListRow => ({
+    id, kind: "agent", label: "agent", origin: "minted", created_at: T0, last_used_at: T0, device: "node",
+    remote_addr: "127.0.0.1", current: false, unused: false, expires_at: null, ...over,
+  });
+  const device = row("D", { kind: "device", label: "melded", device: "Safari on iPhone" });
+  const agents = [row("A1", { owner_nid: "claude-aaaaaaaa" }), row("A2", { owner_nid: "claude-bbbbbbbb" })];
+
+  it("folds agents into one closing line, and leaves devices in full", () => {
+    const text = formatTokenList([device, ...agents]);
+    assert.match(text, /^D {2}Safari on iPhone/m);
+    assert.doesNotMatch(text, /claude-aaaaaaaa|claude-bbbbbbbb/);
+    assert.match(text, /^2 agent tokens \(brane token list --agents to show them\)$/m);
+    assert.ok(text.endsWith("show them)"), "the count closes the list");
+  });
+
+  it("lists every agent with --agents, and then says no count", () => {
+    const text = formatTokenList([device, ...agents], false, true);
+    assert.match(text, /^A1 {2}agent claude-aaaaaaaa/m);
+    assert.match(text, /^A2 {2}agent claude-bbbbbbbb/m);
+    assert.doesNotMatch(text, /agent tokens? \(/);
+  });
+
+  it("counts one agent in the singular, and says nothing when there are none", () => {
+    assert.match(formatTokenList([device, agents[0]]), /^1 agent token \(brane token list --agents to show it\)$/m);
+    assert.doesNotMatch(formatTokenList([device]), /agent token/);
+  });
+
+  it("still shows an agent's token that was used from a second address: that is a finding", () => {
+    const strayed = row("A3", { owner_nid: "claude-cccccccc", elsewhere_at: T0 + 1000, last_remote_addr: "100.64.0.9" });
+    const text = formatTokenList([device, ...agents, strayed]);
+    assert.match(text, /^A3 {2}agent claude-cccccccc/m);
+    assert.match(text, /! also used from another address/);
+    assert.match(text, /^2 agent tokens /m);
+  });
+
+  it("is only the count when agents are all there is", () => {
+    assert.equal(formatTokenList(agents), "2 agent tokens (brane token list --agents to show them)");
+  });
+});
+
+describe("DbCredentialStore.labelOf", () => {
+  it("names a credential by its row id, marks a revoked one, and knows nothing of an id it never had", () => {
+    const db = createTestDb();
+    const store = new DbCredentialStore(db);
+    const row = store.insert(
+      {
+        credentialId: Buffer.from("cred"), rpId: "mac.tail1234.ts.net", publicKey: Buffer.from("key"), alg: -7, transports: ["internal"],
+        aaguid: "00000000-0000-0000-0000-000000000000", signCount: 0, backupEligible: true, backedUp: true, attested: false,
+        attestationFmt: "none", attestationRoot: null, label: "Passkey from Safari on iPhone", enrolledBy: "presence at this machine", enrolledVia: "tok-phone",
+      },
+      T0,
+    );
+    assert.equal(store.labelOf(row.id), "Passkey from Safari on iPhone");
+    store.revoke(row.id, T0 + 1);
+    assert.equal(store.labelOf(row.id), "Passkey from Safari on iPhone (revoked)", "a proof given before the revoke still names it");
+    assert.equal(store.labelOf("no-such-id"), null);
   });
 });
 

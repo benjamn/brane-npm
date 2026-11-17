@@ -35,6 +35,8 @@ const AGENT_REFUSALS: Readonly<Record<GatedAct, string>> = {
   "revoke-device": "An agent cannot sign out a device; the operator does, from a shell outside an agent session or from the app",
   rotate: "An agent's token is replaced by reviving its narrative, not rotated",
   enroll: "An agent cannot enroll a credential; the operator does, from a signed-in device",
+  "approve-protocol":
+    "An agent cannot approve a protocol; the operator does, with `brane protocol approve` from a shell outside an agent session, or in the app",
 };
 
 /** Null when `caller` may go on — a device, or a prompt approved — else the

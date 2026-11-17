@@ -22,6 +22,15 @@
  * The approval arrives in the fragment and is wiped from the address bar on
  * load, so it is not left in history. Inline script, so the CSP pins it by
  * hash: the page runs exactly this code and loads nothing else.
+ *
+ * This page is also where the Signal API is called (docs/passkeys.md,
+ * Research), because only the RP ID's own origin may: with every challenge
+ * and after every proof or enrollment the daemon says which credentials it
+ * still accepts, and the page passes that to the password manager, so a
+ * passkey revoked from the Devices view is dropped from the phone at its
+ * next ceremony here, and an assertion by a credential the daemon no longer
+ * knows is reported as unknown. Where the browser lacks the API nothing
+ * happens.
  */
 
 import { createHash } from "node:crypto";
@@ -66,6 +75,21 @@ const SCRIPT = String.raw`
     return fetch(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body), cache: "no-store" })
       .then(function (r) { return r.json().catch(function () { return {}; }).then(function (j) { return { status: r.status, body: j }; }); });
   }
+  // The Signal API, where the browser has it (Chrome 132+; Safari 26 in
+  // part). Never an empty list, which would hide every passkey; the daemon
+  // leaves "accepted" out when it has none.
+  function signalAccepted(accepted) {
+    var PKC = window.PublicKeyCredential;
+    if (!accepted || !accepted.credentialIds.length || !PKC || typeof PKC.signalAllAcceptedCredentials !== "function") return;
+    try {
+      PKC.signalAllAcceptedCredentials({ rpId: accepted.rpId, userId: accepted.userId, allAcceptedCredentialIds: accepted.credentialIds }).catch(function () {});
+    } catch (e) {}
+  }
+  function signalUnknown(rpId, credentialId) {
+    var PKC = window.PublicKeyCredential;
+    if (!PKC || typeof PKC.signalUnknownCredential !== "function") return;
+    try { PKC.signalUnknownCredential({ rpId: rpId, credentialId: credentialId }).catch(function () {}); } catch (e) {}
+  }
   function setBusy(b) {
     busy = b;
     var buttons = actions.querySelectorAll("button");
@@ -85,6 +109,7 @@ const SCRIPT = String.raw`
       if (r.status !== 200) { say(r.body.error || "The daemon refused (" + r.status + ")", "error"); return; }
       ready = r.body.publicKey;
       enrolled = r.body.enrolled;
+      signalAccepted(r.body.accepted);
       render();
     }, function () {
       fetching = null;
@@ -146,6 +171,7 @@ const SCRIPT = String.raw`
     if (!ready) { say("Getting ready… tap again in a moment.", "wait"); prefetch(); return; }
     setBusy(true);
     say(purpose === "enroll" ? "Follow your browser's prompt…" : "Confirm with Face ID, Touch ID or your security key…");
+    var rpId = purpose === "enroll" ? ready.rp.id : ready.rpId;
     var call = purpose === "enroll"
       ? navigator.credentials.create({ publicKey: creationOptions(kind) })
       : navigator.credentials.get({ publicKey: requestOptions(kind) });
@@ -166,6 +192,7 @@ const SCRIPT = String.raw`
         }).then(function (res) {
           if (res.status === 200) {
             var c = res.body.credential;
+            signalAccepted(res.body.accepted);
             finish("Added: " + c.label + (c.attested ? " (hardware attested)." : ".") + (c.backup_eligible ? "" : " A key like this is not synced: enroll a second one as a backup."));
           } else if (res.status === 410) expired();
           else { say(res.body.error || "Refused (" + res.status + ")", "error"); setBusy(false); }
@@ -179,8 +206,14 @@ const SCRIPT = String.raw`
           signature: bufToB64u(r.signature)
         } }
       }).then(function (res) {
-        if (res.status === 200) finish("Verified. You can return to brane.");
+        if (res.status === 200) { signalAccepted(res.body.accepted); finish("Verified. You can return to brane."); }
         else if (res.status === 410) expired();
+        else if (res.body.reason === "credential") {
+          // Revoked here, still on the phone: tell the password manager.
+          signalUnknown(rpId, bufToB64u(cred.rawId));
+          say(res.body.error || "That passkey is no longer enrolled here. Use another, or add one from brane's Devices view.", "error");
+          setBusy(false);
+        }
         else if (res.body.reason === "user-verification") {
           say("That passkey answered without Face ID, Touch ID or a PIN, though brane asked for one. Check its settings, or use another passkey or key.", "error");
           setBusy(false);

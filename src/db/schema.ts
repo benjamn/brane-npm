@@ -533,6 +533,23 @@ export function applyMigrations(db: Database.Database): void {
       revoked_at       INTEGER
     )
   `);
+  // Operator approvals of `home` and `fold` protocol files, pinned to
+  // content (src/db/protocol-approvals.ts, docs/protocols.md#approval): a
+  // file is in force only while its current sha256 has a live row. The
+  // approved text is kept so a changed file can be shown as a diff.
+  // Revoked, never deleted.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS protocol_approvals (
+      id          INTEGER PRIMARY KEY AUTOINCREMENT,
+      path        TEXT NOT NULL,
+      sha256      TEXT NOT NULL,
+      content     TEXT NOT NULL,
+      approved_at INTEGER NOT NULL,
+      approved_by TEXT NOT NULL,
+      revoked_at  INTEGER
+    )
+  `);
+  db.exec("CREATE INDEX IF NOT EXISTS protocol_approvals_path ON protocol_approvals (path)");
 }
 
 /** Carry provider-only `absorb_messages` / `absorb_files` rows (the shape

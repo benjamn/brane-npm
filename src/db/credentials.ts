@@ -116,6 +116,17 @@ export class DbCredentialStore {
     return this.live().map(listing);
   }
 
+  /** A credential's label by its row id, revoked or not, for the record of
+   *  what verified a device: a proof given before a revoke still names it.
+   *  Null for an id this daemon never had. */
+  labelOf(id: string): string | null {
+    const row = this.db.prepare("SELECT label, revoked_at FROM credentials WHERE id = ?").get(id) as
+      | { label: string; revoked_at: number | null }
+      | undefined;
+    if (!row) return null;
+    return row.revoked_at === null ? row.label : `${row.label} (revoked)`;
+  }
+
   /** How many live credentials there are, on any RP ID: what `brane config
    *  verification passkey` asks before it lets the gate on. */
   count(): number {

@@ -20,7 +20,7 @@
 import { useSyncExternalStore } from "react";
 import { beginCeremony, endVerification, fetchStatus, setVerificationListener, type ConnectionParams } from "./api";
 import { setTerminalVerifyHandler } from "./terminal";
-import { sameTabHopUrl, shouldEndOnHide, verifiedPerStatus, type StatusVerification, type VerificationKind } from "@shared/verification-hop";
+import { noCredentialCanVerify, sameTabHopUrl, shouldEndOnHide, verifiedPerStatus, type StatusVerification, type VerificationKind } from "@shared/verification-hop";
 
 export type LockPhase = "closed" | "preparing" | "ready" | "hopping" | "error";
 
@@ -29,9 +29,13 @@ export interface LockState {
   kind: VerificationKind | null;
   host: string | null;
   error: string | null;
+  /** Set when no credential can verify on this daemon (every one orphaned
+   *  by a rename, or the last revoked): the sheet says so instead of
+   *  offering Verify, and the way out is the shell. */
+  lockedOut: string | null;
 }
 
-const CLOSED: LockState = { phase: "closed", kind: null, host: null, error: null };
+const CLOSED: LockState = { phase: "closed", kind: null, host: null, error: null, lockedOut: null };
 
 let state: LockState = CLOSED;
 let conn: ConnectionParams | null = null;
@@ -39,9 +43,10 @@ let url: string | null = null;
 let waiters: Array<(ok: boolean) => void> = [];
 const listeners = new Set<() => void>();
 
-/** What the app knows of the active daemon's gate: its mode and this
- *  device's window, from `/api/status` and `verified` frames. */
-let active: { conn: ConnectionParams; mode: string | null; verifiedUntil: number | null } | null = null;
+/** What the app knows of the active daemon's gate: its mode, this
+ *  device's window, and whether any credential can verify there, from
+ *  `/api/status` and `verified` frames. */
+let active: { conn: ConnectionParams; mode: string | null; verifiedUntil: number | null; lockedOut: string | null } | null = null;
 
 function set(next: Partial<LockState>): void {
   state = { ...state, ...next };
@@ -60,11 +65,18 @@ function settle(ok: boolean): void {
 
 const sameConn = (a: ConnectionParams | null, b: ConnectionParams | null) => !!a && !!b && a.host === b.host && a.token === b.token;
 
-/** Fetch the approval the next tap will use. */
+/** Fetch the approval the next tap will use; with nothing that could
+ *  answer it, say so instead. */
 function prepare(): void {
   const c = conn;
   if (!c) return;
   url = null;
+  const lockedOut = active && sameConn(active.conn, c) ? active.lockedOut : null;
+  if (lockedOut) {
+    set({ phase: "preparing", error: null, lockedOut });
+    return;
+  }
+  set({ lockedOut: null });
   set({ phase: "preparing", error: null });
   beginCeremony(c, "verify").then(
     (r) => {
@@ -137,8 +149,12 @@ export function noteVerified(c: ConnectionParams, until: number | null): void {
 
 /** The active daemon changed, or its status arrived. */
 export function noteStatus(c: ConnectionParams, verification: StatusVerification | undefined): void {
-  active = { conn: c, mode: verification?.mode ?? null, verifiedUntil: verification?.verified_until ?? null };
+  const lockedOut = noCredentialCanVerify(verification);
+  active = { conn: c, mode: verification?.mode ?? null, verifiedUntil: verification?.verified_until ?? null, lockedOut };
   if (verifiedPerStatus({ verification }, Date.now()) && state.phase !== "closed" && sameConn(conn, c)) settle(true);
+  // The sheet is up and what it can offer changed: a credential arrived for
+  // this host, or the last one went.
+  else if (state.phase !== "closed" && state.phase !== "hopping" && sameConn(conn, c) && (state.lockedOut !== null) !== (lockedOut !== null)) prepare();
 }
 
 /** Read the active daemon's posture; a hop that landed while the app was

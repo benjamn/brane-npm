@@ -57,6 +57,7 @@ brane/
 │   │   └── storage.ts         # Chunk storage and indexing state
 │   ├── files/                 # GET /api/files: browse.ts (the route), zip.ts, tar.ts, archive.ts, bytes.ts
 │   ├── markdown-diagnostics.ts # Rendering warnings returned by narrate
+│   ├── protocols.ts           # Protocol namespaces (fold/home/brane) and /command resolution
 │   ├── mcp/server.ts          # Thin stdio↔WebSocket MCP bridge
 │   └── test/                  # Node test suite
 ├── expo/                      # React Native web app
@@ -141,7 +142,8 @@ attestation are in [docs/releasing.md](docs/releasing.md).
 | `absorb` | Import conversation history: from provider exports (`chatgpt`, `organelle`) or from agent session stores on this machine (`claude`); `survey` lists what the machine has (`--fold`, `--brane`, `--identity`, `--dry-run`, `--since`, `--session`, `--rebuild`) — delegates to `GET /api/absorb/survey` and `POST /api/absorb`, printing its progress stream |
 | `memory` | Semantic search and indexing (`search`, `log`, `index` subcommands) — clients of `POST /api/search`, `GET /api/narratives/recent`, `POST /api/memory/index`. `log --archived` to include absorbed history, which is archived by construction |
 | `cost` | Cost ledger maintenance (`backfill [--dry-run] [--all]`, `reprice [--dry-run] [--all]`) — delegates to `POST /api/cost/backfill` and `POST /api/cost/reprice` |
-| `token` | Daemon bearer tokens (`list`: the Devices list; `revoke <id> [--cascade]`: sign out one device, and with `--cascade` the devices it added; `rotate`: sign out every web client, keep this shell; revoking a device and rotating wait for Touch ID, see [Presence Check](docs/presence.md#the-gate)) — delegates to `GET /api/tokens`, `POST /api/tokens/:id/revoke` and `POST /api/token/rotate`; from the shell, which holds no token, rotate is one request — see [Token Rotation](docs/token-rotation.md) |
+| `token` | Daemon bearer tokens (`list [--agents]`: the Devices list, agents' tokens counted unless asked for; `revoke <id> [--cascade]`: sign out one device, and with `--cascade` the devices it added; `rotate`: sign out every web client, keep this shell; revoking a device and rotating wait for Touch ID, see [Presence Check](docs/presence.md#the-gate)) — delegates to `GET /api/tokens`, `POST /api/tokens/:id/revoke` and `POST /api/token/rotate`; from the shell, which holds no token, rotate is one request — see [Token Rotation](docs/token-rotation.md) |
+| `protocol` | Approve the `home` and `fold` protocols agents may follow (`pending`, `approve <path>`, `revoke <path>`); approving waits for Touch ID at this machine — delegates to `GET /api/protocols/pending`, `POST /api/protocols/approve` and `/revoke`; see [Protocols](docs/protocols.md#approval) |
 | `doctor` | Check the install: Node vs `engines`, `tmux`, Tailscale, daemon status, which checkout it runs from and whether this shell can reach it over `daemon.sock`, a leftover `.daemon_token`, then the shipped test suite (`dist/test`) against this install — see [Doctor](docs/doctor.md) |
 
 ## Database
@@ -164,6 +166,7 @@ Single SQLite database at `~/.brane/brane.db` (WAL mode). Key tables:
 | `usage_ledger` | Durable per-message / per-session cost rows — see [Cost Ledger](docs/cost-ledger.md) |
 | `absorb_messages` | (brane, provider, message id) → (narrative, seq): the per-message dedup that makes re-absorbing a session store idempotent — see [Absorb](docs/absorb.md) |
 | `absorb_files` | (brane, provider, session) → (size, mtime) at its last absorb, so an unchanged file is skipped on a stat |
+| `protocol_approvals` | The operator's approvals of `home` / `fold` protocol files, pinned to content (path, sha256, approved text), revoked never deleted — see [Protocols](docs/protocols.md#approval) |
 | `credentials` | The operator's enrolled passkeys and security keys, public keys only, revoked never deleted: any live one satisfies the verification gate — see [Operator Verification](docs/passkeys.md) |
 
 Event types: `narration` (agent), `human_signal` (operator), `agent_signal` (cross-agent).
@@ -273,15 +276,21 @@ change one of those, read its doc first.
   MCP handlers in `server.ts`): the stdio↔WebSocket bridge, listen wakeup and
   cancellation, `narrate({ wait: true })`, the LIVE loop tools, narrative
   metadata.
+- [Protocols](docs/protocols.md) (`src/protocols.ts`,
+  `src/shared/protocol-names.ts`, the `/prelude`'s slash-command section):
+  the `fold` / `home` / `brane` namespaces (`<fold>/.brane/protocols`,
+  `~/.brane/protocols`, built-ins), `/brane.review`-style names,
+  `read_protocol`'s `layers`, the protected and reserved names, and how a
+  local `/idle` builds on `/brane.idle`.
 - [Token Rotation](docs/token-rotation.md) (`src/daemon/token-ring.ts`,
   `src/db/tokens.ts`, `src/daemon/token-routes.ts`, `src/commands/token.ts`):
   tokens stored as hashes only, a token per melded device and per agent session, the Devices list
   and per-device revoke, `brane token rotate`, why the swap happens on first
   use of the new token, and why this machine holds no token (`.daemon_token`
   is retired).
-- [Operator Verification](docs/passkeys.md) (phase 2 of 6 built, the gate,
-  and phase 3's daemon half: `src/daemon/verification-gate.ts`,
-  `src/daemon/verification-ceremony.ts`, `src/daemon/verify-page.ts`,
+- [Operator Verification](docs/passkeys.md) (phases 2 to 4 of 6 built:
+  `src/daemon/verification-gate.ts`, `src/daemon/verification-ceremony.ts`,
+  `src/daemon/verify-page.ts`, `src/daemon/verification-rename.ts`,
   `src/webauthn/`, `src/db/credentials.ts`, `src/db/tokens.ts`): why a
   melded device must prove the operator is holding it before it acts, the
   daemon-side gate and its free list, the proof tiers (passkeys, security

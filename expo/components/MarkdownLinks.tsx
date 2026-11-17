@@ -1,5 +1,6 @@
 import { createContext, useContext, useMemo, type ReactNode } from "react";
 import { useBrane } from "@/app/_layout";
+import type { ProtocolNamespace } from "@shared/protocol-names";
 
 /** What `MarkdownContent` needs to turn a bare `claude-4c7289d1` or `/ramify`
  *  into a link: the sets that say which ones are real, and what tapping one
@@ -12,6 +13,10 @@ export interface MarkdownLinks {
   /** Protocol names that exist on this daemon; only these linkify. Defaults
    *  to the daemon's protocol list from `useBrane()`. */
   knownProtocols?: Set<string>;
+  /** For each protocol name, the namespaces that have it, most local first,
+   *  from the same library as `knownProtocols`: what a tapped `/command`
+   *  opens (`protocolReaderTarget`). Defaults to `useBrane()`'s. */
+  protocolLayers?: Record<string, ProtocolNamespace[]>;
   onNarrativePress?: (nid: string, seq?: number) => void;
   onProtocolPress?: (name: string) => void;
 }
@@ -24,14 +29,15 @@ const MarkdownLinksContext = createContext<MarkdownLinks>({});
  *  `onNarrativePress` and inherit the rest. */
 export function MarkdownLinksProvider({ children, ...own }: MarkdownLinks & { children: ReactNode }) {
   const parent = useContext(MarkdownLinksContext);
-  const { protocols } = useBrane();
-  const { knownNarrativeIds, knownProtocols, onNarrativePress, onProtocolPress } = own;
+  const { protocols, protocolLayers: braneLayers } = useBrane();
+  const { knownNarrativeIds, knownProtocols, protocolLayers, onNarrativePress, onProtocolPress } = own;
   const value = useMemo<MarkdownLinks>(() => ({
     knownNarrativeIds: knownNarrativeIds ?? parent.knownNarrativeIds,
     knownProtocols: knownProtocols ?? parent.knownProtocols ?? protocols,
+    protocolLayers: protocolLayers ?? parent.protocolLayers ?? braneLayers,
     onNarrativePress: onNarrativePress ?? parent.onNarrativePress,
     onProtocolPress: onProtocolPress ?? parent.onProtocolPress,
-  }), [parent, protocols, knownNarrativeIds, knownProtocols, onNarrativePress, onProtocolPress]);
+  }), [parent, protocols, braneLayers, knownNarrativeIds, knownProtocols, protocolLayers, onNarrativePress, onProtocolPress]);
   return <MarkdownLinksContext.Provider value={value}>{children}</MarkdownLinksContext.Provider>;
 }
 

@@ -91,7 +91,8 @@ Less obvious than it looks:
 ## The gate
 
 `PresenceGate` (`src/daemon/presence-gate.ts`) is where the daemon calls
-it, and `src/daemon/gated-routes.ts` holds the routes that ask it. Four
+it, and `src/daemon/gated-routes.ts` (and, for `approve-protocol`,
+`src/daemon/protocol-routes.ts`) holds the routes that ask it. Five
 acts, asked from this machine's shell (a tokenless request over
 `daemon.sock`), wait in the route until the operator answers:
 
@@ -102,10 +103,12 @@ acts, asked from this machine's shell (a tokenless request over
 | `revoke-device` | `POST /api/tokens/:id/revoke`, when it signs out a device | `brane token revoke <device>` | sign out a device from brane |
 | `rotate` | `POST /api/token/rotate` | `brane token rotate` | sign out every other device from brane |
 | `enroll` | `POST /api/credentials`, when no hardware attestation verified | the enrollment page (`GET /verify`), from a signed-in device | add a passkey or security key to brane |
+| `approve-protocol` | `POST /api/protocols/approve` | `brane protocol approve <path>` | approve a protocol for brane's agents |
 
-A device token is never prompted for these four: the app's Meld sheet,
-Revoke and "Sign out other devices" are the operator's delegate acting, and
-work from anywhere. The one prompt a device raises is `enroll` ("add a
+A device token is never prompted for these five: the app's Meld sheet,
+Revoke, "Sign out other devices" and a protocol's Approve are the
+operator's delegate acting, and work from anywhere (behind the
+verification gate). The one prompt a device raises is `enroll` ("add a
 passkey or security key to brane"): a credential no hardware attestation
 vouched for waits here before it joins the list, because a software
 authenticator can claim "user verified" with nobody present

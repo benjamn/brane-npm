@@ -13,6 +13,7 @@
  */
 
 import type { TokenRecord } from "./token-ring.js";
+import type { Proof } from "./verification-gate.js";
 
 /** The `source` stamped on a signal sent with each kind of token. "web" is
  *  what the app always sent, so existing bubbles and new ones read alike. */
@@ -34,20 +35,27 @@ export interface SignalEventFields {
   source: string;
   re?: Array<number | string>;
   payloads?: string[];
+  /** The proof that let a gated device speak (docs/passkeys.md, "The record"). */
+  meta?: { verified: Proof };
 }
 
 /** The fields a `human_signal` is appended with, given the token's standing
  *  and the request (an HTTP body, or a control-socket message). `content`
- *  and `re` come from the request; `source` never does, whatever it says. */
+ *  and `re` come from the request; `source` never does, whatever it says.
+ *  `proof` is what the verification gate let the sender through on, from
+ *  `VerificationGate.proof`, never from the request; it is recorded in the
+ *  event's `meta` so the log says which credential spoke as the operator. */
 export function signalEventFields(
   standing: { source: string },
   request: { content?: unknown; re?: unknown },
   payloads?: string[],
+  proof?: Proof | null,
 ): SignalEventFields {
   return {
     content: request.content as string | undefined,
     source: standing.source,
     re: request.re as Array<number | string> | undefined,
     ...(payloads ? { payloads } : {}),
+    ...(proof ? { meta: { verified: proof } } : {}),
   };
 }

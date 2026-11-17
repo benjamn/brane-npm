@@ -7,7 +7,10 @@
  *
  * The Verify button opens the ceremony page on the daemon's own origin, in
  * a new window when the browser allows one. It is enabled only once the
- * approval is in hand, so the tap opens the window at once.
+ * approval is in hand, so the tap opens the window at once. When no
+ * credential can verify on this daemon (`lockedOut`: every one orphaned by
+ * a rename, or the last revoked) there is no Verify: the sheet says what
+ * to do from the daemon's shell.
  */
 
 import { ActivityIndicator, Modal, Pressable, StyleSheet, Text, View } from "react-native";
@@ -27,7 +30,9 @@ export default function LockSheet() {
               ? "This act adds a device, a credential or an agent, so it needs a proof from the last minute: Face ID, Touch ID or your security key."
               : "brane needs Face ID, Touch ID or your security key before this device acts."}
           </Text>
-          {s.phase === "hopping" ? (
+          {s.lockedOut ? (
+            <Text style={styles.error}>{s.lockedOut}</Text>
+          ) : s.phase === "hopping" ? (
             <Text style={styles.note}>
               Finish on the page that opened, then come back here. This closes by itself once it worked.
             </Text>
@@ -39,7 +44,7 @@ export default function LockSheet() {
             <Pressable style={[styles.button, styles.cancelButton]} role="button" onPress={dismiss}>
               <Text style={styles.cancelText}>Not now</Text>
             </Pressable>
-            {s.phase === "error" ? (
+            {s.lockedOut ? null : s.phase === "error" ? (
               <Pressable style={[styles.button, styles.confirmButton]} role="button" onPress={retry}>
                 <Text style={styles.confirmText}>Try again</Text>
               </Pressable>

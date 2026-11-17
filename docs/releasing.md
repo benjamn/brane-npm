@@ -67,8 +67,10 @@ pushes, so the clone never fetches this history and stands alone afterwards.
    the run for your commit is green, and the SHASUM npmjs.com shows is the one
    that job printed (see [The gates](#the-gates)). That approval, with its
    2FA, is the publish.
-5. For an ordinary release, **approve the app deploy** in `brane-npm`'s
-   Actions tab (Review deployments, on the run). A prerelease deploys nothing.
+5. For an ordinary release, **approve the app deploy**: the release run
+   dispatches a separate **Deploy app** run in `brane-npm`'s Actions tab,
+   which waits there (Review deployments, `app`). A prerelease deploys
+   nothing.
 
 If the push fails (no network, `gh` logged out), `brane-npm` is unchanged and
 the commit and tag stay in the clone; running `--push` again pushes that same
@@ -95,10 +97,13 @@ The push runs `release.yml` in `brane-npm`, in five jobs:
 - **`release-notes`** then creates the GitHub release `v<version>` in
   `brane-npm` from the `CHANGELOG.md` section (`scripts/changelog.mjs
   notes`): install lines, the section, and a compare link to the previous tag.
+  The section's paragraphs and bullets are unwrapped to one line each, since
+  GitHub renders a release body's newlines as line breaks.
   It is marked a pre-release when the version is one. A failure there is a
   re-run of that job, never a second publish.
-- **`deploy-app`**, for an ordinary release, puts its app on the shared host
-  (below), once the operator approves the job in the `app` environment.
+- **`deploy-app`**, for an ordinary release, dispatches `deploy-app.yml`,
+  whose run puts the app on the shared host (below) once the operator
+  approves its job in the `app` environment.
 
 **The version chooses the dist-tag.** A semver prerelease (`0.4.0-rc.1`)
 stages under `next`; any other version stages under `latest`. npm fixes the
@@ -257,10 +262,17 @@ The shared app (the `brane` worker in `worker/wrangler.toml`, at
 tests.
 
 - After an ordinary release is approved on npm, `release.yml`'s `deploy-app`
-  job runs `.github/workflows/deploy-app.yml` with the release's version, and
-  waits for the operator's approval in the `app` environment, which holds the
-  Cloudflare token ([The gates](#the-gates)). A prerelease version deploys
-  nothing.
+  job dispatches `.github/workflows/deploy-app.yml` with the release's
+  version. That run waits for the operator's approval in the `app`
+  environment, which holds the Cloudflare token ([The gates](#the-gates)). A
+  prerelease version deploys nothing.
+- It is dispatched, not called as a reusable workflow. A called workflow's
+  `secrets` are only what its caller passes, even in a job that names an
+  environment, so the call 0.3.12's release made ran with an empty token;
+  passing it would take `secrets: inherit`, which hands over every repository
+  secret. A dispatched run is its own workflow, and its job in `app` reads
+  that environment's secret. `src/test/release-mirror.test.ts` keeps it
+  that way.
 - `deploy-app.yml` does not build. It waits until the registry has the version
   and names it `latest` (right after a publish either can lag by up to a
   minute), unpacks `npm pack <name>@<version>`, checks the tarball's name,
@@ -268,8 +280,8 @@ tests.
   `wrangler deploy`s that `expo/dist`. The shared app is therefore the same
   bytes every daemon of that version installs and serves itself, by
   construction rather than by a second build that is supposed to match.
-- It is its own job because a publish cannot be undone and a deploy can be
-  repeated: a Cloudflare failure is a re-run of that job, never a second
+- It is its own run because a publish cannot be undone and a deploy can be
+  repeated: a Cloudflare failure is a re-run of that run, never a second
   release.
 - **Redeploy or roll back** by dispatching `deploy-app.yml` from `brane-npm`'s
   Actions tab with a version; it waits for approval in the `app` environment
@@ -282,7 +294,7 @@ tests.
   only after the registry-lag retries, about four minutes in.
 - **A `wrangler.toml` change is first exercised by the next release's
   deploy.** A merge deploys nothing and `wrangler deploy --dry-run` doesn't
-  talk to Cloudflare, so watch that release's `deploy-app` job. Declaring the
+  talk to Cloudflare, so watch that release's Deploy app run. Declaring the
   custom domain needs zone permissions on `CLOUDFLARE_API_TOKEN`, not only
   Workers ones; if the job fails there, the fix is the token and a re-run, and
   the publish before it stands.

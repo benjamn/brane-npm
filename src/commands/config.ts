@@ -4,6 +4,7 @@ import { openDatabase } from "../db/schema.js";
 import { cleanAppHost } from "../shared/app-origin.js";
 import { configValueRefusal } from "../daemon/verification-gate.js";
 import { DbCredentialStore } from "../db/credentials.js";
+import { orphanedCredentials, recordedRpId } from "../daemon/verification-rename.js";
 
 // Well-known config keys and their defaults
 export const CONFIG_DEFAULTS: Record<string, string> = {
@@ -18,7 +19,7 @@ export const CONFIG_DEFAULTS: Record<string, string> = {
   // enrolled, which phase 3 builds; the gate module validates these.
   verification: "off",
   "verification.window": "10",
-  "verification.fresh": "mint,mcp-dial,enroll,revoke-credential",
+  "verification.fresh": "mint,mcp-dial,enroll,revoke-credential,approve-protocol",
 };
 
 /** The shared app's host from a configured or given `app_domain` value,
@@ -38,8 +39,15 @@ export function resolveAppHost(value: string | null | undefined): string {
  *  device out or loosen the gate. */
 export function configSetRefusal(key: string, value: string, db?: Database.Database): string | null {
   if (!key.startsWith("verification")) return null;
-  const credentials = db ? new DbCredentialStore(db).count() : 0;
-  return configValueRefusal(key, value, { credentials });
+  if (!db) return configValueRefusal(key, value, { credentials: 0 });
+  // Only a credential enrolled for the host the daemon serves can verify
+  // there; the daemon records that host for this shell, which has no
+  // certificate to read it from (src/daemon/verification-rename.ts).
+  const rpId = recordedRpId(db);
+  const live = new DbCredentialStore(db).live();
+  const orphaned = orphanedCredentials(live, rpId);
+  const credentials = live.length - [...orphaned.values()].reduce((a, b) => a + b, 0);
+  return configValueRefusal(key, value, { credentials, orphaned, rpId });
 }
 
 /** What switching the gate on will trust, printed before it flips: every
@@ -48,11 +56,14 @@ export function configSetRefusal(key: string, value: string, db?: Database.Datab
  *  (claude-vxnhxcg9:25, :26). */
 export function describeCredentials(db: Database.Database): string[] {
   const list = new DbCredentialStore(db).list();
-  const lines = [`${list.length} credential(s) will be able to verify a device:`];
+  const rpId = recordedRpId(db);
+  const orphan = (c: { rp_id: string }) => rpId !== null && c.rp_id !== rpId;
+  const lines = [`${list.filter((c) => !orphan(c)).length} credential(s) will be able to verify a device:`];
   for (const c of list) {
     const via = c.enrolled_via ? `, from token ${c.enrolled_via}` : "";
     lines.push(`  ${c.id}  ${c.label}  [${c.attested ? "attested" : "unattested"}, aaguid ${c.aaguid ?? "?"}]`);
     lines.push(`      enrolled ${new Date(c.enrolled_at).toISOString()} by ${c.enrolled_by}${via}`);
+    if (orphan(c)) lines.push(`      ! enrolled for ${c.rp_id}, not this daemon's ${rpId}: cannot verify here`);
   }
   lines.push("Revoke any you do not recognise before relying on the gate (POST /api/credentials/:id/revoke).");
   return lines;

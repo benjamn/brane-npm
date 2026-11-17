@@ -300,7 +300,10 @@ and `src/test/socket-account.test.ts`.
 
 `GET /api/tokens` lists every live token, `brane token list` prints it, and
 the brane switcher's **Devices** layer shows it with a Revoke on each other
-device. Less obvious than it looks:
+device. `brane token list` folds agents' tokens, one per narrative session
+and soon several times the devices, into a closing `23 agent tokens` line;
+`--agents` lists them, and an agent's token seen from a second address keeps
+its block either way (`formatTokenList`). Less obvious than it looks:
 
 - **A row is named by its first sighting.** The store records the
   User-Agent and peer address of the first request, HTTP or WebSocket, that
@@ -331,6 +334,12 @@ device. Less obvious than it looks:
   the token is the credential and the daemon accepts any origin
   (`SECURITY.md`, Authentication), which is what lets a staging hostname
   or a fork's deployment front the same daemon with nothing to configure.
+- **What last verified a device is on its row.** Under the verification
+  gate ([Operator Verification](passkeys.md), The record) each device row
+  carries `verified`: when the operator last proved themself on it, by which
+  credential (its label, and its id), how, and `until` when that counts, null
+  once the window has ended; the body's `gated` says whether the gate is on,
+  so the app and `brane token list` say "never verified" only then.
 - **The address is the only field a token holder cannot choose.** The
   User-Agent and the label are both free text from whoever holds the
   token. So the app never uses the label as a row's title — a row with a

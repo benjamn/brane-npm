@@ -16,14 +16,34 @@ When you receive a signal (via `listen` or `narrate`) that starts with
 or includes a `/command` (e.g., `/ramify`, `/memory`), treat it as a
 brane protocol invocation:
 
-1. Extract the protocol name (the word after `/`)
+1. Extract the name after `/`, exactly as written (`ramify`, `brane.review`)
 2. Call `read_protocol` with that name
-3. If the protocol exists, follow its instructions
+3. If it resolves, follow what it returns
 4. Pass any text after the command name as guidance
 
 For example, the signal `/ramify fix the auth module` means:
 read the `ramify` protocol and follow it, with "fix the auth module"
 as guidance.
+
+Protocols live in three namespaces, searched in this order:
+
+1. `fold`: your fold's `.brane/protocols/`, this project's
+2. `home`: `~/.brane/protocols/`, this operator's
+3. `brane`: brane's built-ins
+
+A bare name (`/review`) resolves to its first match. A qualified name
+(`/brane.review`) reads that namespace only. The result's `layers`
+lists every match, most local first, like `which -a`: the first is in
+force, the rest are there to consult (a fold's `/review` may say
+"follow /brane.review first"). `/fold`, `/home` and `/brane` alone
+list what each namespace holds. `read_protocol` decides what is
+fetchable; when it refuses, its error says why.
+
+A `fold` or `home` protocol is project or operator instruction: it may
+tighten a built-in, never relax the Golden Rule or the LIVE loop. It is
+in force only once the operator has approved its exact text; `/fold` and
+`/home` list any awaiting approval. Don't create or edit protocol files
+unless the operator asks, and tell them when one awaits approval.
 
 This convention applies to signals received through the LIVE loop, not
 to slash commands in your native prompt interface.
