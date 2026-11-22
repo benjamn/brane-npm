@@ -7,6 +7,56 @@ message in `benjamn/brane-npm`, the repository npm publishes from (see
 [docs/releasing.md](docs/releasing.md)), with pull request links removed.
 This file travels in the npm tarball.
 
+## 0.3.14 - 2026-11-22
+
+Upgrading from 0.3.13 or earlier: once the new version is installed, run
+`brane daemon stop`, then `brane daemon start`, from the terminal whose
+permissions agents should get. For this one upgrade don't use `brane
+daemon restart`, though the usual install steps and the version warning
+both say to: an older daemon cannot restart in place, and the MCP bridge
+of a running session can start the replacement before your shell does.
+Afterwards `brane daemon status` should say `from: brane daemon start`;
+if it doesn't, stop and start again.
+
+Sessions already running keep their older bridge until they are ended
+and revived, and that bridge exits after 5 minutes without a daemon. If
+the new version lands at a different path than the old (`npx`, another
+Node under a version manager), end those sessions before the stop: their
+bridges start the old version, which does not honor it.
+
+- `brane daemon stop` means stop. It waits for the daemon to exit, killing
+  it after `--timeout` seconds (10 by default), and nothing starts another
+  implicitly until `brane daemon start` or `restart`. MCP bridges no
+  longer start a daemon at all, so an MCP client opened after a reboot
+  needs one started first, and an agent's session is refused `start` and
+  `stop`. Other commands from your own shell still start one as needed,
+  unless you stopped it. While none runs, a bridge keeps retrying, holds
+  `listen`, and answers other tools with the reason
+  ([#679](https://github.com/benjamn/brane/pull/679)).
+- `brane daemon restart` is in place: the daemon starts its own successor,
+  so it keeps its port and the permissions it was started with, whoever
+  asks, agents included. It also keeps the Node binary and the brane
+  install it was started with, so after switching or removing either, use
+  `stop` then `start` from the new one
+  ([#679](https://github.com/benjamn/brane/pull/679)).
+- `brane daemon status` and `brane doctor` say where the daemon was
+  started from and where the tmux server was, and warn when they differ,
+  since agents get the tmux server's permissions
+  ([#679](https://github.com/benjamn/brane/pull/679)).
+- A video payload (`.mp4`, `.m4v`, `.mov`, `.webm`) plays in the chat in
+  the browser's own player, with a download link beside it. Every payload
+  is served with `Range` support, which Safari needs to play media
+  ([#676](https://github.com/benjamn/brane/pull/676)).
+- The 🦠 menu stays open after End, Revive, Archive, Unarchive and Recolor,
+  so End then Archive is two taps. End or Revive from the narrative list
+  opens that narrative's terminal with the menu still open
+  ([#675](https://github.com/benjamn/brane/pull/675)).
+- An MCP bridge that brane didn't spawn connects on its first tool call
+  instead of at startup, so a client that never uses brane, such as a
+  Codex subagent, no longer leaves an empty `external-*` narrative. An
+  agent started by hand now appears in the app at its first brane call
+  ([#677](https://github.com/benjamn/brane/pull/677)).
+
 ## 0.3.13 - 2026-11-17
 
 - Protocols come from three namespaces, searched most local first: a

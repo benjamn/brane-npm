@@ -1,5 +1,6 @@
 import Database from "better-sqlite3";
 import { randomBase36 } from "../ids.js";
+import { startupRefusal } from "../daemon/lifecycle.js";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { homedir } from "node:os";
@@ -673,8 +674,10 @@ export function getDaemonAddress(db: Database.Database): { port: string; version
   try {
     process.kill(parseInt(pidRow.value, 10), 0);
   } catch {
-    // Process is dead — clean up stale entry
-    db.prepare("DELETE FROM meta WHERE key IN ('daemon_port', 'daemon_token', 'daemon_pid', 'daemon_version', 'daemon_socket')").run();
+    // Process is dead — clean up stale entry, keeping its port: the next
+    // start reuses it, so links to this daemon keep working (a daemon that
+    // shut down cleanly leaves it too). claude-ykehtq5h:7, finding 8.
+    db.prepare("DELETE FROM meta WHERE key IN ('daemon_token', 'daemon_pid', 'daemon_version', 'daemon_tls', 'daemon_socket')").run();
     return null;
   }
 
@@ -685,9 +688,25 @@ export function getDaemonAddress(db: Database.Database): { port: string; version
   return { port: portRow.value, version: versionRow?.value };
 }
 
+/** The running daemon a starting one would duplicate, or null. A
+ *  `daemon_pid` row naming `self` is no other daemon: a daemon restarting in
+ *  place writes its successor's pid before the successor starts, which
+ *  `claimDaemon` then takes. Here, not in src/daemon/lifecycle.ts, which this
+ *  module already imports. */
+export function otherDaemon(db: Database.Database, self: number): { port: string; version?: string } | null {
+  const pidRow = db.prepare("SELECT value FROM meta WHERE key = 'daemon_pid'").get() as
+    | { value: string }
+    | undefined;
+  if (pidRow?.value === String(self)) return null;
+  return getDaemonAddress(db);
+}
+
 export type ClaimResult =
   | { claimed: true }
-  | { claimed: false; pid: number };
+  | { claimed: false; pid: number }
+  /** The operator stopped the daemon (`meta.daemon_stopped`) and nobody has
+   *  started it since: whatever spawned this one did so implicitly. */
+  | { claimed: false; stopped: string };
 
 /**
  * Atomically claim the daemon role using an exclusive SQLite transaction.
@@ -703,7 +722,20 @@ export function claimDaemon(db: Database.Database): ClaimResult {
       | { value: string }
       | undefined;
 
-    if (pidRow) {
+    // An explicit start clears the stop before it spawns the daemon
+    // (src/daemon/lifecycle.ts), so a stop still standing means this one was
+    // started implicitly: by a bridge or command running older code, say.
+    const refusal = startupRefusal(db);
+    if (refusal) {
+      db.exec("ROLLBACK");
+      return { claimed: false, stopped: refusal };
+    }
+
+    // A daemon restarting in place writes its successor's pid here before it
+    // lets go of anything (`daemon restart`), so no bridge or command sees a
+    // moment with no daemon and starts one of its own. That row is this
+    // process's claim already.
+    if (pidRow && parseInt(pidRow.value, 10) !== process.pid) {
       const existingPid = parseInt(pidRow.value, 10);
       try {
         process.kill(existingPid, 0);

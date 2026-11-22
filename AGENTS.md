@@ -129,7 +129,7 @@ attestation are in [docs/releasing.md](docs/releasing.md).
 
 | Command | Purpose |
 |---------|---------|
-| `daemon` | Manage daemon lifecycle (start, stop, restart, status, logs) |
+| `daemon` | Manage daemon lifecycle (start, stop, restart, status, logs). `stop` sticks until `start`: nothing starts a daemon implicitly meanwhile, and no agent's session or MCP bridge ever does; `restart` is in place, so the daemon keeps the provenance the operator started it with — see [Starting and stopping](docs/daemon-api.md#starting-and-stopping) |
 | `spawn` | Spawn new agent sessions (`--attach`, `--model`, `--role`, `-- <args>`) |
 | `attach` | Attach to a tmux session |
 | `list` | List narratives grouped by brane (`--brane`, `--archived`, `--limit`) — reads `GET /api/narratives` + `GET /api/branes` |
@@ -384,7 +384,7 @@ read at runtime).
 
 ## Key Patterns
 
-- **Port stability**: daemon restart captures port before SIGTERM, reuses it
+- **Port stability**: daemon restart is in place: the daemon starts its successor on its own port and hands it the claim in one write
 - **Scroll preservation**: chat/terminal tabs use absolute positioning with zIndex stacking
 - **Terminal resize**: ResizeObserver measures monospace character dimensions, sends cols/rows to tmux
 - **Multitouch keyboard**: refs for synchronous state, React state for visual rendering only

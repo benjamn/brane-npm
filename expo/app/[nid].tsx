@@ -25,6 +25,7 @@ import {
   sendSignal,
   payloadUrl,
   isInlinePayload,
+  isVideoPayload,
   fetchAllToolUseWindow,
   fetchAllToolUsesSince,
   formatCost,
@@ -36,6 +37,7 @@ import {
 import ToolUseGroup from "@/components/ToolUseGroup";
 import TerminalPane, { type TerminalPaneHandle } from "@/components/TerminalPane";
 import ContextMenu from "@/components/ContextMenu";
+import { handOffNarrativeMenu, takeNarrativeMenuHandoff } from "@shared/menu-handoff";
 import NowPlayingDial from "@/components/NowPlayingDial";
 import type { JukeboxTrack } from "@shared/now-playing";
 import { narrativeMenuItems, openNarrativeExport, revivesAsTwin } from "@/components/NarrativeMenu";
@@ -163,6 +165,49 @@ const PayloadThumbnail = memo(function PayloadThumbnail({
   );
 });
 
+const VIDEO_MAX_W = 320;
+const VIDEO_MAX_H = 240;
+
+/** A video payload, in the browser's own player. `playsInline` keeps iOS from
+ *  taking it straight to fullscreen on play; fullscreen is still one tap away
+ *  in the native controls. `preload="metadata"` fetches only enough to size
+ *  it, by range request (see `src/daemon/payload-serve.ts`), and the `#t=`
+ *  media fragment makes iOS paint the first frame instead of a blank box.
+ *  The download link beside it is for the file a browser can't play — the
+ *  container says nothing about the codec inside — and for keeping it. */
+const PayloadVideo = memo(function PayloadVideo({ uri, filename }: { uri: string; filename: string }) {
+  const [dims, setDims] = useState<{ w: number; h: number } | null>(null);
+  const scale = dims ? Math.min(VIDEO_MAX_W / dims.w, VIDEO_MAX_H / dims.h, 1) : 1;
+  const width = dims ? Math.round(dims.w * scale) : VIDEO_MAX_W;
+  const height = dims ? Math.round(dims.h * scale) : Math.round((VIDEO_MAX_W * 9) / 16);
+  return (
+    <View style={{ gap: 2, alignItems: "flex-start" }}>
+      <video
+        src={`${uri}#t=0.001`}
+        controls
+        playsInline
+        preload="metadata"
+        aria-label={`Attached video ${filename}`}
+        onLoadedMetadata={(e) => {
+          const v = e.currentTarget;
+          if (v.videoWidth > 0 && v.videoHeight > 0) setDims({ w: v.videoWidth, h: v.videoHeight });
+        }}
+        style={{ width, height, maxWidth: "100%", borderRadius: 8, backgroundColor: "#000", display: "block" }}
+      />
+      <Pressable
+        onPress={() => {
+          if (typeof window === "undefined") return;
+          downloadUrl(uri, filename).catch((err) => console.error("Payload download failed:", err));
+        }}
+        role="button"
+        aria-label={`Download ${filename}`}
+      >
+        <Text style={styles.videoPayloadLink}>⤓ {filename}</Text>
+      </Pressable>
+    </View>
+  );
+});
+
 const MessageBubble = memo(function MessageBubble({ item, nid, agentType, foldPath, conn, selection, palette = 0, onImagePress, onForeignPress, onFilePress, fileHref, onTimestampPress }: { item: NarrativeEvent; nid: string; agentType?: string | null; foldPath?: string | null; conn: ConnectionParams | null; /** The chat's selection, which this bubble watches for its own seq and nothing else — so a tap elsewhere never re-renders it. */ selection: MessageSelection; /** The narrative's 🎨 Recolor salt; 0 is the default palette. */ palette?: number; onImagePress?: (uri: string) => void; onForeignPress?: (nid: string, time: number) => void; onFilePress?: (relativePath: string) => void; fileHref?: (relativePath: string) => string | undefined; onTimestampPress?: (seq: number) => void }) {
   // The one subscription that makes a tap local: this bubble re-renders when
   // *its* seq is selected or deselected, and at no other time.
@@ -173,8 +218,11 @@ const MessageBubble = memo(function MessageBubble({ item, nid, agentType, foldPa
   const imagePayloads = conn && item.payloads
     ? item.payloads.filter(isInlinePayload)
     : [];
+  const videoPayloads = conn && item.payloads
+    ? item.payloads.filter(isVideoPayload)
+    : [];
   const filePayloads = conn && item.payloads
-    ? item.payloads.filter((p) => !isInlinePayload(p))
+    ? item.payloads.filter((p) => !isInlinePayload(p) && !isVideoPayload(p))
     : [];
 
   const bubbleContent = (
@@ -228,6 +276,13 @@ const MessageBubble = memo(function MessageBubble({ item, nid, agentType, foldPa
               uri={payloadUrl(conn, path)}
               onPress={() => onImagePress?.(payloadUrl(conn, path))}
             />
+          ))}
+        </View>
+      )}
+      {videoPayloads.length > 0 && conn && (
+        <View style={styles.payloadsContainer}>
+          {videoPayloads.map((path) => (
+            <PayloadVideo key={path} uri={payloadUrl(conn, path)} filename={downloadNameFor(path)} />
           ))}
         </View>
       )}
@@ -436,6 +491,8 @@ const InputBar = memo(function InputBar({
       const target = e.target as HTMLElement | null;
       const tag = target?.tagName;
       if (tag === "INPUT" || tag === "TEXTAREA" || target?.isContentEditable) return;
+      // A focused video player owns its keys: space plays, arrows seek.
+      if (tag === "VIDEO") return;
       // Ignore modifier-driven shortcuts (Cmd-R, Ctrl-F, etc.).
       if (e.metaKey || e.ctrlKey || e.altKey) return;
       // Don't disrupt IME composition (CJK input, dead-key accent sequences).
@@ -778,6 +835,11 @@ const NarrativeHeader = memo(function NarrativeHeader({
   canIsolate,
 }: NarrativeHeaderProps) {
   const [menuVisible, setMenuVisible] = useState(false);
+  // Arriving from a list badge's End or Revive (or a Revive that continued
+  // under a new nid): the 🦠 menu the operator was using comes along, open.
+  useEffect(() => {
+    if (takeNarrativeMenuHandoff(nid)) setMenuVisible(true);
+  }, [nid]);
   const selectedCount = useSelectedSeqs(selection).length;
   const hasMeta = !!(narrativeRole || narrativeFoldPath || narrativeCreatedAt);
   const glow = isAwaiting({ mcpConnected: narrativeMcpConnected, awaiting: narrativeAwaiting })
@@ -895,15 +957,18 @@ const NarrativeHeader = memo(function NarrativeHeader({
               isIsolated,
               canIsolate,
               selectedCount,
-              onMeld: () => { setMenuVisible(false); onShowQr(); },
-              onIsolate: () => { setMenuVisible(false); onIsolateDaemon(); },
-              onExport: (scope) => { setMenuVisible(false); onDownload(scope); },
-              onRecolor: () => { setMenuVisible(false); onRecolor(); },
-              onTwin: () => { setMenuVisible(false); onTwin(); },
-              onUtility: () => { setMenuVisible(false); onUtility(); },
-              onRevive: () => { setMenuVisible(false); onRevive(); },
-              onEnd: () => { setMenuVisible(false); onTerminate(); },
-              onArchiveToggle: () => { setMenuVisible(false); onArchiveToggle(); },
+              // The menu closes itself after an item unless the item keeps it
+              // open (src/shared/narrative-menu.ts): End, Revive, Archive and
+              // Recolor do, so End then Archive is two taps, not three.
+              onMeld: onShowQr,
+              onIsolate: onIsolateDaemon,
+              onExport: onDownload,
+              onRecolor,
+              onTwin,
+              onUtility,
+              onRevive,
+              onEnd: onTerminate,
+              onArchiveToggle,
             })}
             onClose={() => setMenuVisible(false)}
           />
@@ -980,13 +1045,13 @@ function landChatRow(node: HTMLDivElement | null, seq: number): boolean {
 // declares a role (docs/accessibility.md), and RN-Web renders `role="button"`
 // as a real <button> and the other roles as a <div role=…>, so the selector
 // catches them all alongside the terminal quick bar's and the copy buttons'
-// own <button>s. What reads as pane surface is everything else: the bubbles,
+// own <button>s, and a chat video, whose controls are the browser's. What reads as pane surface is everything else: the bubbles,
 // the mirror, the file listing's chrome, and the modal backdrops and cards,
 // which are Pressables too but opt out of the tab order with `tabIndex={-1}`
 // and carry no role. <input>/<textarea> are pointedly absent: clicking into
 // the composer is a request to type there.
 const INTERACTIVE_SELECTOR =
-  'button, a[href], [role="button"], [role="link"], [role="menuitem"]';
+  'button, a[href], video, [role="button"], [role="link"], [role="menuitem"]';
 function readHeaderMeta(nid: string | undefined): HeaderMeta {
   if (!nid) return {};
   return headerMetaCache.get(nid) ?? {};
@@ -2389,7 +2454,12 @@ export default function ChatView() {
             role={narrativeRole}
             onAtBottomChange={setTermAtBottom}
             onTwin={() => setShowTwin(true)}
-            onRevived={(revivedNid) => router.push(terminalOnlyHref(revivedNid))}
+            onRevived={(revivedNid) => {
+              // Continued under a new nid: the 🦠 menu Revive was pressed in
+              // opens there too, as it stays open on a revive in place.
+              handOffNarrativeMenu(revivedNid);
+              router.push(terminalOnlyHref(revivedNid));
+            }}
           />
         </View>
       )}
@@ -2943,6 +3013,11 @@ const styles = StyleSheet.create({
   filePayloadText: {
     color: "#6cf",
     fontSize: 13,
+  },
+  videoPayloadLink: {
+    color: "#6cf",
+    fontSize: 12,
+    paddingVertical: 2,
   },
   pendingPayloadsRow: {
     flexDirection: "row",

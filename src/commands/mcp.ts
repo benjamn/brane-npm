@@ -3,22 +3,18 @@ import { openDatabase, getDaemonAddress, getPackageVersion } from "../db/schema.
 import { startMcpBridge, type DaemonDial } from "../mcp/server.js";
 import { connect as netConnect } from "node:net";
 import { readDaemonSocket, resolveCredential } from "../daemon/client.js";
-import { ensureDaemonRunning } from "./daemon.js";
+import { implicitStartRefusal } from "../daemon/lifecycle.js";
 
-/** Resolve daemon WebSocket URL, auto-starting daemon if needed */
-async function resolveDaemonUrl(): Promise<DaemonDial | null> {
+/** Resolve the daemon's WebSocket URL. A bridge never starts a daemon: one
+ *  started here would inherit this client's confinement and hand it to every
+ *  agent it launched (src/daemon/lifecycle.ts). With none running it answers
+ *  why, and the bridge keeps retrying until the operator starts one. */
+async function resolveDaemonUrl(): Promise<DaemonDial | { down: string } | null> {
   let db = openDatabase();
-  let info = getDaemonAddress(db);
+  const info = getDaemonAddress(db);
+  const down = info ? null : implicitStartRefusal(db, "bridge");
   db.close();
-
-  if (!info) {
-    process.stderr.write("MCP bridge: daemon not running, starting it...\n");
-    try {
-      info = await ensureDaemonRunning();
-    } catch {
-      return null;
-    }
-  }
+  if (!info) return { down: down ?? "brane's daemon is not running" };
 
   // Check if daemon is running with TLS, and settle what to present: a
   // spawned agent's own token, or nothing — an unspawned client dials the

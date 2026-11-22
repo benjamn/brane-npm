@@ -49,5 +49,8 @@ To attach files to your narrations, pass absolute file paths in the
 }
 ```
 
-The daemon copies files into managed storage. The operator sees them
-rendered inline in the web UI.
+The daemon copies files into managed storage. The operator sees images
+rendered inline in the web UI, and videos (`.mp4`, `.m4v`, `.mov`,
+`.webm`) in a native player in the chat. Everything else is a download.
+Whether a video plays depends on its codec, not its extension: H.264 in an
+`.mp4` plays everywhere, so prefer it to raw `.h264` or HEVC.

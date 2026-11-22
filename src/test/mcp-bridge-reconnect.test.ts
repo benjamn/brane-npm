@@ -99,8 +99,10 @@ describe("the MCP bridge across a lost connection", () => {
     };
 
     try {
+      // An unspawned bridge dials on its first call, not at startup, so this
+      // one is queued, then sent on conn 1 once it opens, and then the conn dies.
+      call(1, "narrate", { say: "hello", wait: true });
       await until(() => sockets.length === 1, 3000);
-      call(1, "narrate", { say: "hello", wait: true }); // sent on conn 1, then the conn dies
       await until(() => replies.has(1), 3000);
       call(2, "listen", { after: 1, wait: false });     // queued: no connection right now
       await until(() => replies.has(2), 8000);          // answered by conn 3

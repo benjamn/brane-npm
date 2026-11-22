@@ -10,10 +10,16 @@
  * token gets written into a saved file.
  *
  * So there is one rule, and both halves of the system have to agree on it:
- * the app renders image payloads inline and hands everything else over as a
- * file, and the daemon serves everything else with
- * `Content-Disposition: attachment` so a payload URL that reaches a browser
- * some other way still cannot become a page.
+ * the app renders image payloads inline, plays video payloads in a native
+ * `<video>`, and hands everything else over as a file; the daemon serves
+ * everything else with `Content-Disposition: attachment` so a payload URL
+ * that reaches a browser some other way still cannot become a page.
+ *
+ * Videos are their own table, not more rows in the image one, because the
+ * image table has two more readers that must not see them: the lightbox
+ * steps through images only, and the HTML export embeds each image as a
+ * data URI, which for a video would be megabytes in the file. To both of
+ * those a video is still a file.
  */
 
 /** The extensions the app renders inline, with the type each is served and
@@ -36,6 +42,19 @@ export const INLINE_PAYLOAD_MIME: Record<string, string> = {
   ".svg": "image/svg+xml",
 };
 
+/** The extensions the chat plays in a `<video>`, with the type each is
+ *  served as. Which of them actually *play* is the browser's business, and
+ *  depends on the codec inside, not the container: H.264 in `.mp4` plays
+ *  everywhere, HEVC in `.mov` in Safari, VP9 in `.webm` everywhere but older
+ *  iOS. A file that won't play still gets the player's own error state and
+ *  the download link beside it. */
+export const VIDEO_PAYLOAD_MIME: Record<string, string> = {
+  ".mp4": "video/mp4",
+  ".m4v": "video/mp4",
+  ".mov": "video/quicktime",
+  ".webm": "video/webm",
+};
+
 /** The lowercased extension of a path, `""` when it has none. Hand-rolled
  *  because this module is shared with the app, where `node:path` is not. */
 export function payloadExtname(path: string): string {
@@ -49,6 +68,19 @@ export function payloadExtname(path: string): string {
 /** Whether this payload renders inline (an image) rather than downloading. */
 export function isInlinePayload(path: string): boolean {
   return payloadExtname(path) in INLINE_PAYLOAD_MIME;
+}
+
+/** Whether this payload plays in the chat's `<video>` rather than
+ *  downloading. Not an inline payload in the sense above: the lightbox and
+ *  the export still treat it as a file. */
+export function isVideoPayload(path: string): boolean {
+  return payloadExtname(path) in VIDEO_PAYLOAD_MIME;
+}
+
+/** Whether the daemon may serve this payload without
+ *  `Content-Disposition: attachment`: an image or a video. */
+export function servesPayloadInline(path: string): boolean {
+  return isInlinePayload(path) || isVideoPayload(path);
 }
 
 /** Control characters, which a header has no way to carry: a CR would end

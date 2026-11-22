@@ -17,6 +17,13 @@ export interface NarrativeMenuItem {
   label: string;
   icon?: string;
   onPress: () => void;
+  /** Leave the menu open after the press, so the next item is one tap away —
+   *  End then Archive, say, or Recolor until the palette suits. Set on the
+   *  items that act in place; left off the ones that open a dialog or another
+   *  tab, whose own surface is where the operator goes next (and whose first
+   *  tap an open menu's outside-tap catcher would swallow). An item that
+   *  navigates still closes it: a menu closes when its screen loses focus. */
+  keepOpen?: boolean;
 }
 
 /** Roles with no tmux process to resume: reviving them means twinning instead —
@@ -130,7 +137,8 @@ export function narrativeMenuItems({
       : [{ icon: "📨", label: "Export", onPress: () => onExport("all") }]),
     // Recolor sits with Export rather than the lifecycle verbs below it: both
     // act on how the narrative is *seen*, and neither touches the daemon.
-    { icon: "🎨", label: "Recolor", onPress: onRecolor },
+    // It stays open, the one item made to be pressed again and again.
+    { icon: "🎨", label: "Recolor", onPress: onRecolor, keepOpen: true },
     // Twin is available on every narrative — fork/continue it into a
     // new brane-managed agent (UI-gated via the spawn dialog). A plain verb
     // like its neighbors; the /twin protocol syntax belongs to the dialog the
@@ -145,17 +153,20 @@ export function narrativeMenuItems({
     ...(isExternal
       ? []
       : [
+          // The lifecycle verbs keep the menu open, so End is followed by
+          // Archive without reopening it. Except a Revive that twins: it opens
+          // the Twin dialog, like the Twin item above.
           isEnded
-            ? { icon: "🐦‍🔥", label: "Revive", onPress: onRevive }
-            : { icon: "🫠", label: "End", onPress: onEnd },
+            ? { icon: "🐦‍🔥", label: "Revive", onPress: onRevive, keepOpen: !revivesAsTwin(role) }
+            : { icon: "🫠", label: "End", onPress: onEnd, keepOpen: true },
         ]),
     // Archive puts away a narrative that is over, so it waits for the session
     // to end, by the same test that offers Revive. Unarchive is offered on any
     // archived narrative, whatever its state.
     ...(archived
-      ? [{ icon: "📂", label: "Unarchive", onPress: onArchiveToggle }]
+      ? [{ icon: "📂", label: "Unarchive", onPress: onArchiveToggle, keepOpen: true }]
       : isEnded
-        ? [{ icon: "🗄️", label: "Archive", onPress: onArchiveToggle }]
+        ? [{ icon: "🗄️", label: "Archive", onPress: onArchiveToggle, keepOpen: true }]
         : []),
   ];
 }

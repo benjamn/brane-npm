@@ -53,6 +53,7 @@ import type { JukeboxTrack } from "@shared/now-playing";
 import { fileHref } from "@/lib/routes";
 import DevicesLayer from "@/components/DevicesLayer";
 import { buildIsolateUrl, isIsolated, terminalOnlyHref } from "@shared/view-url";
+import { handOffNarrativeMenu } from "@shared/menu-handoff";
 import { useAppHost } from "@/lib/appHost";
 import { sortNarratives } from "@shared/narrative-sort";
 import { isAwaiting, awaitingGlow, AWAITING_STATUS, NOT_AWAITING_STATUS } from "@shared/narrative-status";
@@ -251,9 +252,12 @@ function NarrativeCard({
                   archived: !!item.archived,
                   isIsolated: isolated,
                   canIsolate: !isolated || !!appHost,
-                  onMeld: () => { setMenuVisible(false); onMeld(); },
+                  // The menu closes itself after an item, unless the item keeps it open
+                  // (src/shared/narrative-menu.ts) — and End and Revive, which keep
+                  // it open in place, take the operator to the terminal, where the
+                  // narrative's own 🦠 menu is open on arrival instead.
+                  onMeld,
                   onIsolate: () => {
-                    setMenuVisible(false);
                     if (!conn || typeof window === "undefined") return;
                     // No view to carry from a list row — the link travels as
                     // the bare narrative and opens on its default tab.
@@ -268,19 +272,16 @@ function NarrativeCard({
                     });
                     if (url) window.open(url, "_blank", "noopener,noreferrer");
                   },
-                  onExport: () => {
-                    setMenuVisible(false);
-                    if (conn) openNarrativeExport(conn, item.id);
-                  },
+                  onExport: () => { if (conn) openNarrativeExport(conn, item.id); },
                   // Advances the stored salt the narrative screen reads when
                   // opened, and moves this card's awaiting glow to the widest
                   // gap among the other glows.
-                  onRecolor: () => { setMenuVisible(false); bumpRecolorSalt(item.id); recolorGlowHue(item.id); setRecolors((n) => n + 1); },
-                  onTwin: () => { setMenuVisible(false); onTwin(); },
-                  onUtility: () => { setMenuVisible(false); onUtility(); },
-                  onRevive: () => { setMenuVisible(false); onRevive(); },
-                  onEnd: () => { setMenuVisible(false); onEnd(); },
-                  onArchiveToggle: () => { setMenuVisible(false); onArchive(); },
+                  onRecolor: () => { bumpRecolorSalt(item.id); recolorGlowHue(item.id); setRecolors((n) => n + 1); },
+                  onTwin,
+                  onUtility,
+                  onRevive,
+                  onEnd,
+                  onArchiveToggle: onArchive,
                 })}
                 onClose={() => setMenuVisible(false)}
               />
@@ -1541,7 +1542,9 @@ export default function NarrativeList() {
       // is no broadcast for that, so refetch (as Spawn does by prepending) or
       // it stays missing until the next load.
       if (target !== nid) loadData();
-      // Terminal, alone — a resumed agent may be sitting on a prompt.
+      // Terminal, alone — a resumed agent may be sitting on a prompt — with
+      // the 🦠 menu open, as it was here, for whatever comes next.
+      handOffNarrativeMenu(target);
       router.push(terminalOnlyHref(target));
     } catch (err) {
       setError(String(err));
@@ -1555,6 +1558,8 @@ export default function NarrativeList() {
   const handleEnd = useCallback((nid: string) => {
     if (!conn) return;
     interruptSession(conn, nid);
+    // The 🦠 menu goes along, open: End is so often followed by Archive.
+    handOffNarrativeMenu(nid);
     router.push(terminalOnlyHref(nid));
   }, [conn, router]);
 

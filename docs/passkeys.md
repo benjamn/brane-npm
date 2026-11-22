@@ -143,6 +143,7 @@ the line can be argued with:
 | Revoke, rotate, forget | `POST /api/tokens/:id/revoke`, `POST /api/token/rotate`, `POST /api/token/forget` | Cuts the operator off. Answers [Token Rotation](token-rotation.md)'s open question: a verified operator guards revoking, as it guards every act. |
 | Enroll or revoke a credential | `POST /api/credentials/begin` (the approval the enrollment page redeems), `POST /api/credentials/:id/revoke` | Changes who can verify. **Fresh class**, so with the gate on an existing credential approves every new one; enrollment also needs presence or attestation, below. |
 | Approve or revoke a protocol | `POST /api/protocols/approve` (`approve-protocol`), `POST /api/protocols/revoke` (`revoke-protocol`) | Puts a `home` or `fold` protocol file in force for every agent that reads it ([Protocols](protocols.md#approval)). Approve is **fresh class**, and from the shell the presence gate asks as well. An operator who set `verification.fresh` before this act existed should add `approve-protocol` to it. |
+| Restart the daemon | `POST /api/daemon/restart` (`restart`) | Restarts the daemon in place ([Starting and stopping](daemon-api.md#starting-and-stopping)). Listed so the route is placed; a device is refused it outright (403), so the gate never weighs it. |
 
 Reads stay on the device token. Whether an unverified device should keep
 them is the operator's call; **the default is yes** (claude-bu1kt8a5:16,

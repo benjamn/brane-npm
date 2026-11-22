@@ -11,6 +11,7 @@ import { liveApprovals } from "../db/protocol-approvals.js";
 import { ACCOUNT_HASH_PREFIX, readTokenFile, tokenFileStanding } from "../db/tokens.js";
 import { readDaemonSocket } from "../daemon/client.js";
 import { accountDirTrust } from "../daemon/local-socket.js";
+import { describeOrigin, originsDiffer, readOrigin, readStop, tmuxServerOrigin } from "../daemon/lifecycle.js";
 import { resolveTmux } from "../tmux.js";
 import { getTailscaleHost } from "../tailscale.js";
 
@@ -116,7 +117,16 @@ function checkDaemon(): Check {
   }
   try {
     const info = getDaemonAddress(db);
-    if (!info) return { name: "daemon", status: "warn", detail: "not running (any command that needs it will start one)" };
+    if (!info) {
+      const stop = readStop(db);
+      return {
+        name: "daemon",
+        status: "warn",
+        detail: stop
+          ? `stopped with \`brane daemon stop\` at ${stop.at}; \`brane daemon start\` starts it`
+          : "not running; `brane daemon start` starts it (so does any command that needs it, run from your own shell)",
+      };
+    }
     const unreachable = shellReachProblem({
       secret: process.env.BRANE_NARRATIVE_SECRET,
       socketPath: readDaemonSocket(db),
@@ -151,10 +161,25 @@ function checkDaemon(): Check {
         status = "warn";
       }
     }
+    // Where it was started from, and whether agents get that: they start in
+    // the tmux server, which may have been started from somewhere else.
+    const origin = readOrigin(db);
+    let from = "";
+    if (origin && origin.pid === pid) {
+      from = `; started from ${describeOrigin(origin)}`;
+      let server: ReturnType<typeof tmuxServerOrigin> = null;
+      try {
+        server = tmuxServerOrigin(resolveTmux());
+      } catch {} // no tmux: its own check says so
+      if (server && originsDiffer(origin, server.origin)) {
+        from += `; but agents start in a tmux server (pid ${server.pid}) started from ${describeOrigin(server.origin)}, and get its permissions`;
+        status = "warn";
+      }
+    }
     return {
       name: "daemon",
       status,
-      detail: `running, pid ${pid}, port ${info.port}${where}`,
+      detail: `running, pid ${pid}, port ${info.port}${where}${from}`,
     };
   } finally {
     db.close();

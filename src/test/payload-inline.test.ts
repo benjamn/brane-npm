@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { existsSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
-import { isInlinePayload, attachmentDisposition } from "../shared/payload-inline.js";
+import { isInlinePayload, isVideoPayload, servesPayloadInline, attachmentDisposition } from "../shared/payload-inline.js";
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 
@@ -35,6 +35,31 @@ describe("isInlinePayload", () => {
 
   test("a dot in a directory name is not the file's extension", () => {
     assert.equal(isInlinePayload("shots.png/README"), false);
+  });
+});
+
+describe("isVideoPayload", () => {
+  test("videos play in the chat", () => {
+    for (const p of ["a.mp4", "a.MP4", "a.m4v", "a.mov", "a.webm", "claude-4c7289d1/clip.mp4"]) {
+      assert.equal(isVideoPayload(p), true, p);
+    }
+  });
+
+  test("a video is not an inline payload", () => {
+    // The lightbox steps through inline payloads, and the export embeds each
+    // one as a data URI; a video belongs in neither.
+    for (const p of ["a.mp4", "a.mov", "a.webm"]) assert.equal(isInlinePayload(p), false, p);
+  });
+
+  test("raw streams and the like are still files", () => {
+    for (const p of ["a.h264", "a.mkv", "a.avi", "a.mp4.html", "clips.mp4/README"]) {
+      assert.equal(isVideoPayload(p), false, p);
+    }
+  });
+
+  test("the daemon serves images and videos inline, and nothing else", () => {
+    for (const p of ["a.png", "a.svg", "a.mp4", "a.webm"]) assert.equal(servesPayloadInline(p), true, p);
+    for (const p of ["a.pdf", "a.html", "a.h264", "a"]) assert.equal(servesPayloadInline(p), false, p);
   });
 });
 

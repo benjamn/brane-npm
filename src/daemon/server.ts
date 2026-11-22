@@ -2,11 +2,11 @@ import { createServer as createHttpServer, type IncomingMessage, type ServerResp
 import { createServer as createHttpsServer } from "node:https";
 import { WebSocketServer, WebSocket } from "ws";
 import { randomUUID } from "node:crypto";
-import { execFile, execFileSync } from "node:child_process";
+import { execFile, execFileSync, spawn } from "node:child_process";
 import { join, dirname, extname, resolve, relative, basename } from "node:path";
 import { fileURLToPath } from "node:url";
 import { readFile, writeFile, readdir, stat } from "node:fs/promises";
-import { readFileSync, writeFileSync, copyFileSync, existsSync, statSync } from "node:fs";
+import { readFileSync, writeFileSync, copyFileSync, existsSync, statSync, openSync, realpathSync } from "node:fs";
 import { hostname as osHostname, userInfo as osUserInfo, homedir } from "node:os";
 import { gzip } from "node:zlib";
 import { pipeline } from "node:stream";
@@ -53,6 +53,7 @@ import {
 } from "../codex-tool-log.js";
 import { randomBase36 } from "../ids.js";
 import { getBraneDir, getBraneId, getPayloadsDir, getTokenFilePath, fromPortablePath, toPortablePath, claimDaemon } from "../db/schema.js";
+import { HANDOFF_ENV, LAUNCH_ENV, SPAWNED_ENV, VIA_ENV, originFromEnv, recordOrigin, restartPort, startupRefusal, successorArgs } from "./lifecycle.js";
 import { listProtocols, loadProtocolLibrary, protocolNamespaces, readProtocol, type NamespaceDir, type ProtocolLibrary } from "../protocols.js";
 import { protocolSourceLabel } from "../shared/protocol-names.js";
 import { liveApprovals } from "../db/protocol-approvals.js";
@@ -78,7 +79,8 @@ import { ensureSessionAffinityConfig } from "../session-affinity.js";
 import { revivedContent, restartedContent } from "../shared/narrative-format.js";
 import { parseRecolorSalt } from "../shared/speaker-color.js";
 import { parseSeqModeParam, parseSeqParam } from "../shared/export-selection.js";
-import { isInlinePayload, attachmentDisposition } from "../shared/payload-inline.js";
+import { payloadResponse } from "./payload-serve.js";
+import { VIDEO_PAYLOAD_MIME } from "../shared/payload-inline.js";
 import { doRun, runHistory } from "../commands/run.js";
 import { runAbsorb, AbsorbInputError, type AbsorbEvent, type AbsorbRequest } from "../absorb/run.js";
 import { surveyAbsorbSources } from "../absorb/sources.js";
@@ -569,6 +571,8 @@ const MIME_TYPES: Record<string, string> = {
   ".woff": "font/woff",
   ".woff2": "font/woff2",
   ".pdf": "application/pdf",
+  // Video the chat plays in place, from the table the app reads too.
+  ...VIDEO_PAYLOAD_MIME,
   // Audio the Files view plays in place. Keep in step with `isAudioPath` in
   // expo/components/FilesView.tsx.
   ".mp3": "audio/mpeg",
@@ -864,8 +868,25 @@ function liveTmuxSessions(): Set<string> {
   }
 }
 
+function realpathOr(path: string): string {
+  try {
+    return realpathSync(path);
+  } catch {
+    return path;
+  }
+}
+
 export async function startServer(config: DaemonConfig): Promise<void> {
   const { port, db } = config;
+  // Stopped by the operator, and not started by them since: whatever spawned
+  // this daemon did so implicitly. Leave before doing anything (certificates,
+  // tmux, the wiki); `claimDaemon` checks again, atomically.
+  const stopped = startupRefusal(db);
+  if (stopped) {
+    console.error(`Not starting: ${stopped}.`);
+    db.close();
+    process.exit(1);
+  }
   // Whatever started this daemon, it is no agent: drop an inherited agent
   // session, here and in a tmux server that already holds one in its global
   // env (one started from an agent's shell), so no session inherits it.
@@ -877,7 +898,10 @@ export async function startServer(config: DaemonConfig): Promise<void> {
     console.warn("[token] BRANE_DEVICE_TOKEN_SHA256 is set but holds no SHA-256 hex hash; nothing adopted");
   }
   delete process.env.BRANE_DEVICE_TOKEN_SHA256;
-  for (const name of INHERITED_AGENT_ENV) {
+  // The same for how this daemon was launched (`LAUNCH_ENV`), which a tmux
+  // server started by an older daemon holds; this process drops its own once
+  // it has read them, below.
+  for (const name of [...INHERITED_AGENT_ENV, ...LAUNCH_ENV]) {
     try {
       execFileSync(resolveTmux(), ["set-environment", "-g", "-u", name], { stdio: "ignore", timeout: 5_000 });
     } catch {}
@@ -1008,10 +1032,24 @@ export async function startServer(config: DaemonConfig): Promise<void> {
   // Atomically claim daemon role (exclusive SQLite transaction)
   const claim = claimDaemon(db);
   if (!claim.claimed) {
-    console.error(`Another daemon is already running (pid ${claim.pid}). Exiting.`);
+    console.error("stopped" in claim ? `Not starting: ${claim.stopped}.` : `Another daemon is already running (pid ${claim.pid}). Exiting.`);
     db.close();
     process.exit(1);
   }
+  // Where this daemon came from, read off the environment it inherited, so
+  // `brane daemon status` can say (src/daemon/lifecycle.ts). A successor
+  // started in place inherits its predecessor's environment, and so its
+  // provenance; the variables naming how are dropped so no session sees them.
+  const handoffFrom = parseInt(process.env[HANDOFF_ENV] ?? "", 10);
+  const startedVia = process.env[VIA_ENV];
+  recordOrigin(db, {
+    ...originFromEnv(process.env),
+    pid: process.pid,
+    at: new Date().toISOString(),
+    ...(Number.isFinite(handoffFrom) ? { handoff_from: handoffFrom } : {}),
+    ...(process.argv[1] ? { script: realpathOr(process.argv[1]) } : {}),
+  });
+  for (const name of LAUNCH_ENV) delete process.env[name];
 
   // Migrate the token table only once this process *is* the daemon. During a
   // restart every disconnected MCP bridge may run `daemon start`, and the
@@ -1894,29 +1932,20 @@ export async function startServer(config: DaemonConfig): Promise<void> {
         sendJson(res, 400, { error: "Invalid path" });
         return;
       }
-      readFile(filePath).then((data) => {
-        const ext = extname(filename).toLowerCase();
-        const contentType = MIME_TYPES[ext] ?? "application/octet-stream";
-        const headers: Record<string, string> = {
-          "Content-Type": contentType,
-          "Cache-Control": "public, max-age=31536000, immutable",
-          // A payload URL carries `?token=`. Whatever the browser does with
-          // this response, it must not become a *document* on this origin:
-          // that puts the token in the address bar, and in the base URL a
-          // "Save Page As" rewrites the page's relative links against.
-          // Non-inline payloads are therefore attachments, and the inline
-          // ones — images, `.svg` among them — are sandboxed, which costs
-          // nothing (a document CSP does not apply to an `<img>` load) and
-          // makes a directly-navigated SVG inert.
-          "Content-Security-Policy": "sandbox",
-        };
-        if (!isInlinePayload(filename)) {
-          headers["Content-Disposition"] = attachmentDisposition(basename(filename));
+      payloadResponse(filePath, filename, req.headers.range, MIME_TYPES).then((result) => {
+        if ("error" in result) {
+          for (const [k, v] of Object.entries(result.headers ?? {})) res.setHeader(k, v);
+          sendJson(res, result.status, { error: result.error });
+          return;
         }
-        res.writeHead(200, headers);
-        res.end(data);
-      }).catch(() => {
-        sendJson(res, 404, { error: "Payload not found" });
+        res.writeHead(result.status, result.headers);
+        pipeline(result.stream, res, (err) => {
+          if (err && err.code !== "ERR_STREAM_PREMATURE_CLOSE") {
+            console.warn(`[payloads] stream failed for ${nid}/${filename}:`, err);
+          }
+        });
+      }).catch((err) => {
+        sendJson(res, 500, { error: String(err) });
       });
       return;
     }
@@ -2591,6 +2620,36 @@ export async function startServer(config: DaemonConfig): Promise<void> {
       return;
     }
 
+
+    // Route: POST /api/daemon/restart — restart in place. The daemon starts
+    // its own successor (its own node, script and arguments, never ones the
+    // request names), which therefore inherits this daemon's environment and
+    // whatever confinement it runs under, not the caller's: a restart from an
+    // agent's sandboxed shell or from VS Code gives agents the same freedoms
+    // the operator's own `brane daemon start` did. The claim passes straight
+    // to the successor, so no bridge sees a moment without a daemon. Not for
+    // a device: from a phone, a utility session's shell can run
+    // `brane daemon restart`. Body `{ port? }`, answered 202 `{ pid }`
+    // before shutdown begins; src/daemon/lifecycle.ts.
+    if (path === "/api/daemon/restart" && req.method === "POST") {
+      if (auth.record.kind === "device") {
+        sendJson(res, 403, { error: "Restart the daemon from this machine: `brane daemon restart`" });
+        return;
+      }
+      parseBody(req).then((body) => {
+        const currentPort = (db.prepare("SELECT value FROM meta WHERE key = 'daemon_port'").get() as { value: string } | undefined)?.value;
+        const decided = restartPort(body, currentPort, auth.record.kind);
+        if ("error" in decided) {
+          sendJson(res, decided.status, { error: decided.error });
+          return;
+        }
+        const { port } = decided;
+        console.log(`[restart] in place, on port ${port}, asked by ${auth.record.kind === "agent" ? `agent ${auth.record.label}` : "this account"}`);
+        res.on("finish", () => setImmediate(() => doShutdown({ port })));
+        sendJson(res, 202, { pid: process.pid, port });
+      });
+      return;
+    }
 
     // Route: POST /api/token/forget — this device signs itself out, for the
     // app's "Delete permanently" (src/daemon/token-routes.ts). Bodiless. Its
@@ -3568,10 +3627,14 @@ export async function startServer(config: DaemonConfig): Promise<void> {
 
   // Graceful shutdown
   let shuttingDown = false;
-  const doShutdown = () => {
+  /** How long a daemon that handed off waits for its successor's claim. */
+  const SUCCESSOR_CLAIM_MS = 60_000;
+  /** Shut down; with `handoff`, start a successor on `handoff.port` as the
+   *  listeners close, and pass it the claim (`POST /api/daemon/restart`). */
+  const doShutdown = (handoff?: { port: string }) => {
     if (shuttingDown) return;
     shuttingDown = true;
-    console.log("\nShutting down brane daemon...");
+    console.log(handoff ? "\nRestarting brane daemon in place..." : "\nShutting down brane daemon...");
     keepAwake.stop();
     certMgr.stop();
     if (tailscaleProbeTimer) clearTimeout(tailscaleProbeTimer);
@@ -3641,8 +3704,31 @@ export async function startServer(config: DaemonConfig): Promise<void> {
     //    hint the next startup binds to, keeping fold hook configs valid
     //    across restarts (same contract as the main port, which restart
     //    preserves via --port).
-    db.prepare("DELETE FROM meta WHERE key IN ('daemon_token', 'daemon_pid', 'daemon_tls', 'daemon_version', 'daemon_socket')").run();
+    //    Every listener stops listening first (`close` releases the port and
+    //    removes the socket file now, and calls back once in-flight requests
+    //    finish), so a successor can bind them.
+    const listenersClosed = [
+      ...servers.map((s) => new Promise<void>((resolve) => s.close(() => resolve()))),
+      // This machine's CLI arrives here now, so its requests in flight are
+      // waited for as the primaries' are. Closing also removes the file.
+      ...(unixListening ? [new Promise<void>((resolve) => unixServer.close(() => resolve()))] : []),
+    ];
     for (const h of httpServers) h.close();
+    const successor = handoff ? startSuccessor(handoff.port) : undefined;
+    if (successor) {
+      // The claim passes in one write: the successor's pid where ours was,
+      // so `getDaemonAddress` never reads "no daemon" in between and nothing
+      // starts one of its own (`claimDaemon` takes a row naming itself).
+      db.transaction(() => {
+        db.prepare("DELETE FROM meta WHERE key IN ('daemon_token', 'daemon_tls', 'daemon_version', 'daemon_socket')").run();
+        db.prepare("INSERT OR REPLACE INTO meta (key, value) VALUES ('daemon_pid', ?)").run(String(successor.pid));
+      })();
+      console.log(`[restart] handed off to pid ${successor.pid}`);
+    }
+    const successorClaimed = successor && handoff ? seeSuccessorClaim(successor, handoff.port) : Promise.resolve();
+    if (!successor) {
+      db.prepare("DELETE FROM meta WHERE key IN ('daemon_token', 'daemon_pid', 'daemon_tls', 'daemon_version', 'daemon_socket')").run();
+    }
 
     // Bound how long we wait for the in-flight indexer to settle. The
     // embedder thread holds native mutexes that must not be locked while
@@ -3654,23 +3740,123 @@ export async function startServer(config: DaemonConfig): Promise<void> {
     ]);
 
     Promise.all([
-      ...servers.map(
-        (s) => new Promise<void>((resolve) => s.close(() => resolve())),
-      ),
-      // This machine's CLI arrives here now, so its requests in flight are
-      // waited for as the primaries' are. Closing also removes the file.
-      ...(unixListening ? [new Promise<void>((resolve) => unixServer.close(() => resolve()))] : []),
+      ...listenersClosed,
       indexerSettled,
     ])
       .then(() => disposeEmbeddingModel())
       .catch(() => undefined)
+      .then(() => successorClaimed)
+      .catch((err) => console.error("[restart] watching the successor:", err))
       .then(() => {
         db.close();
         process.exit(0);
       });
   };
-  process.on("SIGTERM", doShutdown);
-  process.on("SIGINT", doShutdown);
+  /** After a handoff, stay (listening on nothing) until the successor claims
+   *  the role. One that exits before claiming is started once more, with the
+   *  claim passed again: nothing else may start a daemon with this one's
+   *  provenance, so a failed restart would otherwise leave the machine with
+   *  none until the operator is at a terminal (claude-apqiedkc:41). A second
+   *  failure is recorded as no daemon, and logged. The operator's stop, or a
+   *  claim that is no longer the successor's, ends the watch. The retry runs
+   *  on the exit itself, not on a poll: until then the row names a dead pid,
+   *  and any reader would clear it as stale. */
+  function seeSuccessorClaim(first: Successor, port: string): Promise<void> {
+    return new Promise<void>((resolve) => {
+      let current = first;
+      let retried = false;
+      let done = false;
+      const pidNow = (): number | undefined => {
+        const row = db.prepare("SELECT value FROM meta WHERE key = 'daemon_pid'").get() as { value: string } | undefined;
+        return row ? parseInt(row.value, 10) : undefined;
+      };
+      const claimed = (): boolean => Boolean(db.prepare("SELECT value FROM meta WHERE key = 'daemon_version'").get());
+      const finish = (message?: string): void => {
+        if (done) return;
+        done = true;
+        clearInterval(poll);
+        clearTimeout(deadline);
+        if (message) console.log(message);
+        resolve();
+      };
+      const onExit = (exited: Successor): void => {
+        if (done || exited !== current) return;
+        if (pidNow() !== current.pid || startupRefusal(db) || claimed()) return finish();
+        const next = retried ? undefined : startSuccessor(port);
+        retried = true;
+        db.transaction(() => {
+          if (pidNow() !== current.pid) return;
+          if (next) {
+            db.prepare("UPDATE meta SET value = ? WHERE key = 'daemon_pid'").run(String(next.pid));
+          } else {
+            db.prepare("DELETE FROM meta WHERE key IN ('daemon_token', 'daemon_pid', 'daemon_tls', 'daemon_version', 'daemon_socket')").run();
+          }
+        })();
+        if (!next) {
+          return finish(`[restart] successor pid ${current.pid} exited before taking over, twice; no daemon is running (see above)`);
+        }
+        console.error(`[restart] successor pid ${current.pid} exited before taking over; starting it once more, as pid ${next.pid}`);
+        current = next;
+        next.onExit(onExit);
+      };
+      const poll = setInterval(() => {
+        if (pidNow() !== current.pid || startupRefusal(db)) return finish();
+        if (claimed()) finish(`[restart] pid ${current.pid} took over`);
+      }, 200);
+      const deadline = setTimeout(
+        () => finish(`[restart] successor pid ${current.pid} has not taken over after ${SUCCESSOR_CLAIM_MS / 1000}s; leaving it to it`),
+        SUCCESSOR_CLAIM_MS,
+      );
+      first.onExit(onExit);
+    });
+  }
+  interface Successor {
+    pid: number;
+    /** Call `cb` once it exits (at once, if it already has). */
+    onExit(cb: (which: Successor) => void): void;
+  }
+  /** Spawn this daemon's successor, detached, with this process's own
+   *  environment (and so its provenance). Its pid, or undefined if it could
+   *  not be spawned, in which case shutdown goes on as a plain stop. */
+  function startSuccessor(port: string): Successor | undefined {
+    try {
+      const logFd = openSync(join(getBraneDir(), "daemon.log"), "a");
+      const child = spawn(process.execPath, successorArgs(process.execArgv, process.argv, port), {
+        detached: true,
+        stdio: ["ignore", logFd, logFd],
+        env: {
+          ...process.env,
+          [SPAWNED_ENV]: "1",
+          [HANDOFF_ENV]: String(process.pid),
+          ...(startedVia ? { [VIA_ENV]: startedVia } : {}),
+        },
+      });
+      let exited = false;
+      const waiting: Array<(which: Successor) => void> = [];
+      const exit = (): void => {
+        if (exited) return;
+        exited = true;
+        for (const cb of waiting.splice(0)) cb(successor);
+      };
+      child.on("error", (err) => {
+        console.error("[restart] successor failed:", err);
+        exit();
+      });
+      child.on("exit", exit);
+      child.unref();
+      if (child.pid === undefined) return undefined;
+      const successor: Successor = {
+        pid: child.pid,
+        onExit: (cb) => (exited ? cb(successor) : void waiting.push(cb)),
+      };
+      return successor;
+    } catch (err) {
+      console.error("[restart] could not start a successor; stopping instead:", err);
+      return undefined;
+    }
+  }
+  process.on("SIGTERM", () => doShutdown());
+  process.on("SIGINT", () => doShutdown());
 }
 
 // Control WebSocket: single real-time channel for all notifications.

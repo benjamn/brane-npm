@@ -1193,7 +1193,7 @@ export async function fetchFileList(
 // `Content-Disposition` — so the predicate lives in shared code rather than
 // being spelled out again here. It used to be, and the two copies had already
 // drifted over `.avif`.
-export { isInlinePayload } from "@shared/payload-inline";
+export { isInlinePayload, isVideoPayload } from "@shared/payload-inline";
 
 export interface RotateTokenResponse {
   token: string;

@@ -183,14 +183,21 @@ Restart is `brane daemon restart`; it preserves port and token, so
 existing links and QR codes keep working. Confirm with `brane daemon
 status` and check the pid moved.
 
-**The daemon is one process per machine, and it restarts from whichever
-checkout invoked the command** — `brane daemon restart` re-spawns
-`process.argv[1]`. That is the "restart from the right checkout" rule
-above at its sharpest: a restart from a worktree installs that
-worktree's build as the daemon for every other agent's MCP bridge,
-every open phone, and every terminal mirror. `/rrr` therefore belongs
-in the checkout the daemon already runs from; confirm with `whoami`'s
-`fold_dir` against the running daemon rather than assuming.
+**The daemon is one process per machine, and restart keeps it where it
+is.** `brane daemon restart` asks the running daemon to start its own
+successor: the same script, from the same checkout, with the same
+environment and so the same permissions the operator started it with,
+not your shell's. A restart run from another checkout therefore
+restarts the daemon's own checkout, and says so. Putting a different
+checkout's build in as the daemon is the operator's call: `brane daemon
+stop`, then `brane daemon start` from that checkout. `/rrr` belongs in
+the checkout the daemon already runs from; confirm with `whoami`'s
+`fold_dir` against `brane doctor`'s daemon line rather than assuming.
+If the daemon is not running, an agent cannot start it: say so, and ask
+the operator to run `brane daemon start`. Nor can an agent stop it
+(`brane daemon stop` refuses in your session), and a daemon too old to
+restart itself refuses a restart from your session: ask the operator to
+run `brane daemon stop`, then `brane daemon start`.
 
 **What the blink is.** Every agent's MCP bridge drops, the app
 reconnects, terminal mirrors resync — a few seconds, and none of it is

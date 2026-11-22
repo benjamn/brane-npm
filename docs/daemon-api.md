@@ -5,10 +5,101 @@ The daemon serves HTTP API + WebSocket endpoints + the Expo web app as static fi
 ```bash
 node dist/cli.js daemon start        # Background (detached)
 node dist/cli.js daemon start --foreground
-node dist/cli.js daemon restart      # Preserves port across restarts
-node dist/cli.js daemon status       # Shows pid, port, and the socket this machine's CLI uses
+node dist/cli.js daemon restart      # In place: same port, same provenance
+node dist/cli.js daemon stop         # Waits for it to exit; stays stopped until `start`
+node dist/cli.js daemon status       # pid, port, socket, and where it and the tmux server came from
 node dist/cli.js daemon logs -f      # Tail logs
 ```
+
+## Starting and stopping
+
+A daemon inherits its confinement from whatever started it: a sandbox (an
+agent's shell under Claude Code's), macOS's attribution of a process to the
+app that launched it (Terminal.app, VS Code), proxy settings in its
+environment. Every agent it spawns or revives inherits the same, through the
+tmux server. So *who* starts the daemon decides what every agent may do, and
+that has to be the operator, from a terminal of their choosing
+(`src/daemon/lifecycle.ts`).
+
+- **Stop means stop.** `brane daemon stop` writes `meta.daemon_stopped`
+  *before* it signals the daemon, then waits for the pid to exit (SIGKILL
+  after `--timeout`, default 10 s, then clearing the dead daemon's rows but
+  keeping its port) and only then says it stopped. It signals only a pid
+  whose command line is `daemon start`: a pid left by a daemon that died can
+  name another process by now. While that row stands nothing starts a
+  daemon implicitly. That includes a daemon spawned by an MCP bridge still
+  running older code: `startServer` and `claimDaemon` both refuse with "Not
+  starting: the operator stopped…". Only an explicit `brane daemon start`
+  or `restart` clears it.
+- **An agent's session is refused `stop`**, before anything is opened, so
+  an agent tidying up cannot cut off every device and park every agent.
+  That is a guard against accidents, not a lock: an agent runs as the
+  operator and could `kill` the daemon. So there is no presence prompt
+  either (claude-ykehtq5h:26). Stopping is the safe direction, and a prompt
+  would fail exactly where it is needed: on a headless machine and over SSH.
+- **A Fly machine needs no `daemon stop`.** There the daemon is the
+  container's main process, so the machine's stop signal is already a
+  clean shutdown, and `/fly down` stops the machine (`protocols/fly.md`).
+- **Implicit starts never come from an agent.** An MCP bridge never starts a
+  daemon, and neither does any `brane` command in an agent's session
+  (`BRANE_NARRATIVE_SECRET` set), nor `brane daemon start` there. A command
+  from the operator's own shell still starts one when needed, unless it was
+  stopped. A spawner tells the daemon how it was started
+  (`BRANE_DAEMON_VIA`), and a `daemon start --foreground` that carries
+  `BRANE_DAEMON_DETACHED` was spawned, never typed, so it does not clear a
+  stop. The daemon drops both (`LAUNCH_ENV`) at startup, from its own
+  environment and the tmux server's, so no agent's pane inherits the marker
+  and passes a typed start off as a spawned one. Inside an agent's session
+  `daemon start` refuses even with the marker: every spawner strips the
+  session's variables first.
+- **The bridge waits it out.** With no daemon, a bridge keeps re-resolving
+  (backoff capped at 30 s, with no deadline: it lives as long as its client
+  does). It answers every call with why (stopped at T, or not running,
+  and `brane daemon start`), except `listen`, which stays queued and goes
+  out once the daemon is back. A LIVE-loop agent therefore parks through a
+  stop and resumes on `start`. A queued `listen` is answered as one that
+  timed out (`timed_out: true`, plus `daemon`: why) after 270 s
+  (`HELD_LISTEN_MS`, the daemon's own default hold), so a client with a
+  short tool timeout (codex, copilot) never aborts it; the agent listens
+  again and is held again.
+- **Restart is in place.** `brane daemon restart` asks the running daemon
+  (`POST /api/daemon/restart`, over `daemon.sock`) to start its own
+  successor: its own node, script and arguments (`successorArgs`; never ones
+  the request names, and without `--token`), and its own environment, so the
+  successor has the provenance the operator gave the first one. That holds
+  whether the restart comes from `/rrr` in an agent's sandboxed shell or from
+  VS Code. The old daemon closes its listeners, spawns the successor, and
+  writes the successor's pid into `meta.daemon_pid` in one step.
+  `claimDaemon` takes a row naming itself, so no reader ever sees "no
+  daemon" and starts one of its own. The CLI waits for the successor to
+  claim and listen, and reports both pids. The old daemon stays, listening
+  on nothing, until the successor claims (up to 60 s): one that exits before
+  claiming is started once more, with the claim passed again, on its exit,
+  before any reader can clear a dead pid's row. A second failure leaves no
+  daemon, logged, and the CLI reports it. Nothing else could start a
+  daemon with the operator's provenance, so without this a failed restart
+  would wait for the operator at a terminal. A daemon that crashes on its
+  own still does. A request may name another `port` only from the
+  operator's shell: moving the daemon breaks every link to it, so an
+  agent's restart keeps the port it has (403 otherwise). One consequence: a restart from a
+  different checkout restarts the daemon's own checkout, and says so.
+  Switching checkouts is `stop`, then `start` from the new one. A daemon too
+  old for the route (404) is restarted the old way, from the shell, with a
+  note, and never from an agent's session, where it refuses. Only a 404
+  falls back: a request that failed in transit may have been taken, and a
+  second successor from the shell would race the daemon's own, so that is
+  reported, not retried.
+- **Provenance is reported.** At its claim the daemon records
+  `meta.daemon_origin`: its `BRANE_DAEMON_VIA`, `__CFBundleIdentifier` (the
+  launching app on macOS), `TERM_PROGRAM`, and whether it started inside
+  tmux, over ssh or under VS Code, the real path of the script it runs
+  (`script`, which `restart` compares with its own to say when they
+  differ), plus `handoff_from` after an in-place restart. `brane daemon status` prints it beside the tmux server's, read
+  from `tmux show-environment -g`. Agents start in that server, which the
+  daemon started only if none was running. When the two disagree about the
+  app, VS Code or ssh, `status` says so and `brane doctor` warns: agents
+  get the server's permissions, not the daemon's, until it exits with its
+  last session.
 
 ## HTTP API Endpoints
 
@@ -31,7 +122,7 @@ until someone lists it. An agent also may not revive or prompt a
 | `GET` | `/api/narratives/:id/events?after=N&before=S&tail=T` | Fetch events with cursor-based query |
 | `POST` | `/api/narratives/:id/signal` | Send operator signal (supports payloads). `source` is stamped from the token (`web` for a device, `local` for this account); a `source` in the body is ignored, and an agent's token is refused (`src/daemon/signal-source.ts`) |
 | `GET` | `/api/narratives/:id/export?format=html[&palette=N][&seqs=A,B,C][&seqs_mode=except]` | Conversation as a standalone HTML document; `palette` is the device's 🎨 Recolor salt, so foreign speakers wear the hues the operator sees, `seqs` is the chat's message selection, and `seqs_mode=except` exports its complement — see [Export Scope](export-scope.md) |
-| `GET` | `/api/payloads/:nid/:filename` | Serve stored payload files (immutable, cached) |
+| `GET` | `/api/payloads/:nid/:filename` | Serve stored payload files (immutable, cached, `Range` for media seeking; images and videos inline, the rest as attachments — `src/daemon/payload-serve.ts`) |
 | `GET` | `/api/branes?archived=1` | List branes with narrative counts, home flag, `archived` flag, and `cost: [{ unit, amount, metered }]` — per-unit running totals over every narrative, archived included. Archived branes are left out unless `archived=1` — see [Multi-Brane](multi-brane.md#archived-branes) |
 | `PATCH` | `/api/branes/archive` | Archive/unarchive a brane (`{ brane_id, archived }`). Refuses the home brane and the last brane not archived (400) and an unknown one (404); never deletes anything |
 | `GET` | `/api/folds?archived=1` | List registered fold directories (includes brane_id; archived hidden unless asked) |
@@ -41,6 +132,7 @@ until someone lists it. An agent also may not revive or prompt a
 | `GET` | `/api/spawn-history` | Recent distinct `launch_args`, most-recent first (spawn dialog quick-fill) |
 | `POST` | `/api/run` | Run non-agent command (`{ command, fold_path, terminal_size? }`) |
 | `GET` | `/api/run-history` | Commands utility sessions have run before (by basename), most-recent first — the spawn dialog's Utility list; derived from `narratives`, nothing stored |
+| `POST` | `/api/daemon/restart` | Restart in place (`{ port? }` → 202 `{ pid, port }`, then shutdown): the daemon starts its own successor and hands it the claim — see [Starting and stopping](#starting-and-stopping). Over `daemon.sock` from the shell or an agent (`/rrr`); refused (403) to a device, and a new `port` to anything but the shell |
 | `POST` | `/api/revive/:nid` | Revive a dead agent session (`{ prompt?, no_prompt?, agent? }`) — see [Revive API](#revive-api) |
 | `POST` | `/api/search` | Semantic search over narrative history (`{ query, limit?, brane_ids? }`); each hit carries `matches`, the offsets to mark — see [Marking the Hits](memory-search.md#marking-the-hits) |
 | `POST` | `/api/cost/backfill` | Sweep the usage ledger over every narrative with a bound session (`{ dry_run? }`) — see [Cost Ledger](cost-ledger.md) |
@@ -182,7 +274,9 @@ into it; `config` is how `token` and `default.brane` are set before a daemon
 exists (and the daemon itself reads them through `getConfig`); `certify`
 writes the cert files the daemon hot-reloads; `doctor` is a diagnostic and
 must not depend on the thing it diagnoses; `attach` is tmux; `meld` already
-finds-or-starts the daemon and reads two `meta` rows to build a URL.
+finds-or-starts the daemon and reads two `meta` rows to build a URL. "Starts"
+always means only from the operator's own shell, and never while they have
+it stopped ([Starting and stopping](#starting-and-stopping)).
 
 Every client calls `warnIfVersionMismatch()` first, because a request field
 this CLI knows about is silently ignored by an older daemon. A new

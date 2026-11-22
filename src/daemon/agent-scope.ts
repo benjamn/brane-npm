@@ -57,6 +57,9 @@ export const AGENT_ROUTES: readonly string[] = [
   "POST /api/memory/index",
   "POST /api/spawn",
   "POST /api/revive/:nid",
+  // /rrr: `brane daemon restart` from the agent's own checkout. The daemon
+  // re-runs its own command, never one the request names.
+  "POST /api/daemon/restart",
   // Bound to the token's own narrative where the upgrade is handled.
   "GET /ws/mcp",
 ];

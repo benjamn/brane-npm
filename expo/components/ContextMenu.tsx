@@ -1,4 +1,5 @@
 import { useEffect, useRef } from "react";
+import { useIsFocused } from "@react-navigation/native";
 import MenuPanel, { menuHueRgb, type MenuHue } from "./MenuPanel";
 
 export interface ContextMenuItem {
@@ -9,6 +10,10 @@ export interface ContextMenuItem {
   // wider than the surrounding text font.
   icon?: string;
   onPress: () => void;
+  // Stay open after the press, the way the 🥫 and 🦾 menus do, so several
+  // items can be tapped in a row. Otherwise the menu closes itself after
+  // calling onPress: items need not (and the 🦠 menu's items do not) close it.
+  keepOpen?: boolean;
 }
 
 // Where the menu sits relative to its trigger:
@@ -27,8 +32,18 @@ export default function ContextMenu({ items, onClose, align = "below", hue = "gr
   hue?: MenuHue;
 }) {
   const menuRef = useRef<HTMLDivElement>(null);
+  // Screens behind the top one stay mounted, so a menu left open on a screen
+  // the operator navigated away from would keep its outside-tap catcher on the
+  // document — and swallow the first tap on the screen in front, a menu handed
+  // off to it included. Leaving the screen closes the menu instead: an item
+  // that navigates closes it, whether or not it keeps it open in place.
+  const focused = useIsFocused();
+  useEffect(() => {
+    if (!focused) onClose();
+  }, [focused, onClose]);
 
   useEffect(() => {
+    if (!focused) return;
     const handler = (e: MouseEvent) => {
       if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
         e.preventDefault();
@@ -43,7 +58,7 @@ export default function ContextMenu({ items, onClose, align = "below", hue = "gr
     };
     document.addEventListener("mousedown", handler, true);
     return () => document.removeEventListener("mousedown", handler, true);
-  }, [onClose]);
+  }, [focused, onClose]);
 
   return (
     <MenuPanel
@@ -64,7 +79,11 @@ export default function ContextMenu({ items, onClose, align = "below", hue = "gr
       {items.map((item) => (
         <button
           key={item.label}
-          onClick={(e) => { e.stopPropagation(); item.onPress(); }}
+          onClick={(e) => {
+            e.stopPropagation();
+            item.onPress();
+            if (!item.keepOpen) onClose();
+          }}
           style={{
             padding: "10px 14px",
             borderRadius: 6,

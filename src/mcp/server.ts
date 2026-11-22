@@ -515,10 +515,34 @@ export interface DaemonDial {
   url: string;
   socketPath?: string;
 }
-export type DaemonUrlResolver = () => Promise<string | DaemonDial | null>;
+/** No daemon is running, and the bridge will not start one; `down` says why
+ *  and what to do, for the agent to pass on. */
+export interface DaemonDown {
+  down: string;
+}
+export type DaemonUrlResolver = () => Promise<string | DaemonDial | DaemonDown | null>;
+
+function isDown(target: unknown): target is DaemonDown {
+  return typeof target === "object" && target !== null && typeof (target as DaemonDown).down === "string";
+}
+
+/** Tools that may wait out a daemon that is down: a `listen` is the agent
+ *  idling anyway, and is answered when the operator starts the daemon. */
+const WAITS_FOR_DAEMON: ReadonlySet<string> = new Set(["listen"]);
+
+/** How long the bridge holds such a call itself before answering it as a
+ *  listen that timed out: the daemon's own default hold
+ *  (`DEFAULT_LISTEN_TIMEOUT_MS`), which every client tolerates. Held longer,
+ *  a client with a short tool timeout (codex, copilot) aborts the call with an
+ *  error instead (claude-ykehtq5h:7, finding 6). */
+export const HELD_LISTEN_MS = 270_000;
+
+export interface McpBridgeOptions {
+  /** `HELD_LISTEN_MS`, for tests. */
+  heldListenMs?: number;
+}
 
 const MAX_RECONNECT_DELAY_MS = 30_000;
-const MAX_RECONNECT_TIME_MS = 5 * 60_000; // Give up after 5 minutes
 
 /**
  * Thin MCP stdio bridge. Handles MCP JSON-RPC protocol locally
@@ -609,7 +633,8 @@ function resolveClaudeSessionFromProcessTree(maxHops = 6): string | undefined {
   return walkProcessTreeForSession(process.ppid, lookupClaudeSession, parentPid, maxHops);
 }
 
-export function startMcpBridge(resolveUrl: DaemonUrlResolver): void {
+export function startMcpBridge(resolveUrl: DaemonUrlResolver, options: McpBridgeOptions = {}): void {
+  const heldListenMs = options.heldListenMs ?? HELD_LISTEN_MS;
   // Best-effort initial guess. For spawned agents this is the real id (the
   // daemon set BRANE_NARRATIVE_ID in the tmux env). For unspawned clients it's
   // a placeholder the daemon will *replace* with a server-minted id, delivered
@@ -664,10 +689,19 @@ export function startMcpBridge(resolveUrl: DaemonUrlResolver): void {
   // Calls handed to a socket, whose fate a lost connection makes unknowable.
   const inFlight = new Set<string>();
 
-  // Reconnection state
+  // Reconnection state. There is no deadline: a bridge outlives a daemon
+  // the operator stopped, for as long as its client does, so starting the
+  // daemon again gives every session its tools back.
   let reconnectDelay = 1000;
-  let reconnectStart = 0;
   let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  // Why no daemon is running, from the last lookup; null once one answers.
+  let downReason: string | null = null;
+  // Which calls may wait for the daemon (`WAITS_FOR_DAEMON`), and since when.
+  const patientCalls = new Map<string, number>();
+  // A daemon lookup in progress (the first dial's, or a reconnect's). While
+  // one is, a socket may yet open and carry the queue, so a stdin close
+  // waits for it rather than giving up.
+  let resolving = 0;
 
   function wsSend(msg: string, callId?: string): void {
     if (wsReady && ws) {
@@ -698,6 +732,7 @@ export function startMcpBridge(resolveUrl: DaemonUrlResolver): void {
       respond(mcpId, { content: [{ type: "text", text }], isError: true });
       pendingCalls.delete(callId);
       pendingNarrates.delete(callId);
+      patientCalls.delete(callId);
     }
     inFlight.clear();
   }
@@ -717,6 +752,7 @@ export function startMcpBridge(resolveUrl: DaemonUrlResolver): void {
     if (callId === undefined) return;
     pendingCalls.delete(callId);
     pendingNarrates.delete(callId);
+    patientCalls.delete(callId);
     const queued = sendQueue.findIndex((q) => q.callId === callId);
     if (queued >= 0) {
       sendQueue.splice(queued, 1);
@@ -757,8 +793,8 @@ export function startMcpBridge(resolveUrl: DaemonUrlResolver): void {
     ws.on("open", () => {
       wsReady = true;
       refused = false;
+      downReason = null;
       reconnectDelay = 1000; // Reset backoff on success
-      reconnectStart = 0;
       process.stderr.write("MCP bridge: connected to daemon\n");
       for (const { msg, callId } of sendQueue) {
         ws!.send(msg);
@@ -794,6 +830,7 @@ export function startMcpBridge(resolveUrl: DaemonUrlResolver): void {
           respond(mcpId, { content: [{ type: "text", text: REVOKED_TEXT }], isError: true });
           pendingCalls.delete(callId);
           pendingNarrates.delete(callId);
+          patientCalls.delete(callId);
         }
         sendQueue.length = 0;
         return;
@@ -824,6 +861,7 @@ export function startMcpBridge(resolveUrl: DaemonUrlResolver): void {
           if (mcpId !== undefined) {
             pendingCalls.delete(msg.id);
             pendingNarrates.delete(msg.id);
+            patientCalls.delete(msg.id);
             inFlight.delete(msg.id);
             respond(mcpId, {
               content: [{ type: "text", text: JSON.stringify(msg.result, null, 2) }],
@@ -836,6 +874,7 @@ export function startMcpBridge(resolveUrl: DaemonUrlResolver): void {
           if (mcpId !== undefined) {
             pendingCalls.delete(msg.id);
             pendingNarrates.delete(msg.id);
+            patientCalls.delete(msg.id);
             inFlight.delete(msg.id);
             respond(mcpId, {
               content: [{ type: "text", text: `Error: ${msg.error}` }],
@@ -849,14 +888,73 @@ export function startMcpBridge(resolveUrl: DaemonUrlResolver): void {
     });
   }
 
-  function scheduleReconnect(): void {
-    if (stdinClosed) return;
+  /** The client has closed stdin and no connection is open or opening:
+   *  nothing still queued can ever be sent, and nobody is left to retry for.
+   *  Answer what is queued, in case the client is still reading stdout, and
+   *  exit. Without this the bridge outlived its client for good: a retry
+   *  wasn't scheduled once stdin had closed, and the drain loop waited on
+   *  calls that could never be answered (claude-zii7zeix:5). */
+  function giveUp(): void {
+    for (const mcpId of pendingCalls.values()) {
+      respond(mcpId, {
+        content: [{ type: "text", text: "Error: the brane daemon could not be reached, and the client has closed" }],
+        isError: true,
+      });
+    }
+    pendingCalls.clear();
+    pendingNarrates.clear();
+    patientCalls.clear();
+    sendQueue.length = 0;
+    process.exit(0);
+  }
 
-    if (reconnectStart === 0) {
-      reconnectStart = Date.now();
-    } else if (Date.now() - reconnectStart > MAX_RECONNECT_TIME_MS) {
-      process.stderr.write("MCP bridge: reconnection timed out after 5 minutes, exiting\n");
-      process.exit(1);
+  /** No daemon is running and none will be started from here: answer every
+   *  call that was never sent and should not wait, with `reason`, and keep
+   *  the `listen`s queued for when the operator starts one. */
+  function noteDown(reason: string): void {
+    if (downReason !== reason) process.stderr.write(`MCP bridge: ${reason}\n`);
+    downReason = reason;
+    for (let i = sendQueue.length - 1; i >= 0; i--) {
+      const { callId } = sendQueue[i];
+      if (callId === undefined || patientCalls.has(callId)) continue;
+      const mcpId = pendingCalls.get(callId);
+      sendQueue.splice(i, 1);
+      pendingCalls.delete(callId);
+      pendingNarrates.delete(callId);
+      patientCalls.delete(callId);
+      if (mcpId !== undefined) respond(mcpId, { content: [{ type: "text", text: `Error: ${reason}` }], isError: true });
+    }
+  }
+
+  /** Answer each waiting call the bridge has held, unsent, for
+   *  `heldListenMs` as a listen that timed out with nothing new, as the
+   *  daemon would have; the agent listens again and is held again. */
+  function expireHeldCalls(): void {
+    const now = Date.now();
+    for (let i = sendQueue.length - 1; i >= 0; i--) {
+      const { callId } = sendQueue[i];
+      const since = callId === undefined ? undefined : patientCalls.get(callId);
+      if (callId === undefined || since === undefined || now - since < heldListenMs) continue;
+      const mcpId = pendingCalls.get(callId);
+      sendQueue.splice(i, 1);
+      pendingCalls.delete(callId);
+      pendingNarrates.delete(callId);
+      patientCalls.delete(callId);
+      const result = {
+        events: {},
+        waited_ms: now - since,
+        timed_out: true,
+        ...(downReason ? { daemon: downReason } : {}),
+      };
+      if (mcpId !== undefined) respond(mcpId, { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] });
+    }
+  }
+  setInterval(expireHeldCalls, Math.min(1_000, heldListenMs)).unref();
+
+  function scheduleReconnect(): void {
+    if (stdinClosed) {
+      giveUp();
+      return;
     }
 
     process.stderr.write(
@@ -864,31 +962,92 @@ export function startMcpBridge(resolveUrl: DaemonUrlResolver): void {
     );
     reconnectTimer = setTimeout(async () => {
       reconnectTimer = null;
+      // The delay already doubled when this timer was set (below). Doubling
+      // again on a failed lookup made the backoff skip a step: 1s, then 4s.
+      // The lookup and the dial are guarded separately, so a `connect` that
+      // throws can't count the lookup as finished twice (claude-zii7zeix:11).
+      // At -1, `resolving` would never read as idle again.
+      resolving++;
+      let url: Awaited<ReturnType<DaemonUrlResolver>> = null;
       try {
-        const url = await resolveUrl();
-        if (url) {
-          connect(url);
-        } else {
-          // Daemon not available yet, retry with more backoff
-          reconnectDelay = Math.min(reconnectDelay * 2, MAX_RECONNECT_DELAY_MS);
-          scheduleReconnect();
-        }
+        url = await resolveUrl();
       } catch {
-        reconnectDelay = Math.min(reconnectDelay * 2, MAX_RECONNECT_DELAY_MS);
+        // as though the daemon weren't there
+      } finally {
+        resolving--;
+      }
+      if (isDown(url)) {
+        noteDown(url.down);
+        url = null;
+      } else if (url) {
+        downReason = null; // a daemon is there again; the dial will tell
+      }
+      if (!url) {
+        scheduleReconnect(); // daemon not available yet
+        return;
+      }
+      try {
+        connect(url);
+      } catch {
         scheduleReconnect();
       }
     }, reconnectDelay);
     reconnectDelay = Math.min(reconnectDelay * 2, MAX_RECONNECT_DELAY_MS);
   }
 
-  // Initial connection
-  resolveUrl().then((url) => {
-    if (!url) {
-      process.stderr.write("MCP bridge: daemon not available\n");
-      process.exit(1);
-    }
-    connect(url);
-  });
+  // Initial connection: at startup only for a bridge that can prove its
+  // narrative, i.e. holds both BRANE_NARRATIVE_ID and BRANE_NARRATIVE_SECRET.
+  // Any other bridge's first dial ends in a freshly minted `external-*`
+  // narrative, either because it claims none or because its claim is refused
+  // as `secret_absent`. Dialing that at startup created a narrative for
+  // every MCP client that merely started, used brane or not. Codex's brane
+  // config is global (`ensureCodexMcpConfig`), so every Codex process
+  // started a bridge, each subagent session included, and each left a
+  // one-event `external-*` behind. Such a bridge now waits for its first
+  // `tools/call`: `initialize` and `tools/list` are answered here without
+  // the daemon, so a client that never calls a tool costs no narrative.
+  //
+  // The lazy dial doesn't give subagents a way into their parent's
+  // narrative. A subagent that does call a tool still lands on an external
+  // of its own, exactly as before (claude-g7b4qxpm:7).
+  const dialAtStartup = Boolean(process.env.BRANE_NARRATIVE_ID && bindSecret);
+  let dialed = false;
+  function dialFirst(): void {
+    if (dialed) return;
+    dialed = true;
+    resolving++;
+    resolveUrl().then(
+      (resolved) => {
+        resolving--;
+        let url = resolved;
+        if (isDown(url)) {
+          noteDown(url.down);
+          url = null;
+        }
+        if (url) {
+          // A throw here would otherwise be an unhandled rejection, which
+          // kills the bridge; retry it like a reconnect's dial.
+          try {
+            connect(url);
+          } catch {
+            scheduleReconnect();
+          }
+        } else if (dialAtStartup && !downReason) {
+          process.stderr.write("MCP bridge: daemon not available\n");
+          process.exit(1);
+        } else {
+          // Mid-session, with a call waiting on the answer: back off and retry
+          // like any lost connection, rather than exiting under the client.
+          scheduleReconnect();
+        }
+      },
+      () => {
+        resolving--;
+        scheduleReconnect();
+      },
+    );
+  }
+  if (dialAtStartup) dialFirst();
 
   const rl = createInterface({ input: process.stdin });
 
@@ -930,11 +1089,19 @@ export function startMcpBridge(resolveUrl: DaemonUrlResolver): void {
         respond(request.id, { content: [{ type: "text", text: revoked ? REVOKED_TEXT : REFUSED_TEXT }], isError: true });
         return;
       }
+      // With no daemon running, a call that cannot wait is answered now, with
+      // why; a `listen` queues, and is answered once the daemon is back.
+      if (downReason && !wsReady && !WAITS_FOR_DAEMON.has(toolName)) {
+        respond(request.id, { content: [{ type: "text", text: `Error: ${downReason}` }], isError: true });
+        return;
+      }
       // Forward to daemon via WebSocket (buffered until connected)
       const callId = String(++callCounter);
       pendingCalls.set(callId, request.id);
       if (toolName === "narrate") pendingNarrates.add(callId);
+      if (WAITS_FOR_DAEMON.has(toolName)) patientCalls.set(callId, Date.now());
       wsSend(JSON.stringify({ type: "tool_call", id: callId, tool: toolName, args }), callId);
+      dialFirst();
       return;
     }
 
@@ -960,6 +1127,13 @@ export function startMcpBridge(resolveUrl: DaemonUrlResolver): void {
     if (pendingCalls.size === 0) {
       if (ws) ws.close();
       process.exit(0);
+    }
+    // No socket open or opening, and no lookup that could produce one: the
+    // reconnect timer just cleared was the only thing that would have sent
+    // the queue, so the drain below would wait forever.
+    if (!ws && resolving === 0) {
+      giveUp();
+      return;
     }
     const drainCheck = setInterval(() => {
       if (pendingCalls.size === 0) {

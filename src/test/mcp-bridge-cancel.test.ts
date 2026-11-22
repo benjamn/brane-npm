@@ -23,7 +23,10 @@ function childEnv(port: number): NodeJS.ProcessEnv {
   for (const k of Object.keys(env)) {
     if (k.startsWith("BRANE_") || k === "CLAUDE_CODE_SESSION_ID" || k === "NODE_TEST_CONTEXT") delete env[k];
   }
-  return env;
+  // A spawned agent's credentials, so the bridge dials at startup and the
+  // test can wait for its socket before calling (an unspawned bridge waits
+  // for its first call: mcp-bridge-lazy-dial.test.ts).
+  return { ...env, BRANE_NARRATIVE_ID: "claude-test0002", BRANE_NARRATIVE_SECRET: "s" };
 }
 
 describe("the MCP bridge when a call is cancelled", () => {

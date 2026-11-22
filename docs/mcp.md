@@ -10,6 +10,8 @@ The MCP server (`src/mcp/server.ts`) is a **thin stdio↔WebSocket bridge**. It 
 
 When `brane spawn` creates an agent session, it sets `BRANE_NARRATIVE_ID` as a tmux session environment variable (not in the MCP config file). The MCP bridge process inherits this from the tmux environment at startup. This allows multiple agents to share the same fold without conflicting MCP configs. The one exception is Copilot, which requires explicit env in its per-session config file since it doesn't inherit parent env vars into MCP subprocesses.
 
+**A bridge that can't prove a narrative dials only on its first tool call.** Every dial by a bridge without both `BRANE_NARRATIVE_ID` and `BRANE_NARRATIVE_SECRET` ends in a freshly minted `external-*` narrative: either the bridge claims no narrative, or its claim is refused as `secret_absent` (`resolveMcpBind`). Such a bridge answers `initialize` and `tools/list` itself and connects when the first `tools/call` arrives, so an MCP client that starts and never uses brane leaves no narrative behind. This matters because brane writes Codex's MCP config into the global `~/.codex/config.toml`. Every Codex process on the machine then starts a bridge, each subagent session included, and when bridges dialed at startup each of those left a one-event external behind (claude-g7b4qxpm:3). The change doesn't let a subagent into its parent's narrative: one that does call a brane tool gets an external of its own. A spawned agent's bridge holds both variables and still connects at startup. `src/test/mcp-bridge-lazy-dial.test.ts` pins all three cases.
+
 ### Listen Wakeup
 
 **The caller's own words never interrupt its waiting.** `checkForEvents`

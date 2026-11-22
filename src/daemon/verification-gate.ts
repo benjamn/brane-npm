@@ -53,6 +53,7 @@ export const ACT_NAMES = [
   "revoke-credential",
   "approve-protocol",
   "revoke-protocol",
+  "restart",
 ] as const;
 export type ActName = (typeof ACT_NAMES)[number];
 
@@ -145,6 +146,7 @@ export const ACT_ROUTES: ReadonlyArray<readonly [route: string, act: ActName]> =
   ["POST /api/credentials/:id/revoke", "revoke-credential"],
   ["POST /api/protocols/approve", "approve-protocol"],
   ["POST /api/protocols/revoke", "revoke-protocol"],
+  ["POST /api/daemon/restart", "restart"],
 ];
 
 /** Control-socket messages that read: subscriptions and their undoing.

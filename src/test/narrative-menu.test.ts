@@ -217,3 +217,40 @@ describe("narrativeMenuItems — Isolate", () => {
     assert.deepEqual(without, labels({ isIsolated: true }).filter((l) => l !== "Unisolate"));
   });
 });
+
+describe("narrativeMenuItems — which items keep the menu open", () => {
+  // The 🦠 menu stays open after an item that acts in place, as 🥫 and 🦾 do,
+  // so End then Archive is two taps. An item that opens a dialog or another tab
+  // closes it: the dialog is where the operator goes next, and an open menu's
+  // outside-tap catcher would swallow the dialog's first tap.
+  const keptOpen = (over: Partial<NarrativeMenuOptions> = {}) =>
+    narrativeMenuItems(options(over)).filter((i) => i.keepOpen).map((i) => i.label);
+
+  it("keeps End and Recolor on a live session", () => {
+    assert.deepEqual(keptOpen({ status: "active", mcpConnected: true }), ["Recolor", "End"]);
+  });
+
+  it("keeps Revive and Archive on a dead one", () => {
+    assert.deepEqual(keptOpen({ status: "ended" }), ["Recolor", "Revive", "Archive"]);
+  });
+
+  it("keeps Unarchive", () => {
+    assert.deepEqual(keptOpen({ status: "ended", archived: true }), ["Recolor", "Revive", "Unarchive"]);
+  });
+
+  it("closes on a Revive that twins, which opens the Twin dialog", () => {
+    const revive = narrativeMenuItems(options({ status: "ended", role: "absorbed" }))
+      .find((i) => i.label === "Revive");
+    assert.ok(revive);
+    assert.ok(!revive.keepOpen);
+  });
+
+  it("closes on every item that opens a dialog or another tab", () => {
+    for (const over of [{}, { selectedCount: 2 }, { isIsolated: true }]) {
+      const closing = narrativeMenuItems(options(over)).filter((i) => !i.keepOpen).map((i) => i.label);
+      for (const label of closing) {
+        assert.match(label, /^(Meld|Isolate|Unisolate|Export.*|Twin|Utility)$/, label);
+      }
+    }
+  });
+});
