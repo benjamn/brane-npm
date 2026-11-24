@@ -19,16 +19,17 @@
  * on a foreground daemon) runs the same routine, bounded so it finishes well
  * inside Fly's `kill_timeout`.
  *
- * The routine: (1) which narratives are live, (2) a `sleeping` note into
- * each, (3) `~/.brane/sleep-manifest.json`, (4) `~/.brane/exit-record.json`,
- * (5) on Fly, every tmux session ended, (6) `tailscale down` where that
- * is wanted, (7) the daemon's ordinary shutdown.
+ * The routine: (1) which narratives are live,
+ * (2) `~/.brane/sleep-manifest.json`, (3) `~/.brane/exit-record.json`,
+ * (4) on Fly, every tmux session ended, (5) `tailscale down` where that
+ * is wanted, (6) the daemon's ordinary shutdown. It writes nothing into
+ * the narratives: the agent learns of the sleep from its wake prompt.
  *
  * **A stop is not a sleep.** A signal cannot say who sent it, and on a
  * Mac `brane daemon stop` is a SIGTERM whose tmux sessions all outlive
  * the daemon. (An in-place restart is no signal: it is a handoff,
  * `doShutdown({ port })`, which writes an exit record of its own, reason
- * `restart`, and none of the rest.) So on a signal, the note and the manifest happen only where
+ * `restart`, and none of the rest.) So on a signal, the manifest is written only where
  * boot revive is on (a Fly machine, or `sleep.boot_revive`) and something
  * is live, and `tailscale down` only on Fly — a Mac that ran it on restart
  * would drop off its own tailnet with nothing to bring it back. Boot revive
@@ -101,9 +102,6 @@ export const SHUTDOWN_BACKSTOP_MS = 10_000;
 /** `tailscale down` gets this long; an error or a timeout is logged and the
  *  routine goes on. */
 export const TAILSCALE_DOWN_TIMEOUT_MS = 10_000;
-/** After the sleeping notes, how long the bridges get to hand them to their
- *  agents before the sockets close. */
-export const ANNOUNCE_SETTLE_MS = 1_000;
 /** After `tmux kill-server`, how long the panes' processes get to exit
  *  before the daemon does: on Fly the daemon's exit unmounts the volume,
  *  and an agent still writing to it leaves it busy (measured on a Fly
@@ -181,7 +179,7 @@ export function tailscaleDownWanted(reason: SleepReason, env: NodeJS.ProcessEnv,
   return configured ?? fly;
 }
 
-/** Whether a sleep for `reason` writes the manifest (and announces): always
+/** Whether a sleep for `reason` writes the manifest: always
  *  when elective, and on a signal only where boot revive would read it and
  *  there is something in it. See the module comment: a restart is not a
  *  sleep. */
@@ -190,19 +188,6 @@ export function writesManifest(reason: SleepReason, narratives: readonly string[
   return bootRevive && narratives.length > 0;
 }
 
-/** The note each live narrative gets before its bridge drops. */
-export function sleepingNote(reason: SleepReason, bootRevive: boolean): string {
-  const why =
-    reason === "operator"
-      ? "the operator put it to sleep"
-      : reason === "idle"
-        ? "it had no sessions and no clients"
-        : "its machine is stopping";
-  const after = bootRevive
-    ? "When the host has been woken and the operator connects to it, the daemon revives this session with a note saying so."
-    : "Revive this session when the host is back.";
-  return `This host is going to sleep: ${why}. Your MCP bridge is about to drop; nothing in this narrative is lost. ${after}`;
-}
 
 /** The prompt a narrative is revived with after the host wakes. */
 export function wakePrompt(manifest: Pick<SleepManifest, "slept_at" | "reason">, resumedAt: number): string {
@@ -376,9 +361,6 @@ export interface SleeperDeps {
   idleMinutes: () => number | null;
   bootRevive: () => boolean;
   tailscaleDown: (reason: SleepReason) => boolean;
-  /** Append a note to a narrative and wake its listeners
-   *  (`announceEvent`). */
-  announce: (nid: string, content: string) => void;
   /** The daemon's ordinary shutdown, which exits the process. */
   shutdown: () => void;
   runTailscaleDown?: () => Promise<void>;
@@ -395,7 +377,6 @@ export interface SleeperDeps {
   log?: (m: string) => void;
   host?: string;
   pid?: number;
-  settleMs?: number;
 }
 
 /** What the routine did, for the log and the suite. */
@@ -527,19 +508,13 @@ export class Sleeper {
     }
     const manifest = writesManifest(reason, narratives, bootRevive);
 
-    // 2. Tell them, when this is a sleep and not a restart.
-    if (manifest && narratives.length > 0) {
-      const note = sleepingNote(reason, bootRevive);
-      for (const nid of narratives) {
-        try {
-          this.deps.announce(nid, note);
-        } catch (err) {
-          this.log(`could not tell ${nid}: ${(err as Error).message}`);
-        }
-      }
-    }
+    // No note into their narratives: the agent can't act on one (its bridge
+    // drops a moment later), and the operator found a card per sleep in
+    // every chat noise (claude-qdjo1yqn:97). What the agent needs is the
+    // wake prompt it gets when it is revived, which says when the host
+    // slept and resumed.
 
-    // 3. The manifest, carrying over one still waiting for an operator: a
+    // 2. The manifest, carrying over one still waiting for an operator: a
     //    wake nobody followed sleeps again on the idle rule, and must not
     //    leave the earlier sleep's agents behind.
     if (manifest) {
@@ -557,27 +532,22 @@ export class Sleeper {
       }
     }
 
-    // 4. The exit record, on every exit this routine runs.
+    // 3. The exit record, on every exit this routine runs.
     try {
       writeExitRecord(this.deps.braneDir, { exited_at: this.now(), reason, clean: true, pid: this.deps.pid ?? process.pid });
     } catch (err) {
       this.log(`could not write the exit record: ${(err as Error).message}`);
     }
 
-    // Let the bridges hand the notes on before their sockets close.
-    if (manifest && narratives.length > 0) {
-      await new Promise((r) => setTimeout(r, this.deps.settleMs ?? ANNOUNCE_SETTLE_MS));
-    }
-
-    // 5. End the sessions, where the machine is going with the daemon, so
+    // 4. End the sessions, where the machine is going with the daemon, so
     //    nothing holds the volume when it unmounts.
     if (this.deps.endSessions?.() && this.deps.runEndSessions) await this.deps.runEndSessions();
 
-    // 6. Leave the tailnet, where that is wanted.
+    // 5. Leave the tailnet, where that is wanted.
     const down = this.deps.tailscaleDown(reason);
     if (down) await (this.deps.runTailscaleDown ?? (() => runTailscaleDown(this.log)))();
 
-    // 7. The ordinary shutdown, which for an elective sleep now has a
+    // 6. The ordinary shutdown, which for an elective sleep now has a
     //    deadline too: it waits on every open connection.
     if (reason !== "signal") this.armBackstop(this.deps.shutdownBackstopMs ?? SHUTDOWN_BACKSTOP_MS, "shutdown after sleep");
     this.deps.shutdown();

@@ -196,9 +196,52 @@ export function canSleep(recipe: WakeRecipe | null | undefined): boolean {
   return recipe?.kind === "url";
 }
 
-/** Where the switcher offers Sleep for the daemon it is connected to.
- *  `here`: on this page. `hop`: this page is the daemon's own bundle
- *  (isolated), which goes away with the daemon, leaving nothing to tap
+/** The Wake/Sleep slot in a daemon row's ⋯ menu. A host the app can wake
+ *  (a URL recipe) always has one, so the operator finds the same control in
+ *  the same place on every remote machine: Sleep while it answers, Wake
+ *  while it doesn't, and in between a disabled item naming the state, so a
+ *  second tap can't double a wake or a sleep. A host with no URL recipe (a
+ *  Mac) has none: nothing here could bring it back.
+ *
+ *  `offer` is that row's own `sleepOffer`: whether *this page* is served by
+ *  *that* host, which is not the same as whether it is the connected
+ *  daemon. On A's bundle, switched to B, it is A's row whose Sleep would
+ *  take the page down, so A's Sleep hops (`hop` names the shared app) and
+ *  B's doesn't. With nowhere to hop to (`offer` null), an awake host
+ *  serving this page has no slot.
+ *
+ *  `unreachable` can't happen with a URL recipe (`daemonReach` calls that
+ *  *asleep*); it gets no slot all the same. */
+export type SleepWakeSlot =
+  | { kind: "wake" }
+  | { kind: "sleep"; hop?: string }
+  | { kind: "pending"; label: string }
+  | null;
+
+export function sleepWakeSlot(reach: Reach, recipe: WakeRecipe | null | undefined, offer: SleepOffer): SleepWakeSlot {
+  if (!canSleep(recipe)) return null;
+  switch (reach) {
+    case "awake":
+      if (!offer) return null;
+      return offer.kind === "hop" ? { kind: "sleep", hop: offer.appHost } : { kind: "sleep" };
+    case "asleep":
+    case "still-asleep":
+      return { kind: "wake" };
+    case "checking":
+      return { kind: "pending", label: "Checking…" };
+    case "waking":
+      return { kind: "pending", label: "Waking…" };
+    case "sleeping":
+      return { kind: "pending", label: "Going to sleep…" };
+    case "unreachable":
+      return null;
+  }
+}
+
+/** Where the switcher offers Sleep for a daemon's row.
+ *  `here`: on this page. `hop`: this page is that daemon's own bundle
+ *  (isolated against that row's host, whether or not it is the connected
+ *  daemon), which goes away with the daemon, leaving nothing to tap
  *  Wake on; so Sleep moves to the shared app (`appHost`), whose switcher
  *  outlives the host. `null`: isolated with no shared app to go to. */
 export type SleepOffer = { kind: "here" } | { kind: "hop"; appHost: string } | null;

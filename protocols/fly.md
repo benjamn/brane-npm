@@ -24,7 +24,7 @@ sessions on disk, and the next wake brings them back.
 | Verb | What it does |
 |------|--------------|
 | `sleep` | Stop a machine. The daemon's own exit; the app's Sleep act; or `fly machine stop` from outside. |
-| `wake` | Start a stopped machine. The app's Wake button (`https://<app>.fly.dev/wake`), or `fly machine start`. |
+| `wake` | Start a stopped machine. Wake in the app's ⋯ (`https://<app>.fly.dev/wake`), or `fly machine start`. |
 | `deploy` | Build and push the image; update existing machines, never create or start one. |
 | `up` | Provisioning: one machine per region that has a volume, reattaching it. |
 | `down` | Provisioning: destroy all machines. Volumes preserved. |

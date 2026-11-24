@@ -14,6 +14,11 @@ export interface ContextMenuItem {
   // items can be tapped in a row. Otherwise the menu closes itself after
   // calling onPress: items need not (and the 🦠 menu's items do not) close it.
   keepOpen?: boolean;
+  // Shown but not pressable: a slot whose action is under way (a daemon
+  // row's "Waking…"), so the menu keeps its shape while it can't be used.
+  // aria-disabled only, not the native attribute, so the item stays in the
+  // tab order and a screen reader still announces the state.
+  disabled?: boolean;
 }
 
 // Where the menu sits relative to its trigger:
@@ -79,12 +84,15 @@ export default function ContextMenu({ items, onClose, align = "below", hue = "gr
       {items.map((item) => (
         <button
           key={item.label}
+          aria-disabled={item.disabled || undefined}
           onClick={(e) => {
             e.stopPropagation();
+            if (item.disabled) return;
             item.onPress();
             if (!item.keepOpen) onClose();
           }}
           style={{
+            opacity: item.disabled ? 0.5 : 1,
             padding: "10px 14px",
             borderRadius: 6,
             border: "none",
@@ -92,7 +100,7 @@ export default function ContextMenu({ items, onClose, align = "below", hue = "gr
             color: "#ccc",
             fontSize: 15,
             lineHeight: "21px",
-            cursor: "pointer",
+            cursor: item.disabled ? "default" : "pointer",
             textAlign: "left",
             whiteSpace: "nowrap",
             display: "flex",
@@ -100,6 +108,7 @@ export default function ContextMenu({ items, onClose, align = "below", hue = "gr
             gap: 10,
           }}
           onPointerEnter={(e) => {
+            if (item.disabled) return;
             (e.currentTarget as HTMLElement).style.backgroundColor = `rgba(${menuHueRgb(hue)}, 0.18)`;
           }}
           onPointerLeave={(e) => {

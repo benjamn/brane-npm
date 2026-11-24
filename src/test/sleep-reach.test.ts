@@ -19,8 +19,11 @@ import {
   probeHeardHost,
   reachLabel,
   sleepLine,
+  sleepOffer,
+  sleepWakeSlot,
   undeadLine,
   wakeFetchInit,
+  type Reach,
   type WakeRecipe,
 } from "../shared/sleep.js";
 import { requiresPreflight } from "../shared/api-request.js";
@@ -131,6 +134,48 @@ describe("what the row says and offers", () => {
     assert.equal(canSleep(URL_RECIPE), true);
     assert.equal(canSleep(NONE_RECIPE), false);
     assert.equal(canSleep(undefined), false);
+  });
+});
+
+describe("the ⋯ menu's Wake/Sleep slot", () => {
+  const ALL: Reach[] = ["awake", "checking", "asleep", "unreachable", "waking", "still-asleep", "sleeping"];
+  const HERE = sleepOffer(false, "brane.organelle.dev");
+  const HOP = sleepOffer(true, "brane.organelle.dev");
+  const NOWHERE = sleepOffer(true, null);
+
+  it("is Sleep while a wakeable host answers, Wake while it doesn't, and disabled in between", () => {
+    assert.deepEqual(sleepWakeSlot("awake", URL_RECIPE, HERE), { kind: "sleep" });
+    assert.deepEqual(sleepWakeSlot("asleep", URL_RECIPE, HERE), { kind: "wake" });
+    assert.deepEqual(sleepWakeSlot("still-asleep", URL_RECIPE, HERE), { kind: "wake" });
+    assert.deepEqual(sleepWakeSlot("checking", URL_RECIPE, HERE), { kind: "pending", label: "Checking…" });
+    assert.deepEqual(sleepWakeSlot("waking", URL_RECIPE, HERE), { kind: "pending", label: "Waking…" });
+    assert.deepEqual(sleepWakeSlot("sleeping", URL_RECIPE, HERE), { kind: "pending", label: "Going to sleep…" });
+  });
+
+  it("hops when the row's host serves this page, and has no Sleep with nowhere to hop to", () => {
+    assert.deepEqual(sleepWakeSlot("awake", URL_RECIPE, HOP), { kind: "sleep", hop: "brane.organelle.dev" });
+    assert.equal(sleepWakeSlot("awake", URL_RECIPE, NOWHERE), null);
+  });
+
+  it("offers Wake whatever the offer: the wake fetch goes to Fly Proxy, not to this page's host", () => {
+    for (const offer of [HERE, HOP, NOWHERE]) {
+      assert.deepEqual(sleepWakeSlot("asleep", URL_RECIPE, offer), { kind: "wake" });
+    }
+  });
+
+  it("agrees with canWake, so a wake in flight is never offered again", () => {
+    for (const r of ALL) {
+      assert.equal(sleepWakeSlot(r, URL_RECIPE, HERE)?.kind === "wake", canWake(r, URL_RECIPE), r);
+    }
+  });
+
+  it("is absent on a host the app can't wake, in every state", () => {
+    for (const r of ALL) {
+      for (const offer of [HERE, HOP, NOWHERE]) {
+        assert.equal(sleepWakeSlot(r, NONE_RECIPE, offer), null, r);
+        assert.equal(sleepWakeSlot(r, undefined, offer), null, r);
+      }
+    }
   });
 });
 

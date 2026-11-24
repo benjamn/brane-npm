@@ -63,7 +63,7 @@ import { isListScrollKey, listScrollTarget } from "@shared/list-scroll-keys";
 import { buildHitSnippet, type MatchRange, type SnippetOptions } from "@shared/hit-snippet";
 import { interruptSession } from "@/lib/terminal";
 import { markSlept, probeReach, reachOf, useReachRecords, wakeDaemon } from "@/lib/reach";
-import { canSleep, canWake, parseSleepStatus, postureLine, reachLabel, sleepOffer, withSleepIntent, type Reach } from "@shared/sleep";
+import { canSleep, parseSleepStatus, postureLine, reachLabel, sleepOffer, sleepWakeSlot, withSleepIntent, type Reach } from "@shared/sleep";
 
 // How long a keyed smooth scroll counts as still under way, for stacking the
 // next key onto its target. Chromium's keyboard smooth scroll settles in
@@ -566,25 +566,6 @@ function reachDotColor(reach: Reach, fallback: string): string {
   return fallback;
 }
 
-/** Wake, beside a row that is asleep: one tap, one opaque fetch to the
- *  host's wake URL, then the row reads "waking…" while its tailnet address
- *  is re-probed (`expo/lib/reach.ts`). Shown only when `canWake`, so not
- *  again while a wake is being waited on. */
-function WakeButton({ entry }: { entry: DaemonEntry }) {
-  return (
-    <View style={styles.archivedActions}>
-      <Pressable
-        style={styles.archivedAction}
-        role="button"
-        aria-label={`Wake ${entry.id}`}
-        onPress={() => wakeDaemon(entry)}
-      >
-        <Text style={styles.archivedActionText}>Wake</Text>
-      </Pressable>
-    </View>
-  );
-}
-
 function BraneSwitcher({
   branes,
   activeBraneId,
@@ -600,7 +581,6 @@ function BraneSwitcher({
   onArchiveBrane,
   onSignOutOthers,
   conn,
-  isolated,
   appHost,
 }: {
   branes: BraneInfo[];
@@ -617,9 +597,8 @@ function BraneSwitcher({
   onArchiveBrane: (braneId: string, archived: boolean) => Promise<void>;
   onSignOutOthers: () => Promise<void>;
   conn: ConnectionParams | null;
-  /** This page is the active daemon's own bundle. */
-  isolated: boolean;
-  /** The shared app to hop out to, when known. */
+  /** The shared app to hop out to, when known. Whether a row's host serves
+   *  this page is decided per row (`offerFor`). */
   appHost: string | null;
 }) {
   const [showDropdown, setShowDropdown] = useState(false);
@@ -647,9 +626,10 @@ function BraneSwitcher({
   const [confirmForget, setConfirmForget] = useState<DaemonEntry | null>(null);
   const [forgetting, setForgetting] = useState(false);
   const [forgetError, setForgetError] = useState<string | null>(null);
-  // Sleep: the active daemon's host, behind a confirm, since it ends the
-  // bridge of every agent session on it (docs/sleep.md).
-  const [confirmSleep, setConfirmSleep] = useState(false);
+  // Sleep: a remote daemon's host, behind a confirm, since it ends the
+  // bridge of every agent session on it (docs/sleep.md). The entry being
+  // confirmed, active or not.
+  const [sleepTarget, setSleepTarget] = useState<DaemonEntry | null>(null);
   const [sleeping, setSleeping] = useState(false);
   const [sleepError, setSleepError] = useState<string | null>(null);
   // Awake, asleep or unreachable, per daemon (expo/lib/reach.ts).
@@ -666,7 +646,7 @@ function BraneSwitcher({
   const activePosture = activeReach === "awake" ? postureLine(activeSleep, activeUndead.length) : null;
   // Opening the switcher asks every daemon it lists whether it is up, on
   // the switcher's short budget: the active one only when its socket is
-  // down. Tailnet addresses only — the wake URL is the Wake button's alone.
+  // down. Tailnet addresses only — the wake URL is the Wake item's alone.
   useEffect(() => {
     if (!showDropdown) return;
     for (const d of daemons) {
@@ -677,23 +657,26 @@ function BraneSwitcher({
     // Once per opening; a row's state then follows the store.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [showDropdown]);
-  // Sleep, from an isolated tab: this page goes away with its daemon, so the
-  // gesture moves to the shared app, which can wake it after (@shared/sleep,
-  // sleepOffer). The hop carries the connection and `#sleep=`, which only
-  // opens the confirm there.
-  const offer = sleepOffer(isolated, appHost);
-  const hopToSleep = () => {
-    if (!conn || !activeDaemon?.brane_id || typeof window === "undefined") return;
+  // Sleep, from a daemon's own bundle: this page goes away with that host,
+  // so the gesture moves to the shared app, which can wake it after
+  // (@shared/sleep, sleepOffer). Decided per row, against the row's own
+  // host: on A's bundle switched to B, it is A's row that hops. The hop
+  // carries that daemon's connection and `#sleep=`, which only opens the
+  // confirm there.
+  const offerFor = (entry: DaemonEntry) =>
+    sleepOffer(typeof window !== "undefined" && isIsolated(window.location.host, entry.host), appHost);
+  const hopToSleep = (entry: DaemonEntry) => {
+    if (!entry.brane_id || typeof window === "undefined") return;
     const url = buildIsolateUrl({
       host: window.location.host,
       protocol: window.location.protocol,
       search: "",
       path: "/",
-      conn,
+      conn: { host: entry.host, token: entry.token },
       appHost,
       view: {},
     });
-    if (url) window.location.assign(withSleepIntent(url, activeDaemon.brane_id));
+    if (url) window.location.assign(withSleepIntent(url, entry.brane_id));
   };
   // Arriving from such a hop: once that daemon is connected and up here,
   // open the switcher on its Sleep confirm. Spent on first match.
@@ -702,21 +685,24 @@ function BraneSwitcher({
     if (!takeSleepIntent(activeDaemon.brane_id)) return;
     setShowDropdown(true);
     setSleepError(null);
-    setConfirmSleep(true);
+    setSleepTarget(activeDaemon);
   }, [connected, activeReach, activeDaemon]);
   const cancelSleep = () => {
     if (sleeping) return;
-    setConfirmSleep(false);
+    setSleepTarget(null);
     setSleepError(null);
   };
   const handleSleep = async () => {
-    if (!conn || !activeDaemon) return;
+    const target = sleepTarget;
+    if (!target) return;
     setSleeping(true);
     setSleepError(null);
     try {
-      await sleepDaemon(conn);
-      markSlept(activeDaemon.id);
-      setConfirmSleep(false);
+      // The target's own token, active or not: a remote row's Sleep goes
+      // straight to that daemon, through the lock sheet like any act.
+      await sleepDaemon({ host: target.host, token: target.token });
+      markSlept(target.id);
+      setSleepTarget(null);
     } catch (err) {
       setSleepError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -732,8 +718,21 @@ function BraneSwitcher({
     setSignedOutOthers(false);
     setMenuFor(null);
     setArchiveError(null);
-    setConfirmSleep(false);
+    setSleepTarget(null);
     setSleepError(null);
+  };
+  // Every remote machine's ⋯ has one Wake/Sleep slot (@shared/sleep,
+  // sleepWakeSlot): Sleep while it answers, Wake while it doesn't, and a
+  // disabled item naming the state in between. A host the app can't wake
+  // (a Mac) has neither. The Sleep of whichever row serves this page hops.
+  const sleepWakeItems = (entry: DaemonEntry, r: Reach): ContextMenuItem[] => {
+    if (entry.revoked) return [];
+    const slot = sleepWakeSlot(r, entry.wake, offerFor(entry));
+    if (!slot) return [];
+    if (slot.kind === "pending") return [{ label: slot.label, icon: "⏳", onPress: () => {}, disabled: true }];
+    if (slot.kind === "wake") return [{ label: "Wake", icon: "⏰", onPress: () => wakeDaemon(entry) }];
+    if (slot.hop) return [{ label: `Sleep on ${slot.hop}`, icon: "💤", onPress: () => hopToSleep(entry) }];
+    return [{ label: "Sleep", icon: "💤", onPress: () => { setSleepError(null); setSleepTarget(entry); } }];
   };
   const cancelForget = () => {
     if (forgetting) return;
@@ -905,26 +904,13 @@ function BraneSwitcher({
                 </View>
               </View>
             </Pressable>
-            {canWake(activeReach!, activeDaemon.wake) && <WakeButton entry={activeDaemon} />}
             <RowMenu
               id="active"
               openId={menuFor}
               setOpenId={setMenuFor}
               label={`Actions for ${activeDaemon.id}`}
               items={[
-                // A host the app can wake again, while it is up. A Mac
-                // (recipe "none") is not offered Sleep: nothing here could
-                // bring it back.
-                // From an isolated tab it hops to the shared app first.
-                ...(connected && activeReach === "awake" && canSleep(activeDaemon.wake) && offer
-                  ? [{
-                      label: offer.kind === "hop" ? `Sleep on ${offer.appHost}` : "Sleep",
-                      icon: "💤",
-                      onPress: offer.kind === "hop"
-                        ? () => { setMenuFor(null); hopToSleep(); }
-                        : () => { setMenuFor(null); setSleepError(null); setConfirmSleep(true); },
-                    }]
-                  : []),
+                ...sleepWakeItems(activeDaemon, activeReach!),
                 {
                   label: "Archive this daemon",
                   icon: "🗄️",
@@ -1032,17 +1018,19 @@ function BraneSwitcher({
                   </View>
                 </View>
               </Pressable>
-              {!d.revoked && canWake(dReach, d.wake) && <WakeButton entry={d} />}
               <RowMenu
                 id={`daemon:${d.id}`}
                 openId={menuFor}
                 setOpenId={setMenuFor}
                 label={`Actions for ${d.id}`}
-                items={[{
-                  label: "Archive",
-                  icon: "🗄️",
-                  onPress: () => { setMenuFor(null); onArchiveDaemon(d.id); },
-                }]}
+                items={[
+                  ...sleepWakeItems(d, dReach),
+                  {
+                    label: "Archive",
+                    icon: "🗄️",
+                    onPress: () => { setMenuFor(null); onArchiveDaemon(d.id); },
+                  },
+                ]}
               />
               </View>
               );
@@ -1247,20 +1235,19 @@ function BraneSwitcher({
         </Pressable>
       </Modal>
 
-      {/* Sleep layer: the active daemon's host, from its row's ⋯. */}
+      {/* Sleep layer: a remote daemon's host, from its row's ⋯. */}
       <Modal
-        visible={showDropdown && confirmSleep}
+        visible={showDropdown && sleepTarget !== null}
         transparent
         animationType="fade"
         onRequestClose={cancelSleep}
       >
         <Pressable style={styles.modalOverlay} onPress={cancelSleep} tabIndex={-1}>
           <Pressable style={styles.layerCard} onPress={(e) => e.stopPropagation()} tabIndex={-1}>
-            <Text style={styles.layerTitle}>Put {activeDaemon?.id} to sleep?</Text>
+            <Text style={styles.layerTitle}>Put {sleepTarget?.id} to sleep?</Text>
             <Text style={styles.signOutBody}>
-              Its machine stops. Every agent session on it loses its bridge
-              now, and the ones that are live are revived when it wakes.
-              Wake it from this switcher; nothing else on it is lost.
+              Its machine stops until you wake it here. Running agents
+              resume when you reconnect.
             </Text>
             {sleepError && <Text style={styles.addError}>{sleepError}</Text>}
             <View style={styles.layerButtonRow}>
@@ -2076,7 +2063,6 @@ export default function NarrativeList() {
                   onArchiveBrane={handleArchiveBrane}
                   onSignOutOthers={rotateActiveToken}
                   conn={conn}
-                  isolated={isolated}
                   appHost={appHost}
                 />
                 <Pressable

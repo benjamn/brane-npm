@@ -242,7 +242,6 @@ function harness(opts: { live?: LiveNarrative[] | null; idle?: number | null; bo
   let now = T0;
   let live: LiveNarrative[] | null = opts.live === undefined ? [] : opts.live;
   let tmuxCalls = 0;
-  const announced: Array<[string, string]> = [];
   const shutdowns: number[] = [];
   const downs: number[] = [];
   const order: string[] = [];
@@ -256,7 +255,6 @@ function harness(opts: { live?: LiveNarrative[] | null; idle?: number | null; bo
     idleMinutes: () => (opts.idle === undefined ? 10 : opts.idle),
     bootRevive: () => opts.bootRevive ?? false,
     tailscaleDown: (reason) => tailscaleDownWanted(reason, opts.fly ? { FLY_APP_NAME: "x" } : {}, undefined),
-    announce: (nid, content) => announced.push([nid, content]),
     shutdown: () => {
       order.push("shutdown");
       shutdowns.push(now);
@@ -275,11 +273,9 @@ function harness(opts: { live?: LiveNarrative[] | null; idle?: number | null; bo
     now: () => now,
     host: "test-host",
     pid: 4242,
-    settleMs: 0,
   });
   return {
     sleeper,
-    announced,
     shutdowns,
     downs,
     order,
@@ -391,13 +387,11 @@ describe("Sleeper: the idle rule's clock", () => {
 });
 
 describe("Sleeper: the routine", () => {
-  it("on the operator's act: tells each agent, writes both records, then shuts down", async () => {
+  it("on the operator's act: writes both records, then shuts down, telling the narratives nothing", async () => {
     const h = harness({ live: [{ id: "claude-1", role: "worker" }, { id: "zsh-1", role: "utility" }] });
     assert.deepEqual(h.sleeper.plannedNarratives(), ["claude-1"]);
     const out = await h.sleeper.sleep("operator");
     assert.deepEqual(out, { reason: "operator", narratives: ["claude-1"], manifest: true, tailscaleDown: false });
-    assert.deepEqual(h.announced.map(([nid]) => nid), ["claude-1"]);
-    assert.match(h.announced[0][1], /going to sleep/);
     assert.deepEqual(readSleepManifest(dir), { slept_at: T0, reason: "operator", narratives: ["claude-1"], host: "test-host" });
     assert.deepEqual(readExitRecord(dir), { exited_at: T0, reason: "operator", clean: true, pid: 4242 });
     assert.equal(h.shutdowns.length, 1);
@@ -414,21 +408,19 @@ describe("Sleeper: the routine", () => {
     assert.equal(h.sleeper.tick(), false);
   });
 
-  it("on a Mac's signal (a restart): no note, no manifest, only the exit record", async () => {
+  it("on a Mac's signal (a stop): no manifest, only the exit record", async () => {
     const h = harness({ live: [{ id: "claude-1", role: "worker" }] });
     const out = await h.sleeper.sleep("signal");
     assert.deepEqual(out, { reason: "signal", narratives: ["claude-1"], manifest: false, tailscaleDown: false });
-    assert.equal(h.announced.length, 0);
     assert.equal(existsSync(join(dir, SLEEP_MANIFEST)), false);
     assert.equal(readExitRecord(dir)?.reason, "signal");
     assert.equal(h.shutdowns.length, 1);
   });
 
-  it("on Fly's signal: tells, records, and leaves the tailnet before shutting down", async () => {
+  it("on Fly's signal: records, and leaves the tailnet before shutting down", async () => {
     const h = harness({ live: [{ id: "claude-1", role: "worker" }], bootRevive: true, fly: true });
     const out = await h.sleeper.sleep("signal");
     assert.deepEqual(out, { reason: "signal", narratives: ["claude-1"], manifest: true, tailscaleDown: true });
-    assert.equal(h.announced.length, 1);
     assert.deepEqual(readSleepManifest(dir)?.narratives, ["claude-1"]);
     assert.equal(h.downs.length, 1);
     assert.equal(h.shutdowns.length, 1);

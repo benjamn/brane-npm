@@ -30,7 +30,7 @@ can then be several times the size of one anyone would leave on.
 | Boot revive | `bootRevive`, run by `ManifestRestorer` on the first operator connection after boot | Revives the manifest's narratives with a prompt naming when the host slept and resumed; a wake alone revives nothing |
 | Wake recipe | `wake` in `GET /api/status`, saved on the device's registry entry (`expo/lib/registry.ts`) at every good probe | How to wake this host; "none" is a recipe, with a reason |
 | Wake listener | `src/fly/wake-listener.ts`, started first by `docker-entrypoint.sh`; `[http_service]` in the `fly.toml` (/fly) | A second, public port answering `/wake` with 204, so Fly Proxy has a service to start the machine for |
-| Asleep state, Wake, Sleep | `src/shared/sleep.ts` (the rules), `expo/lib/reach.ts` (the store), the switcher in `expo/app/index.tsx` | Probe failed and the entry has a recipe: *probably asleep*, with a Wake button; the active daemon's ⋯ offers Sleep |
+| Asleep state, Wake, Sleep | `src/shared/sleep.ts` (the rules), `expo/lib/reach.ts` (the store), the switcher in `expo/app/index.tsx` | Probe failed and the entry has a recipe: *probably asleep*. Every row with a URL recipe has one Wake/Sleep slot in its ⋯ (`sleepWakeSlot`): Sleep while it answers, Wake while it doesn't, disabled while checking, waking or going to sleep |
 | The undead count | `AwaitingTracker.narratives()` → `awaiting` on `GET /api/status`; `multiAwaitingGlow` (`src/shared/narrative-status.ts`); `sleepLine`/`postureLine` (`src/shared/sleep.ts`); `noteAwaiting` (`expo/lib/reach.ts`) | A daemon's row glows with its awaiting narratives' hues and says `3 sessions, 2 undead` |
 
 The shared shapes (`WakeRecipe`, `SleepStatus`) have one definition,
@@ -69,7 +69,7 @@ disagree on the contract.
   triggers are requests to the daemon to perform the routine; nothing
   outside stops the machine in the normal path. The routine's steps
   therefore take as long as they need (only the final shutdown has a
-  deadline, step 7), the machine stops because its main process ended,
+  deadline, step 6), the machine stops because its main process ended,
   and no credential for the platform has to exist anywhere on the host.
   An outside stop (`fly machine stop`, a deploy) still arrives as a
   signal, and the same routine runs from the signal handler, bounded.
@@ -92,13 +92,10 @@ inside Fly's `kill_timeout` of 120 s. In order:
 
 1. Which narratives are live: one `tmux list-sessions`, matched against
    narrative ids. Utility sessions keep the host awake like any session
-   but are not recorded or told: reviving one would replay its command.
-2. A `sleeping` lifecycle event into each, through `announceEvent()`, so
-   a parked `listen` wakes with the reason and what happens next. Then a
-   1 s pause for the bridges to hand it on.
-3. `~/.brane/sleep-manifest.json`: `{ slept_at, reason, narratives, host }`.
-4. `~/.brane/exit-record.json`: `{ exited_at, reason, clean: true, pid }`.
-5. On a Fly machine only, `tmux kill-server`, then 2 s for the panes'
+   but are not recorded: reviving one would replay its command.
+2. `~/.brane/sleep-manifest.json`: `{ slept_at, reason, narratives, host }`.
+3. `~/.brane/exit-record.json`: `{ exited_at, reason, clean: true, pid }`.
+4. On a Fly machine only, `tmux kill-server`, then 2 s for the panes'
    processes to exit. The daemon's exit unmounts the volume, and a live
    agent still holding it made that fail on a real machine (`error
    umounting /home/brane: EBUSY`, then a reboot); an idle sleep with no
@@ -106,10 +103,10 @@ inside Fly's `kill_timeout` of 120 s. In order:
    anyway, and revive reads the agent's session files, not its process.
    Never on a Mac, where a signal is `brane daemon stop` and the
    sessions outlive the daemon by design.
-6. `tailscale down`, 10 s budget, errors logged and ignored. Stale
+5. `tailscale down`, 10 s budget, errors logged and ignored. Stale
    WireGuard state for a node that vanished without saying so breaks
    iOS peers on the next boot (/fly).
-7. The daemon's ordinary shutdown, which exits 0. It waits for every
+6. The daemon's ordinary shutdown, which exits 0. It waits for every
    listener to close, so for every open connection, and with the tailnet
    already down a client's can't finish (measured: a phone's WebSocket
    held one sleep 31 s); an HTTP response in flight has no timeout at
@@ -117,10 +114,18 @@ inside Fly's `kill_timeout` of 120 s. In order:
    as it hands off here, and the process exits by then regardless; a
    signal's 90 s runs from its start.
 
+The routine writes nothing into the narratives. It used to append a
+`sleeping` note to each live one, which woke the agent's parked `listen`
+a second before its bridge dropped: nothing the agent could act on, and
+a paragraph-long card per sleep in every chat (claude-qdjo1yqn:97). The
+agent learns of the sleep from the prompt it is revived with, which says
+when the host slept and resumed, and the chat's `restarted` line marks
+the cycle. Older narratives keep the notes they got.
+
 **A stop is not a sleep.** A signal can't say who sent it, and on a
 Mac `brane daemon stop` is a SIGTERM whose tmux sessions all outlive
-the daemon. So on a signal, steps 2 and 3 happen only where boot revive
-is on and something is live, and step 5 only on Fly, whatever the config
+the daemon. So on a signal, step 2 happens only where boot revive is on
+and something is live, and steps 4 and 5 only on Fly, whatever the config
 says: a Mac that downed its tailnet on a stop would be off it until
 someone at the machine started the daemon again. Boot revive is the
 second guard: it skips any narrative whose tmux session is still alive,
@@ -224,8 +229,8 @@ a Mac reports `none`.
 
 The switcher's probe (`GET /api/status`) goes to the daemon's tailnet
 address; a stopped machine's tailnet node is offline, so the probe can't
-wake it. Only the Fly Proxy hostname wakes, touched on the Wake tap and
-nowhere else. `src/test/sleep-reach.test.ts` reads `expo/lib/reach.ts`
+wake it. Only the Fly Proxy hostname wakes, touched by the ⋯ menu's Wake
+and nowhere else. `src/test/sleep-reach.test.ts` reads `expo/lib/reach.ts`
 and checks the wake fetch appears once, inside `wakeDaemon`, with no
 timer or loop around it; the re-probes after a tap (every 5 s, up to a
 3 min ceiling that boot-to-first-narration will set) go to the tailnet.
@@ -290,9 +295,9 @@ with this branch's image:
 | `fly deploy --update-only --no-public-ips` with an `[http_service]`, no machines | No machine and no IP created, though `fly` prints "create 1 app machine" |
 | Idle rule, no sessions, no client | Slept exactly 15 min after boot; `tailscale down`; exit 0; Fly: "exited with exit code 0, not restarting". The machine stays *stopped* under `on-failure` |
 | Wake, `GET https://<app>.fly.dev/wake` on a stopped machine | Proxy starts it; VM up in ~0.8 s; 204 after ~2.1 s; tailnet rejoined at ~3 s; daemon listening, on its old port, at ~4 s |
-| Sleep act with one agent awaiting | 202 naming it; the agent's parked `listen` woke with the sleeping note; manifest; exit 0; machine stopped 3 s after the request |
+| Sleep act with one agent awaiting | 202 naming it; the agent's parked `listen` woke with the sleeping note (since removed); manifest; exit 0; machine stopped 3 s after the request |
 | `fly deploy` onto a running machine (the signal path) | SIGINT ran the routine: manifest, `tailscale down`, exit 0; the new image booted and revived the agent |
-| Volume unmount after a sleep with a live agent | `error umounting /home/brane: EBUSY`, then a reboot, until the routine learned to end the sessions on Fly (step 5); clean since |
+| Volume unmount after a sleep with a live agent | `error umounting /home/brane: EBUSY`, then a reboot, until the routine learned to end the sessions on Fly (step 4); clean since |
 | Boot revive | Agent revived ~5 s after the daemon listened. With the old fixed-2 s prompt, its wake prompt sat unsubmitted in Claude's input; since `revive-prompt.ts` it submits, and the agent is back awaiting ~9 s after its revive |
 
 So a woken host is reachable in seconds and its agents are back within

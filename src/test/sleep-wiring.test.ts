@@ -66,9 +66,7 @@ describe("POST /api/sleep's answer", () => {
       idleMinutes: () => null,
       bootRevive: () => true,
       tailscaleDown: () => false,
-      announce: () => {},
       shutdown: () => void shutdowns.push(1),
-      settleMs: 0,
     });
     assert.deepEqual(sleepActAnswer(sleeper), { status: 202, body: { ok: true, narratives: ["claude-aaaaaaaa"] } });
     const running = sleeper.sleep("operator");
@@ -115,9 +113,7 @@ describe("a wake nobody follows keeps the waiting manifest", () => {
       idleMinutes: () => null,
       bootRevive: () => true,
       tailscaleDown: () => false,
-      announce: () => {},
       shutdown: () => {},
-      settleMs: 0,
     });
     await sleeper.sleep("idle");
     const kept = readSleepManifest(dir)!;

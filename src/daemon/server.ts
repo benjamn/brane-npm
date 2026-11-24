@@ -1349,12 +1349,6 @@ export async function startServer(config: DaemonConfig): Promise<void> {
     tailscaleDown: (reason) => tailscaleDownWanted(reason, process.env, getConfig("sleep.tailscale_down", db)),
     endSessions: () => endsSessions(process.env),
     runEndSessions: () => runEndSessions(resolveTmux(), (m) => console.log(`[sleep] ${m}`)),
-    announce: (nid, content) => {
-      // A lifecycle row, like `restarted`: the daemon's voice, no source, so
-      // it is an arrival for the agent's parked listen.
-      const event = appendEvent(db, nid, "sleeping", { content });
-      announceEvent(nid, event, "brane", notifyListenWaiters, recordEventMentions);
-    },
     shutdown: () => doShutdown(),
     forceExit: () => process.exit(0),
     log: (m) => console.log(`[sleep] ${m}`),

@@ -7,6 +7,26 @@ message in `benjamn/brane-npm`, the repository npm publishes from (see
 [docs/releasing.md](docs/releasing.md)), with pull request links removed.
 This file travels in the npm tarball.
 
+## 0.3.16 - 2026-11-24
+
+Follow-ups to sleep and wake on Fly machines.
+
+- Wake and Sleep now live in the same place for every daemon that can be
+  woken from the app: its row's ⋯ menu in the brane switcher. It offers
+  Sleep while the machine answers and Wake while it doesn't. While it is
+  being checked, woken or put to sleep, the menu shows that state instead,
+  greyed out, so a second tap can't send it twice. The separate Wake
+  button beside the ⋯ is gone. Sleep is offered on every such daemon's
+  row, not only the one you are connected to. On a page served by the
+  machine you put to sleep, Sleep first moves you to the shared app, as it
+  already did for the connected daemon
+  ([#684](https://github.com/benjamn/brane/pull/684)).
+- Putting a host to sleep no longer writes a note into each running
+  agent's narrative. The note woke the agent about a second before the
+  machine stopped, too late to act on. A revived agent's prompt still
+  says when its host slept and resumed
+  ([#683](https://github.com/benjamn/brane/pull/683)).
+
 ## 0.3.15 - 2026-11-24
 
 A daemon on a Fly machine can now sleep and be woken from the app. An
