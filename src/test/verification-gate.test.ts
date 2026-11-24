@@ -103,6 +103,7 @@ describe("classifyRoute: default deny over a named free list", () => {
     assert.deepEqual(classifyRoute("POST", "/api/tokens/t1/revoke"), { kind: "act", act: "revoke" });
     assert.deepEqual(classifyRoute("POST", "/api/credentials/begin"), { kind: "act", act: "enroll" });
     assert.deepEqual(classifyRoute("POST", "/api/credentials/cred-1/revoke"), { kind: "act", act: "revoke-credential" });
+    assert.deepEqual(classifyRoute("POST", "/api/sleep"), { kind: "act", act: "sleep" });
   });
 
   it("treats anything unlisted as an unnamed act, never as free", () => {

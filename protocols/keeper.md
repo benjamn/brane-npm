@@ -692,7 +692,9 @@ cross-narrative addressing. Agents may use `/keeper` the same way
 the operator does: informational queries carry the same authority
 from anyone, but imperatives are subject to the same authority
 ceiling regardless of who issued them (irreversibility escalates,
-scope changes are declined, etc.).
+scope changes are declined, etc.). An agent's imperative needs one
+thing more: the chain to an operator signal that the prelude asks of
+any agent's message. Without it, the Keeper declines and says why.
 
 ### Informational vs imperative
 

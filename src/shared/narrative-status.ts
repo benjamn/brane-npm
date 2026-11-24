@@ -12,6 +12,11 @@
  * then kept, so the operator can learn sessions by color. 🎨 Recolor moves it
  * to a random hue still clear of the others.
  *
+ * A daemon's row in the brane switcher wears the glows of the narratives
+ * awaiting on it (`multiAwaitingGlow`): one narrative, its ring, in its own
+ * hue; several, the rim split by edge, one hue each. `GET /api/status` lists
+ * them as `awaiting`, and the row counts them as the undead (docs/sleep.md).
+ *
  * The fact comes from the daemon's `awaiting` bit (src/daemon/awaiting.ts).
  * It is only honoured while bridged: a parked call cannot outlive its socket,
  * so an unbridged narrative claiming it is a stale client-side value.
@@ -52,3 +57,41 @@ export function awaitingGlow(h: number): string {
  *  screen needs one subscription for everything a row depends on. */
 export const AWAITING_STATUS = "awaiting";
 export const NOT_AWAITING_STATUS = "not_awaiting";
+
+/** The ring's three centred layers as (offset, blur) pairs for one edge:
+ *  offset o, blur b and spread -b put the hole's near edge o - b inside the
+ *  box, the ring's spread (1, 2, 4), and the other three sides -b past the
+ *  box, out of the blur's reach, exactly as the ring's one-sided top layer
+ *  does. Lightness, chroma and alpha are the ring's. */
+const EDGE_LAYERS: Array<[offset: number, blur: number, l: number, c: number, a: number]> = [
+  [4, 3, 0.78, 0.16, 0.95],
+  [20, 18, 0.74, 0.15, 0.55],
+  [44, 40, 0.7, 0.14, 0.28],
+];
+
+/** Top, bottom, left, right: the order edges take hues. A switcher row is
+ *  wide and short, so the long edges go first and two hues read as two bands. */
+const EDGES: Array<[dx: number, dy: number]> = [[0, 1], [0, -1], [1, 0], [-1, 0]];
+
+/** How many hues one row can wear at once before the edges run out. */
+export const GLOW_EDGES = EDGES.length;
+
+/** The glow of several awaiting narratives on one row — a daemon's in the
+ *  brane switcher. One hue is {@link awaitingGlow}, the same ring the
+ *  narrative's own card wears. Two or more split the rim by edge, each edge
+ *  in one narrative's hue, so the colors and the count read together; past
+ *  {@link GLOW_EDGES} the edges run out, and the row's text carries the
+ *  count. Undefined for no hues, so the style can be spread in. */
+export function multiAwaitingGlow(hues: number[]): string | undefined {
+  if (hues.length === 0) return undefined;
+  if (hues.length === 1) return awaitingGlow(hues[0]);
+  const px = (n: number) => (n === 0 ? "0" : `${n}px`);
+  const layers: string[] = [];
+  hues.slice(0, EDGES.length).forEach((h, i) => {
+    const [dx, dy] = EDGES[i];
+    for (const [o, b, l, c, a] of EDGE_LAYERS) {
+      layers.push(`inset ${px(dx * o)} ${px(dy * o)} ${b}px -${b}px oklch(${l} ${c} ${h} / ${a})`);
+    }
+  });
+  return layers.join(", ");
+}

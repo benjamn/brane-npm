@@ -9,6 +9,7 @@
  */
 
 import { activeDaemonBraneId, daemonToAdopt } from "@shared/view-url";
+import type { WakeRecipe } from "@shared/sleep";
 
 export interface DaemonEntry {
   id: string;          // "user@hostname" for display
@@ -28,6 +29,18 @@ export interface DaemonEntry {
    *  An archived entry still counts toward this browser's tailnet, because it
    *  still holds a token. A fresh meld of the same brane clears it. */
   archived?: boolean;
+  /** How to wake this host when its tailnet address stops answering
+   *  (docs/sleep.md), from the daemon's `GET /api/status`. Saved by every
+   *  probe that answers, so a device melded before the field learns it
+   *  without a fresh meld. Absent until then: such an entry reads as
+   *  *unreachable*, never *asleep*. */
+  wake?: WakeRecipe;
+  /** When a probe last answered (ms). */
+  lastSeenAt?: number;
+  /** When this device put the host to sleep (`POST /api/sleep` → 202), so
+   *  the switcher says *asleep* at once instead of waiting out a probe.
+   *  Cleared by the next probe that answers. */
+  sleptAt?: number;
 }
 
 /** The entries this browser connects to: everything not archived. */

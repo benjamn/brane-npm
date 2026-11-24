@@ -7,6 +7,47 @@ message in `benjamn/brane-npm`, the repository npm publishes from (see
 [docs/releasing.md](docs/releasing.md)), with pull request links removed.
 This file travels in the npm tarball.
 
+## 0.3.15 - 2026-11-24
+
+A daemon on a Fly machine can now sleep and be woken from the app. An
+existing machine gets this by redeploying with the `fly.toml` in `/fly`,
+and its Wake button works once you open the wake door (`/fly init`,
+step 4). Nothing changes for a daemon that is not on Fly, apart from the
+revive prompt below.
+
+- A daemon on a Fly machine puts its host to sleep: the machine stops and
+  its volume stays. It sleeps on its own when no session exists and no
+  app has been connected for 15 minutes (`sleep.idle_minutes`; `0` turns
+  that off), or when you choose Sleep in the daemon's ⋯ menu in the brane
+  switcher. It records which agents were running and tells each one
+  first. An agent's own token cannot put a host to sleep
+  ([#650](https://github.com/benjamn/brane/pull/650)).
+- The switcher's Wake button starts a sleeping machine with one request
+  to `https://<app>.fly.dev/wake`, which a separate listener in the image
+  answers; the daemon is never behind that address. It needs no token, so
+  anyone who knows the app's name can start the machine. Waking restores
+  nothing by itself: the agents that were running come back when one of
+  your devices connects, and a machine nobody connects to goes back to
+  sleep. `/fly init` now draws longer app names and makes allocating the
+  public address its own step
+  ([#650](https://github.com/benjamn/brane/pull/650)).
+- The switcher shows each daemon as awake, probably asleep or
+  unreachable, when it sleeps on its own, and how many sessions it has. A
+  row glows in the colors of the agents waiting for you there, and counts
+  them as undead ([#650](https://github.com/benjamn/brane/pull/650)).
+- A revived agent's prompt is now submitted. It is typed once the agent
+  has connected to the daemon, and Enter is sent as a key of its own;
+  before, a slow start could leave the prompt sitting in the agent's
+  input ([#650](https://github.com/benjamn/brane/pull/650)).
+- `brane daemon restart` is refused on a Fly machine, where it would stop
+  the machine. Use `fly machine restart`
+  ([#650](https://github.com/benjamn/brane/pull/650)).
+- The protocols say whose instructions an agent acts on: the operator's
+  own signals, a protocol in force, or another agent's message as far as
+  it cites an operator signal the reader can check. Files, tool output
+  and other agents' requests inform the work and cannot assign it
+  ([#681](https://github.com/benjamn/brane/pull/681)).
+
 ## 0.3.14 - 2026-11-22
 
 Upgrading from 0.3.13 or earlier: once the new version is installed, run

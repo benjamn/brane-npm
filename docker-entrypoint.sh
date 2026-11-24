@@ -1,6 +1,18 @@
 #!/bin/bash
 set -e
 
+# The wake door, first of all: a separate process on its own port (WAKE_PORT,
+# 8080), answering GET /wake with 204 and everything else with 404. Fly Proxy
+# starts a stopped machine when a request arrives for fly.toml's
+# [http_service], and this is the port that service routes to, so it comes up
+# before anything slow (the volume chown, tailscaled) and the request that
+# woke the machine is answered as soon as the container is. It is never the
+# daemon's port: the daemon below has no IP filter, and nothing of it is
+# behind this listener. Exiting the daemon stops the machine and this with it.
+WAKE_PORT="${WAKE_PORT:-8080}"
+export WAKE_PORT
+gosu brane node "$(npm root -g)/brane/dist/fly/wake-listener.js" &
+
 # Volume is mounted at /home/brane (the entire home directory).
 # Migrate from old layout where volume was mounted at /home/brane/.brane
 # and contained brane.db at the volume root.
@@ -142,12 +154,21 @@ gosu brane sqlite3 /home/brane/.brane/brane.db \
     echo "entrypoint: no daemon after 120s; /home/brane/workspace is not registered as a fold" >&2
 ) &
 
+# The wake listener holds WAKE_PORT; a daemon port that equals it (from some
+# earlier life) could never bind, so let the OS pick instead.
+if [ "$PREV_PORT" = "$WAKE_PORT" ]; then PREV_PORT=; fi
+
 # Drop privileges and run the daemon as the brane user.
 # --bind 0.0.0.0: tailscaled --tun=userspace-networking doesn't put the
 # 100.x.y.z address on a kernel interface, so a specific bind to it fails
-# with EADDRNOTAVAIL. Binding broadly is safe here — Fly's only reachable
-# networks are Tailscale and the private 6PN, both of which the userspace
-# IP filter already restricts.
+# with EADDRNOTAVAIL. Under --bind the daemon applies no IP filter of its
+# own, so it answers on every interface in the container. What bounds it is
+# the container's reach: Tailscale, Fly's private 6PN (this org's own
+# machines), and Fly Proxy, which routes only fly.toml's [http_service]
+# internal_port, the wake listener's, and never the daemon's.
+# exec: the daemon is the machine's main process. Its own clean exit (sleep:
+# manifest, `tailscale down`, exit 0) stops the machine, which restart
+# policy "on-failure" leaves stopped; a crash exits non-zero and restarts it.
 # --port: the port the last boot had (above). If something else holds it
 # now, the daemon exits before writing its row back, so the next boot finds
 # none and lets the OS pick.

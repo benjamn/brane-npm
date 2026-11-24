@@ -137,3 +137,19 @@ describe("AGOG wiring", () => {
     assert.equal(cancelMcpCall(c, "1", () => {}), false, "a second cancel is a no-op");
   });
 });
+
+describe("AwaitingTracker.narratives: the undead, for GET /api/status", () => {
+  it("lists the narratives parked right now, oldest park first, and none once they resolve", () => {
+    const { tr } = tracker();
+    assert.deepEqual(tr.narratives(), []);
+    tr.parked("claude-bbbbbbbb");
+    tr.parked(SELF);
+    tr.parked(SELF); // a second bridge of the same narrative
+    assert.deepEqual(tr.narratives(), ["claude-bbbbbbbb", SELF]);
+    tr.resolved(SELF, "delivered");
+    assert.deepEqual(tr.narratives(), ["claude-bbbbbbbb", SELF], "still parked on its other bridge");
+    tr.resolved(SELF, "closed");
+    tr.resolved("claude-bbbbbbbb", "timeout");
+    assert.deepEqual(tr.narratives(), []);
+  });
+});

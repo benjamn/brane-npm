@@ -19,6 +19,16 @@ import { daemonFromHash, withoutConnectionHash, withoutConnectionParams } from "
 import type { ProtocolNamespace } from "@shared/protocol-names";
 import { formatSeqModeParam, formatSeqParam, type SeqSelectionMode } from "@shared/export-selection";
 import { verificationRefusal, type StatusVerification, type VerificationKind } from "@shared/verification-hop";
+import {
+  SWITCHER_PROBE_ATTEMPTS,
+  SWITCHER_PROBE_TIMEOUT_MS,
+  parseSleepIntent,
+  sleepIntentDue,
+  sleepIntentFromHash,
+  withoutSleepIntent,
+  type SleepStatus,
+  type WakeRecipe,
+} from "@shared/sleep";
 import { lastTerminalSize } from "./terminal";
 import { adoptDaemonByBraneId } from "./registry";
 
@@ -127,6 +137,14 @@ export interface DaemonStatus {
   /** The verification gate's posture, and this device's own window
    *  (docs/passkeys.md). Absent from a daemon that predates the gate. */
   verification?: StatusVerification;
+  /** How to wake this host once it sleeps (docs/sleep.md). Untrusted shape:
+   *  read it through `parseWakeRecipe`. Absent from a daemon before it. */
+  wake?: WakeRecipe;
+  /** The host's own sleep posture; read through `parseSleepStatus`. */
+  sleep?: SleepStatus;
+  /** The narratives parked awaiting direction right now, the undead; read
+   *  through `parseAwaitingNids`. Absent from a daemon before it. */
+  awaiting?: string[];
 }
 
 const STORAGE_KEY = "brane_conn";
@@ -184,6 +202,27 @@ export function parseConnectionParams(): ConnectionParams | null {
  *  across in-app navigation and tab changes (claude-7irbudpw:65).
  *  `clearStoredConnection` still ends the flow once the meld is resolved.
  */
+const SLEEP_INTENT_KEY = "brane_sleep_intent";
+
+/** Whether this tab arrived asking to put `braneId` to sleep (a hop out of
+ *  an isolated tab, within `SLEEP_INTENT_TTL_MS`). True once: the intent is
+ *  spent by being read, and a stale or unreadable one is dropped. */
+export function takeSleepIntent(braneId: string | null | undefined): boolean {
+  if (typeof window === "undefined") return false;
+  let intent = null;
+  try {
+    const raw = sessionStorage.getItem(SLEEP_INTENT_KEY);
+    if (!raw) return false;
+    intent = parseSleepIntent(JSON.parse(raw));
+  } catch {}
+  const due = sleepIntentDue(intent, braneId, Date.now());
+  const stale = !intent || !sleepIntentDue(intent, intent.braneId, Date.now());
+  if (due || stale) {
+    try { sessionStorage.removeItem(SLEEP_INTENT_KEY); } catch {}
+  }
+  return due;
+}
+
 function consumeConnectionFromLocation(): void {
   if (typeof window === "undefined" || !window.history?.replaceState) return;
   // `#daemon=` (an in-app link opened in a new tab) names which melded daemon
@@ -193,15 +232,21 @@ function consumeConnectionFromLocation(): void {
   // of the token. See DAEMON_PARAM.
   const daemon = daemonFromHash(window.location.hash);
   if (daemon) adoptDaemonByBraneId(daemon);
+  // `#sleep=` (a hop out of an isolated tab's Sleep, @shared/sleep): kept
+  // for the switcher, which opens the confirm once that daemon is connected.
+  const sleep = sleepIntentFromHash(window.location.hash);
+  if (sleep) {
+    try { sessionStorage.setItem(SLEEP_INTENT_KEY, JSON.stringify({ braneId: sleep, at: Date.now() })); } catch {}
+  }
   const conn = connFromLocation();
-  if (!conn && !daemon) return;
+  if (!conn && !daemon && !sleep) return;
   if (conn) {
     try { sessionStorage.setItem(STORAGE_KEY, JSON.stringify(conn)); } catch { return; }
   }
   const clean =
     window.location.pathname +
     withoutConnectionParams(window.location.search) +
-    withoutConnectionHash(window.location.hash);
+    withoutSleepIntent(withoutConnectionHash(window.location.hash));
   window.history.replaceState(window.history.state, "", clean);
 }
 consumeConnectionFromLocation();
@@ -238,8 +283,11 @@ function fetchAttempts(
   url: string,
   init: RequestInit,
   timeoutMs: number = DEFAULT_TIMEOUT_MS,
+  /** A ceiling under `MAX_ATTEMPTS`, for a probe that would rather be
+   *  re-sent later than wait out three timeouts now. */
+  maxAttempts: number = MAX_ATTEMPTS,
 ): Promise<Response> {
-  const attempts = isRetryableMethod(init.method ?? "GET") ? MAX_ATTEMPTS : 1;
+  const attempts = isRetryableMethod(init.method ?? "GET") ? Math.max(1, Math.min(maxAttempts, MAX_ATTEMPTS)) : 1;
 
   // The caller's own signal cancels the request, and its body after it: a
   // stream read after this returns is still tied to `controller`.
@@ -283,14 +331,15 @@ async function fetchWithTimeout(
   url: string,
   init: RequestInit,
   timeoutMs: number = DEFAULT_TIMEOUT_MS,
+  maxAttempts: number = MAX_ATTEMPTS,
 ): Promise<Response> {
-  const res = await fetchAttempts(url, init, timeoutMs);
+  const res = await fetchAttempts(url, init, timeoutMs, maxAttempts);
   if (res.status !== 403 || !verificationListener) return res;
   const kind = verificationRefusal(res.status, await res.clone().json().catch(() => null));
   const conn = kind ? connFromUrl(url) : null;
   if (!kind || !conn) return res;
   const verified = await verificationListener(conn, kind);
-  return verified ? fetchAttempts(url, init, timeoutMs) : res;
+  return verified ? fetchAttempts(url, init, timeoutMs, maxAttempts) : res;
 }
 
 /** Asked when the gate refuses a request: resolves true once this device has
@@ -1342,8 +1391,50 @@ export async function probeDaemon(
   const res = await fetchWithTimeout(apiUrl(conn, "/api/status"), {
     headers: NO_HEADERS,
   });
-  if (!res.ok) throw new Error(`Status ${res.status}`);
+  // The status rides on the error: any answer at all means the host is up
+  // (`probeHeardHost`, @shared/sleep).
+  if (!res.ok) throw Object.assign(new Error(`Status ${res.status}`), { status: res.status });
   return res.json() as Promise<DaemonStatus>;
+}
+
+/** `probeDaemon` on the switcher's budget (`SWITCHER_PROBE_TIMEOUT_MS`, one
+ *  attempt): for showing whether a daemon is awake, asleep or unreachable,
+ *  where an offline tailnet peer would otherwise hold the row on "checking…"
+ *  for minutes. Melding and adding a daemon use `probeDaemon`, which waits
+ *  as long as any request does. */
+export async function probeDaemonQuick(
+  host: string,
+  token: string,
+): Promise<DaemonStatus> {
+  const conn: ConnectionParams = { host, token };
+  const res = await fetchWithTimeout(
+    apiUrl(conn, "/api/status"),
+    { headers: NO_HEADERS },
+    SWITCHER_PROBE_TIMEOUT_MS,
+    SWITCHER_PROBE_ATTEMPTS,
+  );
+  // The status rides on the error: any answer at all means the host is up
+  // (`probeHeardHost`, @shared/sleep).
+  if (!res.ok) throw Object.assign(new Error(`Status ${res.status}`), { status: res.status });
+  return res.json() as Promise<DaemonStatus>;
+}
+
+/** Put the daemon's host to sleep (docs/sleep.md): it records which
+ *  narratives were live, answers 202, shuts down, and its machine stops.
+ *  An act, so the verification gate may ask for a proof first, through the
+ *  lock sheet, as for any other (`fetchWithTimeout`); dismissed, it rejects
+ *  with the 403. Bodiless, so no preflight, and a POST, so never retried:
+ *  a lost 202 may still have put the host to sleep. */
+export async function sleepDaemon(conn: ConnectionParams): Promise<{ ok: true; narratives: string[] }> {
+  const res = await fetchWithTimeout(apiUrl(conn, "/api/sleep"), {
+    method: "POST",
+    headers: NO_HEADERS,
+  });
+  const data = await res.json().catch(() => ({}));
+  // 409: a sleep is already under way there, which is what we asked for.
+  if (res.status === 409) return { ok: true, narratives: [] };
+  if (!res.ok) throw new Error(data.error ?? `Sleep ${res.status}`);
+  return { ok: true, narratives: Array.isArray(data.narratives) ? data.narratives : [] };
 }
 
 /** An approval for the ceremony page: `verify` for this device's own token

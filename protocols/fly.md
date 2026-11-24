@@ -1,4 +1,4 @@
-# /fly [init|new|deploy|up|down|meld|status|logs|destroy]
+# /fly [init|new|deploy|up|sleep|wake|down|meld|status|logs|destroy]
 
 Running brane daemons on Fly.io machines, reached over Tailscale.
 **Experimental.** It needs a tailnet you administer and an authenticated
@@ -17,14 +17,35 @@ running it.
 
 ## Mental Model
 
-**Perch and relaunch:** machines are disposable, volumes are permanent.
-Idling costs nothing.
+**Stop, not destroy.** Hosts sleep, narratives don't (`docs/sleep.md`):
+a machine that isn't wanted is *stopped*, its volume attached and its
+sessions on disk, and the next wake brings them back.
 
 | Verb | What it does |
 |------|--------------|
-| `down` | Destroy all machines. Zero cost. Volumes preserved. |
-| `up` | One machine per region that has a volume, reattaching it. |
-| `deploy` | Build and push the image; update running machines only, never create one. |
+| `sleep` | Stop a machine. The daemon's own exit; the app's Sleep act; or `fly machine stop` from outside. |
+| `wake` | Start a stopped machine. The app's Wake button (`https://<app>.fly.dev/wake`), or `fly machine start`. |
+| `deploy` | Build and push the image; update existing machines, never create or start one. |
+| `up` | Provisioning: one machine per region that has a volume, reattaching it. |
+| `down` | Provisioning: destroy all machines. Volumes preserved. |
+
+**Sleep and wake are the daily verbs.** `up` and `down` create and
+destroy machines, and are for when the fleet's shape changes, not for
+the end of a day.
+
+Sleep is the daemon's elective exit: it narrates, writes
+`~/.brane/sleep-manifest.json`, takes the node off the tailnet
+(`tailscale down`) and exits 0, and Fly leaves the machine stopped (see
+`[[restart]]` below). It happens when the operator taps Sleep, or
+automatically when the host has had no sessions for
+`BRANE_SLEEP_IDLE_MINUTES` after its last client left. Wake is
+necessarily from outside, since nothing on a stopped machine runs: Fly
+Proxy starts the machine when a request arrives for its wake port.
+
+What a stopped machine costs ([pricing](https://docs.fly.io/about/pricing)):
+no compute; its root filesystem at $0.15/GB/month (the image is about
+2 GB, so about $0.30 a month); and the 10 GB volume at $1.50 a month,
+which is billed whether the machine runs, stops or doesn't exist.
 
 Volumes are the source of truth: each represents a region the operator
 committed to, and machines come and go around them.
@@ -45,10 +66,13 @@ image at `/opt/brane/models`, outside the volume.
   ```
   That needs `brane` on `PATH`. Without it (`npx brane`), the install
   directory is the one above `dist/cli.js`.
+- **The wake URL**: `https://$APP.fly.dev/wake`. It answers only once the
+  operator has allocated a public IP ([/fly init](#fly-init), step 4).
 - **The `fly.toml`**, written beside the image's files (`<app>` is `$APP`):
   ```toml
   app = "<app>"
   primary_region = "sjc"
+  kill_timeout = 120
 
   [build]
     dockerfile = "Dockerfile"
@@ -57,26 +81,66 @@ image at `/opt/brane/models`, outside the volume.
     source = "brane_data"
     destination = "/home/brane"
 
+  [http_service]
+    internal_port = 8080
+    auto_start_machines = true
+    auto_stop_machines = "off"
+    min_machines_running = 0
+
+  [[restart]]
+    policy = "on-failure"
+    retries = 3
+
   [env]
     TS_HOSTNAME = "daemon-<app>"
+    BRANE_SLEEP_IDLE_MINUTES = "15"
 
   [[vm]]
     size = "performance-1x"
     memory = "2gb"
   ```
-  The entrypoint appends the region, so a machine's tailnet name is
-  `daemon-<app>-<region>`. There is no `[http_service]`: Tailscale is
-  the only way in, so Fly's proxy has nothing to route, and without a
-  service it neither warns that nothing is listening nor stops or starts
-  machines on its own.
+  Line by line ([fly.toml reference](https://docs.fly.io/reference/configuration),
+  [autostart/autostop](https://docs.fly.io/launch/autostart-stop)):
+  - `kill_timeout = 120`: when Fly stops a machine from outside (`fly
+    machine stop`, a deploy's update) it sends `SIGINT` and waits this many
+    seconds (default 5, max 300) before killing it, time for the daemon's
+    own clean shutdown.
+  - `[http_service]` is the **wake door**, nothing more. Fly Proxy
+    terminates TLS on 443 and routes to `internal_port`, where the image
+    runs a separate listener (`dist/fly/wake-listener.js`) that answers
+    `GET /wake` with 204 and everything else with 404. It is never the
+    daemon's port: the daemon runs under `--bind 0.0.0.0`, where it has no
+    IP filter, and stays reachable only over Tailscale.
+  - `auto_start_machines = true`: a request for the app starts a stopped
+    machine and is routed to it. That's the wake.
+  - `auto_stop_machines = "off"`: the proxy never stops a machine. It
+    couldn't judge: all real traffic goes over Tailscale, so the proxy sees
+    none, and `"stop"` would put every machine to sleep minutes after it
+    woke. Stopping is the daemon's.
+  - `min_machines_running = 0`: no machine has to be running. Fly ignores
+    it unless `auto_stop_machines` is `"stop"` or `"suspend"`; it's written
+    so nobody wonders.
+  - `[[restart]] policy = "on-failure"`: Fly restarts a machine only when
+    its process exits non-zero. A daemon going to sleep exits 0, which
+    leaves the machine stopped; a crash restarts it, up to `retries`
+    times. This is Fly's default, written out because sleep depends on it:
+    `"always"` would turn every sleep into a reboot.
+  - `TS_HOSTNAME`: the entrypoint appends the region, so a machine's
+    tailnet name is `daemon-<app>-<region>`.
+  - `BRANE_SLEEP_IDLE_MINUTES`: the one automatic sleep. A host with no
+    sessions sleeps this many minutes after its last client disconnects.
+  - **No `[checks]`**, on purpose. A health check that fails while
+    tailscaled is still reconnecting lets Fly declare a slow boot dead.
+    The image's `HEALTHCHECK` is Docker's and Fly ignores it.
 
 ## /fly init
 
 One-time setup.
 
-1. Create the app and remember its name:
+1. Create the app and remember its name. The name is the only secret
+   the wake door has (`<app>.fly.dev`), so it gets 64 random bits:
    ```bash
-   APP=brane-$(openssl rand -hex 3)
+   APP=brane-$(openssl rand -hex 8)
    fly apps create "$APP" --org <org>
    brane config fly.app "$APP"
    ```
@@ -86,6 +150,27 @@ One-time setup.
    `TS_CLIENT_ID` is not a secret.
 3. Run [/fly deploy](#fly-deploy). With no machines it only builds and
    registers the image.
+4. **Open the wake door: the operator's deliberate act**, never an
+   agent's default. Without a public IP the proxy has no address to
+   answer on, and the machine can be woken only by `fly machine start`
+   from a shell. A shared IPv4 and IPv6 are free
+   ([pricing](https://docs.fly.io/about/pricing)). Take both: the IPv4
+   is the one every network reaches (plenty of cellular and hotel
+   networks have no IPv6), and `<app>.fly.dev` answers on whichever the
+   client asks for:
+   ```bash
+   fly ips allocate-v4 --shared -a "$APP"
+   fly ips allocate-v6 -a "$APP"
+   ```
+   What it exposes, in plain words: anyone who knows the hostname can
+   start the machine, and each such start costs minutes at the running
+   rate until the idle rule puts it back to sleep. They reach only the
+   wake listener, which says 204 or 404; the daemon is not behind it.
+   An app named before this step existed (`brane-` and 6 hex digits) has
+   a door anyone patient could find; whether to open it is the
+   operator's call.
+   `fly ips list -a "$APP"` shows the door, and `fly ips release <ip>
+   -a "$APP"` (each address) takes it off.
 
 Then `/fly new` for each region.
 
@@ -102,19 +187,26 @@ fly volumes create brane_data --region <region> --size 10 --yes -a "$APP"
 ## /fly deploy
 
 Build the image on Fly's remote builder from this install, and update
-running machines. `--update-only` means it **never creates machines**, so
-it's safe while scaled to zero; the next `/fly up` uses the new image.
+existing machines. `--update-only` means it **never creates machines**,
+so it's safe while scaled to zero; the next `/fly up` uses the new image.
+`--no-public-ips` keeps it from allocating addresses on its own: the wake
+door opens only by [/fly init](#fly-init)'s step 4.
 
 ```bash
 CTX=$(mktemp -d)
 cp "$BRANE_ROOT/Dockerfile" "$BRANE_ROOT/docker-entrypoint.sh" "$CTX/"
 (cd "$BRANE_ROOT" && npm pack --pack-destination "$CTX")
 # write the fly.toml above into "$CTX/fly.toml"
-(cd "$CTX" && fly deploy --update-only -a "$APP")
+(cd "$CTX" && fly deploy --update-only --no-public-ips -a "$APP")
 ```
 
 `fly` may print `Process groups have changed. This will: create 1 "app"
 machine` on an app with no machines; `--update-only` still creates none.
+
+**A deploy doesn't start a stopped machine** (and exits 0 all the same):
+a sleeping machine gets the new image on its next wake. A running one is
+restarted onto it, through the same `SIGINT` and `kill_timeout` as
+`fly machine stop`.
 
 ## /fly up
 
@@ -127,18 +219,77 @@ fly volumes list -a "$APP" --json   # the regions with a brane_data volume
 fly scale count 1 --region <region> --yes -a "$APP"   # once per region
 ```
 
-Running machines are left alone. Watch the first boot with `/fly logs`:
-the machine is ready once its daemon logs `listening on`.
+Running machines are left alone, and so are stopped ones: a region
+whose machine is asleep needs [/fly wake](#fly-wake), not `up`. Watch
+the first boot with `/fly logs`: the machine is ready once its daemon
+logs `listening on`.
+
+## /fly sleep
+
+The normal paths need no shell: the app's **Sleep** act, or the idle
+rule (`BRANE_SLEEP_IDLE_MINUTES`, in the `fly.toml`), each of which has
+the daemon narrate, write its manifest, leave the tailnet and exit 0.
+
+From a shell, the outside hand, for a daemon that is wedged or for
+stopping a machine without the app:
+
+```bash
+fly machines list -a "$APP"            # the started ones
+fly machine stop <id> -a "$APP"
+```
+
+Fly sends the daemon `SIGINT` and waits up to `kill_timeout` (120 s)
+before killing it. The machine stays stopped, its volume attached.
+
+Every sleep ends every tmux session on the machine before the daemon
+exits, including one started by hand over `fly ssh console`. Only
+narratives' sessions hold the host awake or come back on wake.
+
+To restart the daemon on a machine, restart the machine (`fly machine
+restart <id> -a "$APP"`); `brane daemon restart` is refused there,
+since the daemon is the machine's main process.
+
+## /fly wake
+
+The normal path is the app's **Wake** button, which fetches the wake URL.
+From a shell, either:
+
+```bash
+curl -s -o /dev/null -w '%{http_code}\n' "https://$APP.fly.dev/wake"   # 204 once up
+fly machine start <id> -a "$APP"
+```
+
+The URL wakes *a* stopped machine in the app, the nearest one to the
+caller; `fly machine start` picks one by id. Without a public IP (see
+[/fly init](#fly-init), step 4) the URL fails and only `fly machine
+start` works.
+
+The 204 means the machine is running, not that the daemon is ready: a
+wake costs a whole boot (tailscaled rejoining, the daemon starting)
+before the app can reach it. The agents the last Sleep recorded come
+back only when the app connects, so a `curl` or a stranger's wake
+starts none of them. Measured on a
+`performance-1x` in ewr: the 204 in about 2 s, the daemon listening about
+4 s after the request, and a revived agent back in its loop about 10 s
+after that. `/fly logs` shows `listening on` when the daemon is up.
 
 ## /fly down
 
-Destroy all machines; volumes and their data survive. Take each running
-machine off the tailnet first: stale WireGuard state on the volume breaks
-some peers (iOS especially) on the next `up`.
+Destroy all machines; volumes and their data survive. Usually
+[/fly sleep](#fly-sleep) is what's wanted: a stopped machine costs about
+$0.30 a month more than none, and only a machine that exists can be
+woken from the app. Destroy when a region is retired for a long while,
+or to recreate machines from scratch with `/fly up`.
+
+Take each machine off the tailnet first: stale WireGuard state on the
+volume breaks some peers (iOS especially) on the next start. A daemon
+that went to sleep on its own already ran `tailscale down`, so stopped
+machines need nothing. Only a running machine whose daemon is wedged
+needs it by hand:
 
 ```bash
 fly machines list -a "$APP"          # the started ones
-fly ssh console -a "$APP" --machine <id> -C "tailscale down"   # each
+fly ssh console -a "$APP" --machine <id> -C "tailscale down"   # only if wedged
 fly scale count 0 --yes -a "$APP"
 ```
 
@@ -157,9 +308,13 @@ brane meld --remote \
   --ask  "fly ssh console -a <app> -C 'gosu brane brane meld --connection'"
 ```
 
-1. `--send` sets the secret, which restarts the machines; each daemon
-   adopts the hash as a device row as it starts, once (a hash it has ever
-   seen, revoked or not, never comes back), and drops the variable.
+Wake the machine first ([/fly wake](#fly-wake)): setting a secret
+doesn't start a stopped machine, and `--ask` needs one running.
+
+1. `--send` sets the secret, which restarts the running machines; each
+   daemon adopts the hash as a device row as it starts, once (a hash it
+   has ever seen, revoked or not, never comes back), and drops the
+   variable.
 2. `--ask` reads back the daemon's address (`brane meld --connection` mints
    nothing), retrying for 3 minutes, and the QR is printed.
 
@@ -171,8 +326,9 @@ the app's Meld sheet, which needs no restart.
 
 ```bash
 fly status -a "$APP"
-fly machines list -a "$APP"
+fly machines list -a "$APP"   # started = awake, stopped = asleep
 fly volumes list -a "$APP"
+fly ips list -a "$APP"        # empty: no wake door
 ```
 
 ## /fly logs
@@ -187,7 +343,7 @@ fly logs -a "$APP" --region <region> --no-tail | tail -50
 Tearing down is the operator's to do, never an agent's: volumes hold the
 database, Tailscale identity, certs and session history. Point them at:
 
-- stop without losing anything: `/fly down`;
+- stop without losing anything: `/fly sleep`, or `/fly down`;
 - `fly volumes destroy <id> -a "$APP"` for one region;
 - `fly apps destroy "$APP"`, then `brane config --unset fly.app`, for all
   of it.
@@ -228,7 +384,7 @@ credentials, set as Fly secrets:
   to an OAuth secret.
 
 Nodes are never ephemeral: an ephemeral node is deleted while its machine
-is down, and `/fly down` can last months. Remove a dead node in the admin
+is down, and a sleep or a `/fly down` can last months. Remove a dead node in the admin
 console before its region comes back, or the new one is named `…-1`.
 
 ## Volume Safety
@@ -253,6 +409,16 @@ anything is deleted, and leave deleting to the operator.
   up` timed out. See [Tailscale](#tailscale).
 - A volume in the old layout: the entrypoint migrates it.
 
+### A wake does nothing
+
+- `curl` can't connect or resolve: no public IP. `fly ips list`; see
+  [/fly init](#fly-init), step 4.
+- 204, but the app still can't reach the daemon: the boot isn't done.
+  `/fly logs` until `listening on`.
+- The machine started and stopped again: the daemon exited 0 (an idle
+  sleep with nobody connecting, say) or crashed through its `retries`.
+  `/fly logs` says which.
+
 ### Blank terminal after /fly up
 
 Narratives from a previous machine lifetime may show a blank terminal
@@ -262,5 +428,5 @@ connect (`tmux has-session`) and sends the terminated signal.
 
 ### Stale Tailscale nodes
 
-After `/fly down`, nodes show as offline within 2–5 minutes. Cosmetic:
-they reconnect on the next `/fly up`.
+After a sleep or `/fly down`, nodes show as offline within 2–5 minutes.
+Expected: they reconnect on the next wake or `/fly up`.

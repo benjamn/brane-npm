@@ -54,6 +54,7 @@ export const ACT_NAMES = [
   "approve-protocol",
   "revoke-protocol",
   "restart",
+  "sleep",
 ] as const;
 export type ActName = (typeof ACT_NAMES)[number];
 
@@ -147,6 +148,9 @@ export const ACT_ROUTES: ReadonlyArray<readonly [route: string, act: ActName]> =
   ["POST /api/protocols/approve", "approve-protocol"],
   ["POST /api/protocols/revoke", "revoke-protocol"],
   ["POST /api/daemon/restart", "restart"],
+  // The operator's Sleep button (src/daemon/sleep.ts): stops the host and
+  // every session on it. Closed to agents, which are bounded by AGENT_ROUTES.
+  ["POST /api/sleep", "sleep"],
 ];
 
 /** Control-socket messages that read: subscriptions and their undoing.

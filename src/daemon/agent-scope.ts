@@ -18,6 +18,8 @@
  * - `POST /api/run`: a utility session's env carries no agent token, so
  *   starting one would hand an agent this account's standing in a single
  *   call. Only the app starts those; there is no CLI command for it.
+ * - `POST /api/sleep`: a host's sleep stops every session on it, which is
+ *   the operator's to decide. An agent that wants to stop runs `/idle`.
  * - `human_signal` (src/daemon/signal-source.ts) and the gated acts
  *   (src/daemon/presence-gate.ts), which refuse agents with their own
  *   messages; they are closed here too, so the list stays the whole story.
@@ -68,6 +70,15 @@ export const AGENT_ROUTES: readonly string[] = [
 export const AGENT_SCOPE_REFUSAL =
   "An agent's token cannot use this route; it is the operator's. From a phone, run the command in a utility session (the spawn dialog's Utility side), which carries no agent token";
 
+/** Closed routes whose refusal says more than `AGENT_SCOPE_REFUSAL`,
+ *  because a utility session is not the answer for them. */
+export const AGENT_SLEEP_REFUSAL =
+  "An agent cannot put its host to sleep; that stops every session on it, so the operator does it, from the app. To pause yourself, /idle";
+
+const AGENT_ROUTE_REFUSALS: ReadonlyArray<readonly [route: string, refusal: string]> = [
+  ["POST /api/sleep", AGENT_SLEEP_REFUSAL],
+];
+
 type Matcher = { method: string; segments: string[] };
 
 function toMatchers(routes: readonly string[]): Matcher[] {
@@ -116,7 +127,11 @@ export const AGENT_LOOPBACK_REFUSAL =
  *  here and dial the socket. */
 export function agentRefusal(req: { method: string; path: string; loopback: boolean }): string | null {
   if (!req.loopback) return AGENT_LOOPBACK_REFUSAL;
-  return agentMayUse(req.method, req.path) ? null : AGENT_SCOPE_REFUSAL;
+  if (agentMayUse(req.method, req.path)) return null;
+  for (const [route, refusal] of AGENT_ROUTE_REFUSALS) {
+    if (routeMatcher([route])(req.method.toUpperCase(), req.path)) return refusal;
+  }
+  return AGENT_SCOPE_REFUSAL;
 }
 
 export const AGENT_REVIVE_REFUSAL =

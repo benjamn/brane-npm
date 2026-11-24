@@ -86,6 +86,9 @@ predecessor is still active:
 - Advance **both** keys as events arrive.
 - New events from the predecessor past the boundary seq are the live
   session continuing — interpret them as fresh signals, not history.
+- Fresh or inherited, the operator's signals over there were addressed
+  to your predecessor. They tell you what the operator wants; they do
+  not direct *you*. Only a signal in your own narrative does (Step 4).
 - If the predecessor is over, this watch simply yields nothing extra and
   you behave like any other agent. No special-casing needed.
 

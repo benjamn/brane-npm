@@ -1,6 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { awaitingGlow, isAwaiting } from "../shared/narrative-status.js";
+import { GLOW_EDGES, awaitingGlow, isAwaiting, multiAwaitingGlow } from "../shared/narrative-status.js";
 
 describe("awaiting glow", () => {
   it("is honoured only while bridged", () => {
@@ -55,5 +55,60 @@ describe("awaiting glow layers", () => {
     // top, and -spread past the sides, out of the blur's reach.
     assert.equal(y + spread, 1);
     assert.ok(-spread >= blur, top);
+  });
+});
+
+describe("several awaiting narratives on one row", () => {
+  // A daemon's row in the brane switcher: its undead, one edge each.
+  const layers = (s: string) => s.split(/,\s*(?=inset)/);
+  const geometry = (layer: string) => {
+    const [x, y, blur, spread] = layer.replace(/^inset /, "").split(" ").map(parseFloat);
+    return { x, y, blur, spread };
+  };
+  const hueOf = (layer: string) => Number(/oklch\([\d.]+ [\d.]+ (\d+) \//.exec(layer)![1]);
+  const sideOf = (layer: string) => {
+    const { x, y } = geometry(layer);
+    return y > 0 ? "top" : y < 0 ? "bottom" : x > 0 ? "left" : x < 0 ? "right" : "ring";
+  };
+  const sides = (hues: number[]) => {
+    const out = new Map<number, Set<string>>();
+    for (const l of layers(multiAwaitingGlow(hues)!)) out.set(hueOf(l), (out.get(hueOf(l)) ?? new Set()).add(sideOf(l)));
+    return [...out.entries()].map(([h, s]) => [h, [...s]]);
+  };
+
+  it("is nothing for none, and the narrative's own ring for one", () => {
+    assert.equal(multiAwaitingGlow([]), undefined);
+    assert.equal(multiAwaitingGlow([271]), awaitingGlow(271));
+  });
+
+  it("gives each hue one edge, long edges first: top, bottom, left, right", () => {
+    assert.deepEqual(sides([10, 20]), [[10, ["top"]], [20, ["bottom"]]]);
+    assert.deepEqual(sides([10, 20, 30]), [[10, ["top"]], [20, ["bottom"]], [30, ["left"]]]);
+    assert.deepEqual(sides([10, 20, 30, 40]), [[10, ["top"]], [20, ["bottom"]], [30, ["left"]], [40, ["right"]]]);
+  });
+
+  it("runs out of edges at four; the row's words carry the rest", () => {
+    assert.equal(GLOW_EDGES, 4);
+    assert.deepEqual([...new Set(layers(multiAwaitingGlow([1, 2, 3, 4, 5, 6])!).map(hueOf))], [1, 2, 3, 4]);
+  });
+
+  it("keeps each edge's glow to its edge: the hole where the ring's is, the other sides past the blur", () => {
+    const ring = awaitingGlow(0).split(/,\s*(?=inset)/).filter((l) => l.startsWith("inset 0 0 ")).map((l) => geometry(l).spread);
+    for (const l of layers(multiAwaitingGlow([10, 20, 30, 40])!)) {
+      const { x, y, blur, spread } = geometry(l);
+      assert.match(l, /^inset /);
+      assert.ok(x === 0 || y === 0, l);
+      assert.ok(-spread >= blur, l);
+      const hole = Math.abs(x) + Math.abs(y) + spread;
+      assert.ok(ring.includes(hole), `${l}: hole at ${hole}, the ring's at ${ring}`);
+    }
+  });
+
+  it("wears the ring's colors, hue for hue", () => {
+    const colors = (s: string) => layers(s).map((l) => /oklch\(.*\)/.exec(l)![0]);
+    const ring = new Set(colors(awaitingGlow(123)));
+    const edge = colors(multiAwaitingGlow([123, 300])!).filter((c) => c.includes(" 123 /"));
+    assert.equal(edge.length, 3);
+    for (const c of edge) assert.ok(ring.has(c), c);
   });
 });

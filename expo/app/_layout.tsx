@@ -42,6 +42,8 @@ import { installVerification, noteVerified, refreshStatus, requireVerification }
 import LockSheet from "@/components/LockSheet";
 import { useProtocolView } from "@/lib/protocols";
 import type { ProtocolNamespace } from "@shared/protocol-names";
+import { noteAwaiting, probeReach, setReachRegistryListener } from "@/lib/reach";
+import { parseWakeRecipe } from "@shared/sleep";
 
 // Before the first tap: iOS must never move the page under the app, whether
 // to reveal a focused field or on a drag nothing else takes.
@@ -147,6 +149,14 @@ export function useBrane() {
   return useContext(BraneContext);
 }
 
+/** What a status that answered says about its entry, beyond identity: the
+ *  wake recipe (docs/sleep.md) and when it was seen. Every probe that
+ *  answers writes these, the meld's and the add form's included. */
+function seenFields(status: { wake?: unknown }): Pick<DaemonEntry, "wake" | "lastSeenAt"> {
+  const wake = parseWakeRecipe(status.wake);
+  return { ...(wake ? { wake } : {}), lastSeenAt: Date.now() };
+}
+
 export default function RootLayout() {
   const [daemons, setDaemons] = useState<DaemonEntry[]>([]);
   const [activeDaemonId, setActiveId] = useState<string | null>(null);
@@ -204,6 +214,13 @@ export default function RootLayout() {
   // proof open it (expo/lib/verification.ts).
   useEffect(() => installVerification(), []);
 
+  // The switcher's reach store writes the registry (a recipe, a sleep);
+  // this copy of it follows.
+  useEffect(() => {
+    setReachRegistryListener(setDaemons);
+    return () => setReachRegistryListener(null);
+  }, []);
+
   // Connect control WebSocket to active daemon
   const connectChannel = useCallback(
     (params: ConnectionParams) => {
@@ -216,6 +233,10 @@ export default function RootLayout() {
       // 2 s until the operator re-melds. The banner is the whole response.
       const known = loadDaemons().find((d) => d.host === params.host && d.token === params.token);
       if (known?.revoked) return;
+      // The registry entry this socket belongs to, for the reach store's
+      // undead list; looked up per edge, since the entry can be written
+      // after the socket is dialed.
+      const entryId = () => loadDaemons().find((d) => d.host === params.host && d.token === params.token)?.id;
 
       const ch = createControlChannel({
         conn: params,
@@ -232,9 +253,16 @@ export default function RootLayout() {
             for (const cb of activityListeners) cb(msg.narrative, msg.seq, msg.time);
           } else if (msg.type === "status") {
             for (const cb of statusListeners) cb(msg.narrative, msg.status);
+            // A bridge that is gone has no parked call (src/daemon/awaiting.ts).
+            if (msg.status === "mcp_disconnected") {
+              const id = entryId();
+              if (id) noteAwaiting(id, msg.narrative, false);
+            }
           } else if (msg.type === "awaiting") {
             const word = msg.awaiting ? AWAITING_STATUS : NOT_AWAITING_STATUS;
             for (const cb of statusListeners) cb(msg.narrative, word);
+            const id = entryId();
+            if (id) noteAwaiting(id, msg.narrative, msg.awaiting);
           } else if (msg.type === "meta") {
             const cost =
               msg.cost_amount != null && msg.cost_unit
@@ -255,6 +283,10 @@ export default function RootLayout() {
         onConnect: () => {
           setConnected(true);
           refreshStatus(params);
+          // The socket says it is awake; the status says how to wake it
+          // once it isn't. The full budget, since this one is not a guess.
+          const entry = loadDaemons().find((d) => d.host === params.host && d.token === params.token);
+          if (entry) void probeReach(entry, { quick: false });
         },
         onDisconnect: () => setConnected(false),
         onSignedOut: () => markSignedOut(params),
@@ -350,14 +382,16 @@ export default function RootLayout() {
             // entry comes back.
             const entry: DaemonEntry = {
               ...existing,
+              ...seenFields(status),
               host: urlParams.host,
               addedAt: existing.addedAt,
               archived: false,
+              sleptAt: undefined,
             };
-            if (entry.host !== existing.host || existing.archived) {
-              registryAddDaemon(entry);
-              setDaemons(loadDaemons());
-            }
+            // Written every time now, not only on a host change: the probe
+            // answered, so the recipe it carries is the newest.
+            registryAddDaemon(entry);
+            setDaemons(loadDaemons());
             setActiveId(entry.id);
             setActiveDaemonId(entry.id);
             connectChannel({ host: entry.host, token: entry.token });
@@ -407,6 +441,7 @@ export default function RootLayout() {
       username: pending.status.username,
       brane_id: pending.status.brane_id,
       addedAt: Date.now(),
+      ...seenFields(pending.status),
     };
     const updated = registryAddDaemon(entry);
     setDaemons(updated);
@@ -464,6 +499,7 @@ export default function RootLayout() {
         username: status.username,
         brane_id: status.brane_id,
         addedAt: Date.now(),
+        ...seenFields(status),
       };
       const updated = registryAddDaemon(entry);
       setDaemons(updated);
@@ -556,9 +592,10 @@ export default function RootLayout() {
     channelRef.current = null;
     channelParamsRef.current = null;
     setConnected(false);
+    let confirmed: Awaited<ReturnType<typeof probeDaemon>>;
     try {
       // The confirming use. From here the old token is dead everywhere else.
-      await probeDaemon(daemon.host, rotation.token);
+      confirmed = await probeDaemon(daemon.host, rotation.token);
     } catch (err) {
       // Never confirmed: the pending token lapses and the old one still
       // works, so put the channel back on it and let the caller report. A
@@ -573,7 +610,7 @@ export default function RootLayout() {
           : `Could not confirm the new token; your access is unchanged. ${err instanceof Error ? err.message : String(err)}`,
       );
     }
-    const entry: DaemonEntry = { ...daemon, token: rotation.token, revoked: false };
+    const entry: DaemonEntry = { ...daemon, ...seenFields(confirmed), token: rotation.token, revoked: false };
     setDaemons(registryAddDaemon(entry));
     connectChannel({ host: entry.host, token: entry.token });
     clearStoredConnection();

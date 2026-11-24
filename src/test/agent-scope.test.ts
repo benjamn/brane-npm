@@ -14,6 +14,7 @@ import {
   AGENT_REVIVE_REFUSAL,
   AGENT_ROUTES,
   AGENT_SCOPE_REFUSAL,
+  AGENT_SLEEP_REFUSAL,
   agentMayUse,
   agentRefusal,
   agentReviveRefusal,
@@ -61,6 +62,7 @@ describe("agentMayUse", () => {
       ["POST", "/api/cost/backfill"],
       ["POST", "/api/cost/reprice"],
       ["POST", "/api/run"],
+      ["POST", "/api/sleep"],
     ]) {
       assert.equal(agentMayUse(method, path), false, `${method} ${path}`);
     }
@@ -100,6 +102,13 @@ describe("agentRefusal", () => {
     assert.equal(agentRefusal({ method: "POST", path: "/api/absorb", loopback: true }), AGENT_SCOPE_REFUSAL);
     assert.match(AGENT_SCOPE_REFUSAL, /utility session/);
     assert.doesNotMatch(AGENT_SCOPE_REFUSAL, /brane run/);
+  });
+
+  it("tells an agent that asks for sleep that it is the operator's, and points it at /idle", () => {
+    assert.equal(agentRefusal({ method: "POST", path: "/api/sleep", loopback: true }), AGENT_SLEEP_REFUSAL);
+    assert.equal(agentRefusal({ method: "post", path: "/api/sleep", loopback: true }), AGENT_SLEEP_REFUSAL);
+    assert.equal(agentRefusal({ method: "POST", path: "/api/sleep", loopback: false }), AGENT_LOOPBACK_REFUSAL);
+    assert.match(AGENT_SLEEP_REFUSAL, /\/idle/);
   });
 });
 
@@ -193,6 +202,7 @@ const CLOSED_TO_AGENTS = new Set([
   "GET /api/credentials",
   "POST /api/credentials/:/revoke",
   "POST /api/run",
+  "POST /api/sleep",
   "POST /api/token/forget",
   "POST /api/token/rotate",
   "GET /api/tokens",

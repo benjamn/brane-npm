@@ -317,6 +317,13 @@ change one of those, read its doc first.
   `scripts/mirror-release.mjs`, `scripts/changelog.mjs`, `package.json`
   version): `brane-npm`, one commit per release, and the npm release workflow
   that runs there.
+- [Sleep and Wake](docs/sleep.md) (`src/daemon/sleep.ts`,
+  `src/shared/sleep.ts`, `expo/lib/reach.ts`, `src/fly/wake-listener.ts`,
+  `docker-entrypoint.sh`, the `fly.toml` in /fly): hosts that shut down
+  and come back with their narratives; sleep as the daemon's own exit, the
+  idle rule, the manifest and boot revive, the Sleep act, wake recipes per
+  host kind, the unauthenticated wake door and what bounds it, why the
+  switcher's probe never wakes a machine, and what remains.
 
 **Data**
 

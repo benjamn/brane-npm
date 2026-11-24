@@ -53,7 +53,7 @@ import {
 } from "../codex-tool-log.js";
 import { randomBase36 } from "../ids.js";
 import { getBraneDir, getBraneId, getPayloadsDir, getTokenFilePath, fromPortablePath, toPortablePath, claimDaemon } from "../db/schema.js";
-import { HANDOFF_ENV, LAUNCH_ENV, SPAWNED_ENV, VIA_ENV, originFromEnv, recordOrigin, restartPort, startupRefusal, successorArgs } from "./lifecycle.js";
+import { HANDOFF_ENV, LAUNCH_ENV, SPAWNED_ENV, VIA_ENV, originFromEnv, recordOrigin, restartPort, restartRefusal, startupRefusal, successorArgs } from "./lifecycle.js";
 import { listProtocols, loadProtocolLibrary, protocolNamespaces, readProtocol, type NamespaceDir, type ProtocolLibrary } from "../protocols.js";
 import { protocolSourceLabel } from "../shared/protocol-names.js";
 import { liveApprovals } from "../db/protocol-approvals.js";
@@ -99,6 +99,8 @@ import { addressesToBind, nextProbeDelay, TAILSCALE_PROBE_MAX_MS } from "./tails
 import { archivedBraneIds, braneArchiveRefusal, setBraneArchived, visibleUnscopedClause } from "../db/branes.js";
 import { CertManager, type CertStatus } from "./cert-manager.js";
 import { KeepAwake } from "./keep-awake.js";
+import { bridgeConnected, deliverRevivePrompt } from "./revive-prompt.js";
+import { Sleeper, ManifestRestorer, readSleepManifest, sleepActAnswer, bootRevive, bootReviveEnabled, listTmuxSessions, parseIdleMinutes, tailscaleDownWanted, takeExitRecord, wakeRecipe, writeExitRecord, endsSessions, runEndSessions, type LiveNarrative } from "./sleep.js";
 import { resolveTmux, ensureTmux, newTmuxSession, parseTerminalSize, sgrMouseSequences } from "../tmux.js";
 import { INHERITED_AGENT_ENV, unsetAgentEnvPrefix } from "../agent-env.js";
 import { highlight } from "../highlight.js";
@@ -186,6 +188,23 @@ function isClaudeSessionLive(agentCommand: string, sessionId: string): boolean {
   } catch {
     return false;
   }
+}
+
+/** Boot revive's revive (src/daemon/sleep.ts): no request launched it, so
+ *  the launch keeps the launcher the narrative had, on whatever the revive
+ *  started (the narrative itself, or a twin continuing it), and revoking the
+ *  device that first started it still cascades to the new agent token.
+ *  `revive` is injectable for the suite. */
+export function reviveKeepingLauncher(
+  db: Database.Database,
+  nid: string,
+  prompt: string,
+  revive: (db: Database.Database, nid: string, opts: { prompt: string }) => ReviveResult = reviveNarrative,
+): ReviveResult {
+  const row = db.prepare("SELECT launched_by FROM narratives WHERE id = ?").get(nid) as { launched_by: string | null } | undefined;
+  const result = revive(db, nid, { prompt });
+  if (row?.launched_by) recordLauncher(db, result.nid, row.launched_by);
+  return result;
 }
 
 export function reviveNarrative(
@@ -408,14 +427,13 @@ export function reviveNarrative(
     content: revivedContent(effectiveAgent, narrative.role, launchArgs, forkSession),
   });
 
-  // Inject prompt after short delay (skip for gemini — prompt is in command args via -i)
+  // Type the prompt once the agent can take it (skip for gemini — prompt is
+  // in command args via -i): src/daemon/revive-prompt.ts.
   if (!opts.no_prompt && effectiveAgent !== "gemini") {
     const revivePrompt = opts.prompt ?? kickoffPrompt(effectiveAgent, LIVE_LOOP_PROMPT);
-    setTimeout(() => {
-      try {
-        execFileSync(resolveTmux(), ["send-keys", "-t", nid, revivePrompt, "Enter"], { stdio: "ignore" });
-      } catch {}
-    }, 2000);
+    void deliverRevivePrompt(nid, revivePrompt, (args) => {
+      execFileSync(resolveTmux(), ["send-keys", ...args], { stdio: "ignore" });
+    });
   }
 
   return { status: "revived", nid, agent: effectiveAgent };
@@ -1300,6 +1318,74 @@ export async function startServer(config: DaemonConfig): Promise<void> {
 
   const recordEventMentions = createMentionRecorder(db, notifyListenWaiters);
 
+  // Sleep (src/daemon/sleep.ts, docs/sleep.md): the idle rule's clock, the
+  // routine the idle rule, the Sleep act and a signal all run, and boot
+  // revive. The clock counts control-socket clients, kept in step where
+  // `/ws/control` is upgraded below.
+  const braneDir = getBraneDir();
+  const narrativeRole = db.prepare("SELECT role FROM narratives WHERE id = ?");
+  /** Narratives with a tmux session right now, asked of tmux each call;
+   *  null when tmux could not be asked, which never sleeps the host. */
+  const liveNarratives = (): LiveNarrative[] | null => {
+    const names = listTmuxSessions((args) =>
+      execFileSync(resolveTmux(), args, { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], timeout: 5_000 }),
+    );
+    if (!names) return null;
+    const live: LiveNarrative[] = [];
+    for (const name of names) {
+      const row = narrativeRole.get(name) as { role: string } | undefined;
+      if (row) live.push({ id: name, role: row.role });
+    }
+    return live;
+  };
+  const sleeper = new Sleeper({
+    braneDir,
+    liveNarratives,
+    // Config first, so `brane config sleep.idle_minutes 0` switches off what
+    // the image's environment switched on. Re-read every tick: the CLI
+    // writes config to the database, and the daemon hears it only by reading.
+    idleMinutes: () => parseIdleMinutes(getConfig("sleep.idle_minutes", db), process.env.BRANE_SLEEP_IDLE_MINUTES),
+    bootRevive: () => bootReviveEnabled(process.env, getConfig("sleep.boot_revive", db)),
+    tailscaleDown: (reason) => tailscaleDownWanted(reason, process.env, getConfig("sleep.tailscale_down", db)),
+    endSessions: () => endsSessions(process.env),
+    runEndSessions: () => runEndSessions(resolveTmux(), (m) => console.log(`[sleep] ${m}`)),
+    announce: (nid, content) => {
+      // A lifecycle row, like `restarted`: the daemon's voice, no source, so
+      // it is an arrival for the agent's parked listen.
+      const event = appendEvent(db, nid, "sleeping", { content });
+      announceEvent(nid, event, "brane", notifyListenWaiters, recordEventMentions);
+    },
+    shutdown: () => doShutdown(),
+    forceExit: () => process.exit(0),
+    log: (m) => console.log(`[sleep] ${m}`),
+  });
+  takeExitRecord(braneDir, (m) => console.log(`[sleep] ${m}`));
+
+  /** Boot revive (src/daemon/sleep.ts), on the first operator connection
+   *  after boot rather than at boot: waking the host restores nothing, only
+   *  someone actually connecting does (claude-qdjo1yqn:65, :67). */
+  const manifestRestorer = new ManifestRestorer(async () => {
+    try {
+      await ensureTmux();
+      await bootRevive({
+        braneDir,
+        enabled: bootReviveEnabled(process.env, getConfig("sleep.boot_revive", db)),
+        alive: (nid) => {
+          try {
+            execFileSync(resolveTmux(), ["has-session", "-t", nid], { stdio: "ignore", timeout: 5_000 });
+            return true;
+          } catch {
+            return false;
+          }
+        },
+        revive: (nid, prompt) => reviveKeepingLauncher(db, nid, prompt),
+        log: (m) => console.log(`[sleep] boot revive: ${m}`),
+      });
+    } catch (err) {
+      console.error("[sleep] boot revive failed:", err);
+    }
+  }, () => sleeper.sleeping !== null);
+
   // Rendered diagrams, keyed on their source. A fence's source never changes
   // once an event is written — the log is append-only — so a conversation
   // re-read after a scroll re-renders nothing. `null` is cached too: refusing
@@ -1620,7 +1706,29 @@ export async function startServer(config: DaemonConfig): Promise<void> {
         // carrying a host of its own, so a fork's daemon names the fork's
         // shell (src/shared/view-url.ts).
         app_domain: statusAppDomain(db),
+        // How a sleeping host is woken, and the idle rule's inputs
+        // (src/daemon/sleep.ts, docs/sleep.md).
+        wake: wakeRecipe(),
+        sleep: sleeper.status(),
+        // The narratives parked awaiting direction (src/daemon/awaiting.ts):
+        // the glows the switcher puts on this daemon's row, and the undead
+        // count beside its sleep posture. Each is a tmux session, so each
+        // is also a reason the host is not asleep.
+        awaiting: awaiting.narratives(),
       });
+      return;
+    }
+
+    // Route: POST /api/sleep — the operator's Sleep act. Answered before the
+    // routine starts, since the routine closes this connection; an agent's
+    // token never gets here (not in AGENT_ROUTES).
+    if (path === "/api/sleep" && req.method === "POST") {
+      const answer = sleepActAnswer(sleeper);
+      if (answer.status === 202) {
+        console.log(`[sleep] the operator asked for sleep (${connectionLabel(req.socket) ?? "?"}); ${answer.body.narratives.length} narrative(s) live`);
+        res.once("finish", () => setImmediate(() => void sleeper.sleep("operator")));
+      }
+      sendJson(res, answer.status, answer.body);
       return;
     }
 
@@ -2636,6 +2744,11 @@ export async function startServer(config: DaemonConfig): Promise<void> {
         sendJson(res, 403, { error: "Restart the daemon from this machine: `brane daemon restart`" });
         return;
       }
+      const onFly = restartRefusal(process.env);
+      if (onFly) {
+        sendJson(res, 409, { error: onFly });
+        return;
+      }
       parseBody(req).then((body) => {
         const currentPort = (db.prepare("SELECT value FROM meta WHERE key = 'daemon_port'").get() as { value: string } | undefined)?.value;
         const decided = restartPort(body, currentPort, auth.record.kind);
@@ -3234,6 +3347,14 @@ export async function startServer(config: DaemonConfig): Promise<void> {
       controlWss.handleUpgrade(req, socket, head, (ws) => {
         trackViewerSocket(ws, socketOwners("control", auth.record));
         handleControlSocket(ws, auth.record, db, controlClients, mcpClients, notifyListenWaiters, recordEventMentions, awaiting, presenceGate.current(), verificationGate);
+        // The last sleep's agents come back when an operator connects, not
+        // when the host wakes (src/daemon/sleep.ts, ManifestRestorer).
+        if (manifestRestorer.onConnect(auth.record.kind)) console.log(`[sleep] an operator connected (${auth.record.kind}); restoring the manifest`);
+        // The idle rule's clock. handleControlSocket added the client and
+        // registered its own close listener first, so by the time this one
+        // runs the set no longer holds it.
+        sleeper.clientsChanged(controlClients.size);
+        ws.on("close", () => sleeper.clientsChanged(controlClients.size));
       });
       return;
     }
@@ -3511,6 +3632,17 @@ export async function startServer(config: DaemonConfig): Promise<void> {
     // means a hot-reload during startup can never race the bind.
     certMgr.start();
 
+    // The idle rule's timer, from boot: a wake nobody follows sleeps again.
+    // Not once a sleep has begun: the routine stopped the timer for good.
+    if (!sleeper.sleeping) sleeper.start();
+    const waiting = readSleepManifest(braneDir);
+    if (waiting) {
+      console.log(
+        `[sleep] a manifest from ${new Date(waiting.slept_at).toISOString()} (${waiting.narratives.length} narrative(s)) waits for an operator to connect`,
+      );
+    }
+
+
     // Tailscale re-probe. The startup probe above is one `tailscale status`
     // with a 3 s timeout; if the extension is wedged at that moment (it
     // hangs for hours at a time — claude-9ya34xr8:23) the daemon binds
@@ -3638,6 +3770,7 @@ export async function startServer(config: DaemonConfig): Promise<void> {
     keepAwake.stop();
     certMgr.stop();
     if (tailscaleProbeTimer) clearTimeout(tailscaleProbeTimer);
+    sleeper.stop();
     clearInterval(controlPoller);
     clearInterval(verificationSwitchTicker);
     clearInterval(mcpPoller);
@@ -3714,6 +3847,15 @@ export async function startServer(config: DaemonConfig): Promise<void> {
       ...(unixListening ? [new Promise<void>((resolve) => unixServer.close(() => resolve()))] : []),
     ];
     for (const h of httpServers) h.close();
+    // A handoff is a clean exit the sleep routine never sees: say so, before
+    // the successor starts and reads the record at its boot.
+    if (handoff) {
+      try {
+        writeExitRecord(braneDir, { exited_at: Date.now(), reason: "restart", clean: true, pid: process.pid });
+      } catch (err) {
+        console.error("[restart] could not write the exit record:", err);
+      }
+    }
     const successor = handoff ? startSuccessor(handoff.port) : undefined;
     if (successor) {
       // The claim passes in one write: the successor's pid where ours was,
@@ -3855,8 +3997,17 @@ export async function startServer(config: DaemonConfig): Promise<void> {
       return undefined;
     }
   }
-  process.on("SIGTERM", () => doShutdown());
-  process.on("SIGINT", () => doShutdown());
+  // A signal runs the sleep routine, bounded (src/daemon/sleep.ts): on a
+  // Mac that is `brane daemon stop` (a restart is a handoff, not a signal),
+  // and the routine then does no more than write the exit record before
+  // doShutdown; on Fly it is the machine stopping, and the live narratives
+  // are told and recorded first.
+  const onSignal = () => {
+    if (shuttingDown) return;
+    void sleeper.sleep("signal");
+  };
+  process.on("SIGTERM", onSignal);
+  process.on("SIGINT", onSignal);
 }
 
 // Control WebSocket: single real-time channel for all notifications.
@@ -5516,6 +5667,8 @@ function handleMcpBridgeSocket(
   // flash the narrative offline while a sibling still holds it.
   const firstForNarrative = boundClientCount(mcpClients, boundNid) === 0;
   mcpClients.add(client);
+  // A revive waiting to type its prompt may now (src/daemon/revive-prompt.ts).
+  bridgeConnected(boundNid);
   // One string comparison for every agent; starts the tool-log poller only for
   // the one harness that needs it, and only from the moment it connects.
   crushSampler.armFor(client.agentType);

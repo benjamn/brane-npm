@@ -115,7 +115,7 @@ until someone lists it. An agent also may not revive or prompt a
 
 | Method | Path | Purpose |
 |--------|------|---------|
-| `GET` | `/api/status` | Daemon status (brane_id, hostname, username, pid, port, uptime_ms, `tls: { state, expires_at, ... }`, `app_domain`: the shared app's host, where a daemon's own bundle hops out to on Isolate — see [View URLs](view-urls.md); `verification: { mode, window_minutes, fresh, rp_id, rp_mismatch, usable_credentials }`, the posture, the host credentials must be enrolled for, any other host live credentials were enrolled for (a rename orphans them) and how many are enrolled for the served host (null while it is unknown), plus `verified_until` for a device token — see [Operator Verification](passkeys.md)) |
+| `GET` | `/api/status` | Daemon status (brane_id, hostname, username, pid, port, uptime_ms, `tls: { state, expires_at, ... }`, `app_domain`: the shared app's host, where a daemon's own bundle hops out to on Isolate — see [View URLs](view-urls.md); `verification: { mode, window_minutes, fresh, rp_id, rp_mismatch, usable_credentials }`, the posture, the host credentials must be enrolled for, any other host live credentials were enrolled for (a rename orphans them) and how many are enrolled for the served host (null while it is unknown), plus `verified_until` for a device token — see [Operator Verification](passkeys.md); `wake: { kind: "url", url } \| { kind: "none", reason }`, how a sleeping host is woken (a Fly machine's `https://<app>.fly.dev/wake`, else none with the reason to show); `sleep: { idle_minutes, last_client_disconnect, sessions }`, the idle rule's inputs (`idle_minutes` null when off, `last_client_disconnect` null while a client is connected, `sessions` the narratives with a tmux session now); `awaiting: string[]`, the narratives parked awaiting direction right now, the undead, which the switcher shows as glows on the daemon's row and counts beside its sleep posture — see [Sleep and Wake](sleep.md)) |
 | `GET` | `/api/narratives?archived=1&brane_ids=` | List narratives (excludes archived by default). Without `brane_ids`, an archived brane's ended narratives are left out too |
 | `GET` | `/api/narratives/recent?since=&search=&status=&fold=&limit=&archived=1&brane_ids=` | Recently active narratives — the browse half of the `narrative_info` MCP tool; every brane unless `brane_ids` scopes it |
 | `PATCH` | `/api/narratives/:id/archive` | Archive/unarchive a narrative; archiving a running one is a 409 (`src/daemon/archive-gate.ts`) |
@@ -134,6 +134,7 @@ until someone lists it. An agent also may not revive or prompt a
 | `GET` | `/api/run-history` | Commands utility sessions have run before (by basename), most-recent first — the spawn dialog's Utility list; derived from `narratives`, nothing stored |
 | `POST` | `/api/daemon/restart` | Restart in place (`{ port? }` → 202 `{ pid, port }`, then shutdown): the daemon starts its own successor and hands it the claim — see [Starting and stopping](#starting-and-stopping). Over `daemon.sock` from the shell or an agent (`/rrr`); refused (403) to a device, and a new `port` to anything but the shell |
 | `POST` | `/api/revive/:nid` | Revive a dead agent session (`{ prompt?, no_prompt?, agent? }`) — see [Revive API](#revive-api) |
+| `POST` | `/api/sleep` | The operator's Sleep act (body optional): answers `202 { ok, narratives }`, the agents it will record, then runs the sleep routine and the daemon exits; `409` if a sleep is already under way. An act behind the verification gate (`sleep`), refused (403) to an agent's token — see [Sleep and Wake](sleep.md) |
 | `POST` | `/api/search` | Semantic search over narrative history (`{ query, limit?, brane_ids? }`); each hit carries `matches`, the offsets to mark — see [Marking the Hits](memory-search.md#marking-the-hits) |
 | `POST` | `/api/cost/backfill` | Sweep the usage ledger over every narrative with a bound session (`{ dry_run? }`) — see [Cost Ledger](cost-ledger.md) |
 | `POST` | `/api/cost/reprice` | Re-price recorded ledger rows under the current price table and move each card total by the correction (`{ dry_run? }`) — see [Re-pricing](cost-ledger.md#re-pricing) |
@@ -181,7 +182,7 @@ Control WebSocket broadcasts (server → client):
 - `state` — initial state with all narratives
 - `new_events` — event count hints for a narrative
 - `status` — narrative status changes (active, ended, mcp_connected, mcp_disconnected)
-- `awaiting` — `{ narrative, awaiting }`: the agent parked in a blocking `listen` or a `narrate({ wait: true })`, or stopped waiting (`src/daemon/awaiting.ts`). The app shows it as an inset glow on the list card, switcher row and header (`awaitingGlow`, `src/shared/narrative-status.ts`), in a hue this device allocates: chosen once, as far as possible from the other recently glowing narratives' hues, then kept so sessions can be learned by color; 🎨 Recolor moves it to a random hue at least 100° away, so a press changes the color family rather than shading it, and at least 60° from the hues it was recolored away from in the last hour, so repeated presses explore rather than toggle. It stays clear of the other sessions' hues where the wheel allows; when crowded, that clearance gives way before the step or the return does (`src/shared/glow-hues.ts`, `localStorage` only). Its own message type, not a `status`, so an older app ignores it
+- `awaiting` — `{ narrative, awaiting }`: the agent parked in a blocking `listen` or a `narrate({ wait: true })`, or stopped waiting (`src/daemon/awaiting.ts`). The app shows it as an inset glow on the list card, switcher row and header (`awaitingGlow`, `src/shared/narrative-status.ts`), in a hue this device allocates: chosen once, as far as possible from the other recently glowing narratives' hues, then kept so sessions can be learned by color; 🎨 Recolor moves it to a random hue at least 100° away, so a press changes the color family rather than shading it, and at least 60° from the hues it was recolored away from in the last hour, so repeated presses explore rather than toggle. It stays clear of the other sessions' hues where the wheel allows; when crowded, that clearance gives way before the step or the return does (`src/shared/glow-hues.ts`, `localStorage` only). Its own message type, not a `status`, so an older app ignores it. `GET /api/status` lists the narratives parked right now as `awaiting`, which the brane switcher turns into a glow on the daemon's row, split by edge when several wait, and the undead count under its name — see [Sleep and Wake](sleep.md#the-undead-count)
 - `meta` — narrative metadata updates (summary, title)
 - `heartbeat` — 30-second keepalive
 
@@ -208,6 +209,16 @@ This is the **only** spawn path. The web UI calls it, and so does `brane spawn` 
 | `revived` | The session was dead and has been restarted in place, resuming its agent session (Claude forks with `--fork-session` when the original is still live). |
 | `already_running` | tmux still had the session. A `prompt` is delivered if given; a stale `ended` row is self-healed to `active` and broadcast. |
 | `continued` | The narrative can't be resumed in place — it was absorbed, or `agent` names a different agent — so a **twin** was spawned that reads its history. `nid` is the twin's, not the requested one. |
+
+On `revived`, the prompt is typed once the agent can take it
+(`src/daemon/revive-prompt.ts`): when its MCP bridge dials the daemon,
+plus 1.5 s to settle, never sooner than 2 s after the revive nor later than
+60 s; then the text (`send-keys -l`) and, 300 ms later, Enter as a key of
+its own. A fixed 2 s timer with text and Enter in one `send-keys` left the
+prompt unsubmitted in the agent's input on a cold-booted Fly machine,
+where the agent was not up yet and read both as one paste. Measured for
+Claude, whose bridge dials at startup; an agent whose MCP servers start
+lazily gets its prompt at the 60 s ceiling, late but not lost.
 
 ## The CLI is a daemon client
 

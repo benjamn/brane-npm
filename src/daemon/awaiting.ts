@@ -33,6 +33,15 @@ export class AwaitingTracker {
     return (this.parkedCount.get(nid) ?? 0) > 0;
   }
 
+  /** Every narrative with a parked call right now, oldest park first: what
+   *  `GET /api/status` reports as `awaiting`, so the brane switcher can light
+   *  a daemon's row with the glows of the sessions waiting on it and count
+   *  them (docs/sleep.md, "The undead count"). A parked call needs a live
+   *  bridge, so these are bridged by construction. */
+  narratives(): string[] {
+    return [...this.parkedCount.keys()];
+  }
+
   /** A blocking call parked for this narrative. */
   parked(nid: string): void {
     const count = this.parkedCount.get(nid) ?? 0;

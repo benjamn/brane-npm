@@ -290,6 +290,23 @@ export function restartPort(
   return { port };
 }
 
+/** Why an in-place restart is refused here, or null. On a Fly machine the
+ *  entrypoint `exec`s the daemon, so it is the machine's main process: a
+ *  handoff exits it 0, which under restart policy `on-failure` stops the
+ *  machine with its successor inside, and with no sleep routine (no
+ *  manifest, no `tailscale down`, nothing revived on wake). `fly machine
+ *  restart` stops it through the signal, which runs the routine, and starts
+ *  it again (claude-46sy2xmw:8, finding 3; docs/sleep.md). */
+export function restartRefusal(env: NodeJS.ProcessEnv): string | null {
+  const app = env.FLY_APP_NAME?.trim();
+  if (!app) return null;
+  const machine = env.FLY_MACHINE_ID?.trim() || "<machine id>";
+  return (
+    "On a Fly machine the daemon is the machine's main process, so an in-place restart would stop the machine " +
+    `instead. Restart the machine: \`fly machine restart ${machine} -a ${app}\``
+  );
+}
+
 /** Whether a process's command line is a brane daemon's: what `daemon stop`
  *  checks before it signals a pid it read from the database, which a daemon
  *  that died may have left naming another process by now. Pure. */

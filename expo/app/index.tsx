@@ -32,6 +32,8 @@ import {
   searchNarratives,
   searchWiki,
   formatCost,
+  sleepDaemon,
+  takeSleepIntent,
   type NarrativeInfo,
   type FoldInfo,
   type BraneInfo,
@@ -56,10 +58,12 @@ import { buildIsolateUrl, isIsolated, terminalOnlyHref } from "@shared/view-url"
 import { handOffNarrativeMenu } from "@shared/menu-handoff";
 import { useAppHost } from "@/lib/appHost";
 import { sortNarratives } from "@shared/narrative-sort";
-import { isAwaiting, awaitingGlow, AWAITING_STATUS, NOT_AWAITING_STATUS } from "@shared/narrative-status";
+import { isAwaiting, awaitingGlow, multiAwaitingGlow, AWAITING_STATUS, NOT_AWAITING_STATUS } from "@shared/narrative-status";
 import { isListScrollKey, listScrollTarget } from "@shared/list-scroll-keys";
 import { buildHitSnippet, type MatchRange, type SnippetOptions } from "@shared/hit-snippet";
 import { interruptSession } from "@/lib/terminal";
+import { markSlept, probeReach, reachOf, useReachRecords, wakeDaemon } from "@/lib/reach";
+import { canSleep, canWake, parseSleepStatus, postureLine, reachLabel, sleepOffer, withSleepIntent, type Reach } from "@shared/sleep";
 
 // How long a keyed smooth scroll counts as still under way, for stacking the
 // next key onto its target. Chromium's keyboard smooth scroll settles in
@@ -554,6 +558,33 @@ function RowMenu({
   );
 }
 
+/** A row's dot for a daemon that is not answering: amber while it is asleep
+ *  or on its way either side of it, red when nothing can wake it. */
+function reachDotColor(reach: Reach, fallback: string): string {
+  if (reach === "asleep" || reach === "sleeping" || reach === "waking" || reach === "still-asleep") return "#d9b866";
+  if (reach === "unreachable") return "#e07070";
+  return fallback;
+}
+
+/** Wake, beside a row that is asleep: one tap, one opaque fetch to the
+ *  host's wake URL, then the row reads "waking…" while its tailnet address
+ *  is re-probed (`expo/lib/reach.ts`). Shown only when `canWake`, so not
+ *  again while a wake is being waited on. */
+function WakeButton({ entry }: { entry: DaemonEntry }) {
+  return (
+    <View style={styles.archivedActions}>
+      <Pressable
+        style={styles.archivedAction}
+        role="button"
+        aria-label={`Wake ${entry.id}`}
+        onPress={() => wakeDaemon(entry)}
+      >
+        <Text style={styles.archivedActionText}>Wake</Text>
+      </Pressable>
+    </View>
+  );
+}
+
 function BraneSwitcher({
   branes,
   activeBraneId,
@@ -569,6 +600,8 @@ function BraneSwitcher({
   onArchiveBrane,
   onSignOutOthers,
   conn,
+  isolated,
+  appHost,
 }: {
   branes: BraneInfo[];
   activeBraneId: string | null;
@@ -584,6 +617,10 @@ function BraneSwitcher({
   onArchiveBrane: (braneId: string, archived: boolean) => Promise<void>;
   onSignOutOthers: () => Promise<void>;
   conn: ConnectionParams | null;
+  /** This page is the active daemon's own bundle. */
+  isolated: boolean;
+  /** The shared app to hop out to, when known. */
+  appHost: string | null;
 }) {
   const [showDropdown, setShowDropdown] = useState(false);
   const [showAddForm, setShowAddForm] = useState(false);
@@ -610,6 +647,82 @@ function BraneSwitcher({
   const [confirmForget, setConfirmForget] = useState<DaemonEntry | null>(null);
   const [forgetting, setForgetting] = useState(false);
   const [forgetError, setForgetError] = useState<string | null>(null);
+  // Sleep: the active daemon's host, behind a confirm, since it ends the
+  // bridge of every agent session on it (docs/sleep.md).
+  const [confirmSleep, setConfirmSleep] = useState(false);
+  const [sleeping, setSleeping] = useState(false);
+  const [sleepError, setSleepError] = useState<string | null>(null);
+  // Awake, asleep or unreachable, per daemon (expo/lib/reach.ts).
+  const reach = useReachRecords();
+  const activeReach: Reach | null = activeDaemon ? reachOf(activeDaemon, reach[activeDaemon.id], connected) : null;
+  const activeSleep = activeDaemon && connected ? parseSleepStatus(reach[activeDaemon.id]?.status?.sleep) : null;
+  // The undead on each daemon that is up (expo/lib/reach.ts): the glow its
+  // row wears, in their own hues, and the count under its name
+  // (docs/sleep.md, "The undead count").
+  const undeadOf = (id: string): string[] => reach[id]?.awaiting ?? [];
+  const glowOf = (nids: string[]) => multiAwaitingGlow(nids.map(glowHueFor));
+  const activeUndead = activeDaemon && activeReach === "awake" ? undeadOf(activeDaemon.id) : [];
+  const activeGlow = glowOf(activeUndead);
+  const activePosture = activeReach === "awake" ? postureLine(activeSleep, activeUndead.length) : null;
+  // Opening the switcher asks every daemon it lists whether it is up, on
+  // the switcher's short budget: the active one only when its socket is
+  // down. Tailnet addresses only — the wake URL is the Wake button's alone.
+  useEffect(() => {
+    if (!showDropdown) return;
+    for (const d of daemons) {
+      if (d.archived || d.revoked) continue;
+      if (d.id === activeDaemon?.id && connected) continue;
+      void probeReach(d);
+    }
+    // Once per opening; a row's state then follows the store.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [showDropdown]);
+  // Sleep, from an isolated tab: this page goes away with its daemon, so the
+  // gesture moves to the shared app, which can wake it after (@shared/sleep,
+  // sleepOffer). The hop carries the connection and `#sleep=`, which only
+  // opens the confirm there.
+  const offer = sleepOffer(isolated, appHost);
+  const hopToSleep = () => {
+    if (!conn || !activeDaemon?.brane_id || typeof window === "undefined") return;
+    const url = buildIsolateUrl({
+      host: window.location.host,
+      protocol: window.location.protocol,
+      search: "",
+      path: "/",
+      conn,
+      appHost,
+      view: {},
+    });
+    if (url) window.location.assign(withSleepIntent(url, activeDaemon.brane_id));
+  };
+  // Arriving from such a hop: once that daemon is connected and up here,
+  // open the switcher on its Sleep confirm. Spent on first match.
+  useEffect(() => {
+    if (!connected || activeReach !== "awake" || !activeDaemon || !canSleep(activeDaemon.wake)) return;
+    if (!takeSleepIntent(activeDaemon.brane_id)) return;
+    setShowDropdown(true);
+    setSleepError(null);
+    setConfirmSleep(true);
+  }, [connected, activeReach, activeDaemon]);
+  const cancelSleep = () => {
+    if (sleeping) return;
+    setConfirmSleep(false);
+    setSleepError(null);
+  };
+  const handleSleep = async () => {
+    if (!conn || !activeDaemon) return;
+    setSleeping(true);
+    setSleepError(null);
+    try {
+      await sleepDaemon(conn);
+      markSlept(activeDaemon.id);
+      setConfirmSleep(false);
+    } catch (err) {
+      setSleepError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setSleeping(false);
+    }
+  };
   const closeDropdown = () => {
     setShowDropdown(false);
     setShowAddForm(false);
@@ -619,6 +732,8 @@ function BraneSwitcher({
     setSignedOutOthers(false);
     setMenuFor(null);
     setArchiveError(null);
+    setConfirmSleep(false);
+    setSleepError(null);
   };
   const cancelForget = () => {
     if (forgetting) return;
@@ -758,6 +873,8 @@ function BraneSwitcher({
                 styles.switcherRow,
                 activeBraneId === null && styles.daemonOptionActive,
                 menuFor === "active" && styles.rowMenuOpen,
+                styles.glowTransition,
+                activeGlow ? ({ boxShadow: activeGlow } as any) : null,
               ]}
             >
             <Pressable
@@ -772,28 +889,48 @@ function BraneSwitcher({
                 <View
                   style={[
                     styles.daemonDot,
-                    { backgroundColor: connected ? "#66d9a0" : "#555" },
+                    { backgroundColor: connected ? "#66d9a0" : reachDotColor(activeReach!, "#555") },
                   ]}
                 />
                 <View style={{ flex: 1 }}>
                   <Text style={styles.daemonName}>All branes</Text>
-                  <Text style={styles.daemonHost}>{activeDaemon.id}</Text>
+                  <Text style={styles.daemonHost}>
+                    {activeDaemon.id}
+                    {reachLabel(activeReach!, activeDaemon.wake) ? ` · ${reachLabel(activeReach!, activeDaemon.wake)}` : ""}
+                  </Text>
+                  {activePosture && <Text style={styles.daemonHost}>{activePosture}</Text>}
                   {braneCostLine(allBranesCost) && (
                     <Text style={styles.daemonCost}>{braneCostLine(allBranesCost)}</Text>
                   )}
                 </View>
               </View>
             </Pressable>
+            {canWake(activeReach!, activeDaemon.wake) && <WakeButton entry={activeDaemon} />}
             <RowMenu
               id="active"
               openId={menuFor}
               setOpenId={setMenuFor}
               label={`Actions for ${activeDaemon.id}`}
-              items={[{
-                label: "Archive this daemon",
-                icon: "🗄️",
-                onPress: () => { setMenuFor(null); onArchiveDaemon(activeDaemon.id); },
-              }]}
+              items={[
+                // A host the app can wake again, while it is up. A Mac
+                // (recipe "none") is not offered Sleep: nothing here could
+                // bring it back.
+                // From an isolated tab it hops to the shared app first.
+                ...(connected && activeReach === "awake" && canSleep(activeDaemon.wake) && offer
+                  ? [{
+                      label: offer.kind === "hop" ? `Sleep on ${offer.appHost}` : "Sleep",
+                      icon: "💤",
+                      onPress: offer.kind === "hop"
+                        ? () => { setMenuFor(null); hopToSleep(); }
+                        : () => { setMenuFor(null); setSleepError(null); setConfirmSleep(true); },
+                    }]
+                  : []),
+                {
+                  label: "Archive this daemon",
+                  icon: "🗄️",
+                  onPress: () => { setMenuFor(null); onArchiveDaemon(activeDaemon.id); },
+                },
+              ]}
             />
             </View>
             )}
@@ -859,10 +996,23 @@ function BraneSwitcher({
             )}
 
             {/* Other daemons (not currently active) */}
-            {otherDaemons.map((d) => (
+            {otherDaemons.map((d) => {
+              const dReach = reachOf(d, reach[d.id]);
+              const dLabel = d.revoked ? "signed out" : reachLabel(dReach, d.wake);
+              const dUp = !d.revoked && dReach === "awake";
+              const dUndead = dUp ? undeadOf(d.id) : [];
+              const dGlow = glowOf(dUndead);
+              const dPosture = dUp ? postureLine(parseSleepStatus(reach[d.id]?.status?.sleep), dUndead.length) : null;
+              return (
               <View
                 key={d.id}
-                style={[styles.daemonOption, styles.switcherRow, menuFor === `daemon:${d.id}` && styles.rowMenuOpen]}
+                style={[
+                  styles.daemonOption,
+                  styles.switcherRow,
+                  menuFor === `daemon:${d.id}` && styles.rowMenuOpen,
+                  styles.glowTransition,
+                  dGlow ? ({ boxShadow: dGlow } as any) : null,
+                ]}
               >
               <Pressable
                 style={styles.switcherRowMain}
@@ -873,13 +1023,16 @@ function BraneSwitcher({
                 }}
               >
                 <View style={styles.daemonOptionRow}>
-                  <View style={[styles.daemonDot, { backgroundColor: "#555" }]} />
+                  <View style={[styles.daemonDot, { backgroundColor: d.revoked ? "#555" : reachDotColor(dReach, "#555") }]} />
                   <View style={{ flex: 1 }}>
                     <Text style={styles.daemonName}>{d.id}</Text>
                     <Text style={styles.daemonHost}>{d.host} (switch daemon)</Text>
+                    {dLabel && <Text style={styles.daemonHost}>{dLabel}</Text>}
+                    {dPosture && <Text style={styles.daemonHost}>{dPosture}</Text>}
                   </View>
                 </View>
               </Pressable>
+              {!d.revoked && canWake(dReach, d.wake) && <WakeButton entry={d} />}
               <RowMenu
                 id={`daemon:${d.id}`}
                 openId={menuFor}
@@ -892,7 +1045,8 @@ function BraneSwitcher({
                 }]}
               />
               </View>
-            ))}
+              );
+            })}
 
             {/* Archived: this daemon's hidden branes, then this device's
                 archived daemons. Kept, never shown unasked. */}
@@ -1086,6 +1240,50 @@ function BraneSwitcher({
                   <ActivityIndicator size="small" color="#111" />
                 ) : (
                   <Text style={styles.addButtonText}>Sign out other devices</Text>
+                )}
+              </Pressable>
+            </View>
+          </Pressable>
+        </Pressable>
+      </Modal>
+
+      {/* Sleep layer: the active daemon's host, from its row's ⋯. */}
+      <Modal
+        visible={showDropdown && confirmSleep}
+        transparent
+        animationType="fade"
+        onRequestClose={cancelSleep}
+      >
+        <Pressable style={styles.modalOverlay} onPress={cancelSleep} tabIndex={-1}>
+          <Pressable style={styles.layerCard} onPress={(e) => e.stopPropagation()} tabIndex={-1}>
+            <Text style={styles.layerTitle}>Put {activeDaemon?.id} to sleep?</Text>
+            <Text style={styles.signOutBody}>
+              Its machine stops. Every agent session on it loses its bridge
+              now, and the ones that are live are revived when it wakes.
+              Wake it from this switcher; nothing else on it is lost.
+            </Text>
+            {sleepError && <Text style={styles.addError}>{sleepError}</Text>}
+            <View style={styles.layerButtonRow}>
+              <Pressable
+                style={[styles.layerCancel, sleeping && { opacity: 0.5 }]}
+                role="button"
+                onPress={cancelSleep}
+                disabled={sleeping}
+              >
+                <Text style={styles.layerCancelText}>Cancel</Text>
+              </Pressable>
+              <Pressable
+                style={[styles.signOutButton, styles.layerConfirm, sleeping && { opacity: 0.5 }]}
+                onPress={handleSleep}
+                role="button"
+                aria-label="Sleep"
+                aria-busy={sleeping}
+                disabled={sleeping}
+              >
+                {sleeping ? (
+                  <ActivityIndicator size="small" color="#111" />
+                ) : (
+                  <Text style={styles.addButtonText}>Sleep</Text>
                 )}
               </Pressable>
             </View>
@@ -1507,6 +1705,15 @@ export default function NarrativeList() {
     loadData();
   }, [conn, loadData, daemons.length]);
 
+  // A daemon that failed the first load and then came back — woken from the
+  // switcher (docs/sleep.md), or restarted — loads again when its control
+  // socket connects, rather than leaving the error up until a pull.
+  useEffect(() => {
+    if (connected && error && conn) loadData();
+    // Only on the socket coming up; a failed load must not loop.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [connected]);
+
   const handleSpawnPress = useCallback(() => {
     // Open even with zero folds — the dialog's "Add folder" form is how a
     // fresh (e.g. mobile-only) install registers its first spawn point.
@@ -1869,6 +2076,8 @@ export default function NarrativeList() {
                   onArchiveBrane={handleArchiveBrane}
                   onSignOutOthers={rotateActiveToken}
                   conn={conn}
+                  isolated={isolated}
+                  appHost={appHost}
                 />
                 <Pressable
                   onPress={() => {
@@ -2180,6 +2389,10 @@ const styles = StyleSheet.create({
   rowMenuOpen: {
     zIndex: 100,
   },
+  // A daemon row's undead glow fades in and out, as a card's does.
+  glowTransition: (Platform.OS === "web"
+    ? { transitionProperty: "box-shadow", transitionDuration: "400ms" }
+    : {}) as any,
   rowMenuButton: {
     paddingHorizontal: 12,
     justifyContent: "center",

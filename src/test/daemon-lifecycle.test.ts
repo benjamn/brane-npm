@@ -21,6 +21,7 @@ import {
   readStop,
   recordStop,
   restartPort,
+  restartRefusal,
   startupRefusal,
   successorArgs,
 } from "../daemon/lifecycle.js";
@@ -359,5 +360,17 @@ describe("an MCP bridge holding a listen while no daemon runs", () => {
     } finally {
       child.kill();
     }
+  });
+});
+
+describe("restartRefusal: no in-place restart on a Fly machine", () => {
+  it("refuses where the daemon is the machine's main process, naming the machine restart", () => {
+    const why = restartRefusal({ FLY_APP_NAME: "brane-5a04ec", FLY_MACHINE_ID: "872290f0244978" });
+    assert.ok(why);
+    assert.match(why, /fly machine restart 872290f0244978 -a brane-5a04ec/);
+  });
+  it("allows it anywhere else", () => {
+    assert.equal(restartRefusal({}), null);
+    assert.equal(restartRefusal({ FLY_APP_NAME: "  " }), null);
   });
 });
