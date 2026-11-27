@@ -10,6 +10,7 @@ import {
   JSON_HEADERS,
   MAX_ATTEMPTS,
   NO_HEADERS,
+  guardResponseBody,
   isRetryableError,
   isRetryableMethod,
   retryDelayMs,
@@ -305,7 +306,9 @@ function fetchAttempts(
         const refused = connFromUrl(url);
         if (refused) unauthorizedListener(refused);
       }
-      return res;
+      // The timer below ends with the headers; the body gets the same
+      // budget, as silence between chunks (`guardResponseBody`).
+      return guardResponseBody(res, () => controller.abort(), timeoutMs);
     } catch (err) {
       // A request its caller cancelled is not a transport failure.
       if (n + 1 < attempts && isRetryableError(err) && !outer?.aborted) {
@@ -1395,6 +1398,21 @@ export async function probeDaemon(
   // (`probeHeardHost`, @shared/sleep).
   if (!res.ok) throw Object.assign(new Error(`Status ${res.status}`), { status: res.status });
   return res.json() as Promise<DaemonStatus>;
+}
+
+/** Ask a daemon what its Tailscale says about `hosts` and about this device
+ *  (`GET /api/tailnet`), on the switcher's budget. The raw body: the caller
+ *  parses it (`parseTailnetReport`), and an older daemon's 404 throws. */
+export async function fetchTailnet(host: string, token: string, hosts: string[]): Promise<unknown> {
+  const conn: ConnectionParams = { host, token };
+  const res = await fetchWithTimeout(
+    apiUrl(conn, `/api/tailnet?hosts=${encodeURIComponent(hosts.join(","))}`),
+    { headers: NO_HEADERS },
+    SWITCHER_PROBE_TIMEOUT_MS,
+    SWITCHER_PROBE_ATTEMPTS,
+  );
+  if (!res.ok) throw Object.assign(new Error(`Status ${res.status}`), { status: res.status });
+  return res.json();
 }
 
 /** `probeDaemon` on the switcher's budget (`SWITCHER_PROBE_TIMEOUT_MS`, one

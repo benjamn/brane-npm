@@ -8,6 +8,8 @@ import {
   formatInvocation,
   formatSystemContent,
   isSystemEvent,
+  formatMinutes,
+  relAhead,
   relPart,
   systemLine,
   restartedContent,
@@ -30,6 +32,39 @@ const SEC = 1000;
 const MIN = 60 * SEC;
 const HOUR = 60 * MIN;
 const DAY = 24 * HOUR;
+
+describe("relAhead", () => {
+  it("counts down in relPart's units, rounding up so it never says less than is left", () => {
+    assert.deepEqual(relAhead(NOW + 45 * SEC + 1, NOW)?.val, "46s");
+    assert.deepEqual(relAhead(NOW + 60 * SEC, NOW)?.val, "60s");
+    assert.deepEqual(relAhead(NOW + 60 * SEC + 1, NOW)?.val, "2m");
+    assert.deepEqual(relAhead(NOW + 7 * MIN + 30 * SEC, NOW)?.val, "8m");
+    assert.deepEqual(relAhead(NOW + 3 * HOUR, NOW)?.val, "3h");
+    assert.deepEqual(relAhead(NOW + 2 * DAY, NOW)?.val, "2d");
+    assert.equal(relAhead(NOW, NOW), null, "passed");
+  });
+
+  it("says when its words change next", () => {
+    assert.equal(relAhead(NOW + 7 * MIN + 30 * SEC, NOW)?.changesInMs, 30 * SEC);
+    assert.equal(relAhead(NOW + 30 * SEC, NOW)?.changesInMs, 1 * SEC);
+    assert.equal(relAhead(NOW + 61 * SEC, NOW)?.changesInMs, 1 * SEC, "2m becomes 60s a second later");
+  });
+
+  it("switches to a date past a week, with no \"in\"", () => {
+    const a = relAhead(NOW + 10 * DAY, NOW);
+    assert.equal(a?.ahead, false);
+    assert.match(a?.val ?? "", /^[A-Z][a-z]{2} \d+$/);
+  });
+});
+
+describe("formatMinutes", () => {
+  it("is exact, in the largest whole unit", () => {
+    assert.equal(formatMinutes(15), "15m");
+    assert.equal(formatMinutes(90), "90m");
+    assert.equal(formatMinutes(120), "2h");
+    assert.equal(formatMinutes(1440), "1d");
+  });
+});
 
 describe("relPart", () => {
   it("floors sub-minute to seconds, never to zero", () => {

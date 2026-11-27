@@ -11,9 +11,11 @@ import assert from "node:assert/strict";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { IDLE_CHECK_MS } from "../shared/sleep.js";
 import {
   EXIT_RECORD,
   EXIT_RECORD_LAST,
+  IDLE_TICK_MS,
   SESSIONS_CACHE_MS,
   SLEEP_MANIFEST,
   SLEEP_MANIFEST_LAST,
@@ -126,9 +128,17 @@ describe("wakeRecipe: what GET /api/status reports as `wake`", () => {
     assert.deepEqual(wakeRecipe({ FLY_APP_NAME: "brane-ben" }), { kind: "url", url: "https://brane-ben.fly.dev/wake" });
   });
 
+  it("names the machine and its region, so the switcher can say where the host is", () => {
+    assert.deepEqual(
+      wakeRecipe({ FLY_APP_NAME: "brane-nrt-x", FLY_MACHINE_ID: "3d8d97710f9e48", FLY_REGION: "nrt" }),
+      { kind: "url", url: "https://brane-nrt-x.fly.dev/wake", machine: "3d8d97710f9e48", region: "nrt" },
+    );
+    assert.deepEqual(wakeRecipe({ FLY_APP_NAME: "brane-ben", FLY_REGION: "not a region" }), { kind: "url", url: "https://brane-ben.fly.dev/wake" });
+  });
+
   it("is none, with a reason, anywhere else", () => {
-    assert.deepEqual(wakeRecipe({}), { kind: "none", reason: "not a Fly machine" });
-    assert.deepEqual(wakeRecipe({ FLY_APP_NAME: "  " }), { kind: "none", reason: "not a Fly machine" });
+    assert.deepEqual(wakeRecipe({}), { kind: "none", reason: "no way to wake it" });
+    assert.deepEqual(wakeRecipe({ FLY_APP_NAME: "  " }), { kind: "none", reason: "no way to wake it" });
   });
 });
 
@@ -366,6 +376,32 @@ describe("Sleeper: the idle rule's clock", () => {
     assert.equal(h.sleeper.tick(), true);
   });
 
+  it("checks its rule as often as the app assumes", () => {
+    // The row keeps "sleeps in 1m" for one check past the countdown's end.
+    assert.equal(IDLE_TICK_MS, IDLE_CHECK_MS);
+  });
+
+  it("reports the countdown only while the rule would fire at its end", () => {
+    const h = harness({ live: [] });
+    h.advance(4 * MIN);
+    assert.equal(h.sleeper.status().sleeps_in_ms, 6 * MIN, "no session, nobody connected: 10 min from the start, 4 gone");
+    h.advance(20 * MIN);
+    h.advance(SESSIONS_CACHE_MS);
+    assert.equal(h.sleeper.status().sleeps_in_ms, 0, "past its end, never negative");
+    h.sleeper.clientsChanged(1);
+    assert.equal(h.sleeper.status().sleeps_in_ms, null, "a device connected holds it");
+    h.sleeper.clientsChanged(0);
+    assert.equal(h.sleeper.status().sleeps_in_ms, 10 * MIN, "and its leaving restarts the count");
+    h.setLive([{ id: "claude-1", role: "worker" }]);
+    h.advance(SESSIONS_CACHE_MS);
+    assert.equal(h.sleeper.status().sleeps_in_ms, null, "a session holds it");
+    h.setLive(null);
+    h.advance(SESSIONS_CACHE_MS);
+    assert.equal(h.sleeper.status().sleeps_in_ms, null, "tmux unknown: the rule never fires, so no countdown");
+    const off = harness({ idle: null, live: [] });
+    assert.equal(off.sleeper.status().sleeps_in_ms, null, "no rule, no countdown");
+  });
+
   it("never fires with idle_minutes unset", () => {
     const h = harness({ idle: null });
     h.advance(1e9);
@@ -375,7 +411,7 @@ describe("Sleeper: the idle rule's clock", () => {
 
   it("reports status in its exact shape, with the session count cached briefly", () => {
     const h = harness({ live: [{ id: "claude-1", role: "worker" }] });
-    assert.deepEqual(h.sleeper.status(), { idle_minutes: 10, last_client_disconnect: T0, sessions: 1 });
+    assert.deepEqual(h.sleeper.status(), { idle_minutes: 10, last_client_disconnect: T0, sessions: 1, sleeps_in_ms: null });
     h.setLive([]);
     assert.equal(h.sleeper.status().sessions, 1, "cached");
     h.advance(SESSIONS_CACHE_MS);

@@ -2,7 +2,8 @@
 set -e
 
 # The wake door, first of all: a separate process on its own port (WAKE_PORT,
-# 8080), answering GET /wake with 204 and everything else with 404. Fly Proxy
+# 8080), answering GET /wake with which machine this is (200, JSON) and
+# everything else with 404. Fly Proxy
 # starts a stopped machine when a request arrives for fly.toml's
 # [http_service], and this is the port that service routes to, so it comes up
 # before anything slow (the volume chown, tailscaled) and the request that

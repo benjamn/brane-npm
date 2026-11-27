@@ -8,6 +8,7 @@
 
 import type { ConnectionParams, ToolUse } from "./api";
 import { isSignedOutClose } from "@shared/token-rotation";
+import { controlDialTimeoutMs } from "@shared/api-request";
 
 export type ControlMessage =
   | { type: "state"; narratives: Array<{ id: string; status: string; agent_type: string; role: string; fold_path: string; created_at: number; mcp_connected: boolean; awaiting?: boolean; title?: string | null; summary?: string | null }> }
@@ -46,6 +47,9 @@ export function createControlChannel(opts: ControlChannelOptions) {
   let ws: WebSocket | null = null;
   let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   let closed = false;
+  // Consecutive dials that never opened; sets the next dial's patience
+  // (`controlDialTimeoutMs`) and is cleared by any open.
+  let dialFailures = 0;
 
   // Track active subscriptions so they survive reconnects
   const activeSubscriptions = new Map<string, number>();
@@ -65,9 +69,24 @@ export function createControlChannel(opts: ControlChannelOptions) {
   function connect() {
     if (closed) return;
 
-    ws = new WebSocket(url);
+    const sock = new WebSocket(url);
+    ws = sock;
+    let opened = false;
+    // A dial that gets no answer would otherwise wait out the OS's own
+    // connect timeout, over a minute on iOS, with its SYN retried at
+    // doubling intervals: a path that was dark for ten seconds costs a
+    // minute. Closing it starts a fresh dial 2 s later (`onclose`).
+    let dialTimedOut = false;
+    const dialTimer = setTimeout(() => {
+      if (sock.readyState !== WebSocket.CONNECTING) return;
+      dialTimedOut = true;
+      sock.close();
+    }, controlDialTimeoutMs(dialFailures));
 
     ws.onopen = () => {
+      clearTimeout(dialTimer);
+      opened = true;
+      dialFailures = 0;
       // Restore all subscriptions after reconnect
       for (const [nid, after] of activeSubscriptions) {
         ws!.send(JSON.stringify({ type: "subscribe", narrative: nid, after }));
@@ -88,6 +107,7 @@ export function createControlChannel(opts: ControlChannelOptions) {
     };
 
     ws.onclose = (event) => {
+      clearTimeout(dialTimer);
       onDisconnect?.();
       if (closed) return;
       if (isSignedOutClose(event.code)) {
@@ -97,11 +117,15 @@ export function createControlChannel(opts: ControlChannelOptions) {
         onSignedOut?.();
         return;
       }
-      reconnectTimer = setTimeout(connect, 2000);
+      if (!opened) dialFailures++;
+      // A dial we gave up on has already waited; the next goes out at once.
+      // Anything else (refused, dropped) keeps the 2 s pause, so a daemon
+      // that is down is not hammered.
+      reconnectTimer = setTimeout(connect, dialTimedOut ? 250 : 2000);
     };
 
     ws.onerror = () => {
-      ws?.close();
+      sock.close();
     };
   }
 

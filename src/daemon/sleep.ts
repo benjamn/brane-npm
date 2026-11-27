@@ -46,7 +46,7 @@ import { execFile } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { hostname } from "node:os";
 import { join } from "node:path";
-import type { SleepStatus, WakeRecipe } from "../shared/sleep.js";
+import { NO_WAKE_REASON, parseMachineId, parseRegion, type SleepStatus, type WakeRecipe } from "../shared/sleep.js";
 
 export type SleepReason = "idle" | "operator" | "signal";
 
@@ -155,8 +155,15 @@ export function idleSleepDue(input: {
  *  up, or unreachable until someone opens it. */
 export function wakeRecipe(env: NodeJS.ProcessEnv = process.env): WakeRecipe {
   const app = env.FLY_APP_NAME?.trim();
-  if (app) return { kind: "url", url: `https://${app}.fly.dev/wake` };
-  return { kind: "none", reason: "not a Fly machine" };
+  if (!app) return { kind: "none", reason: NO_WAKE_REASON };
+  // The machine's own id rides along: Fly Proxy picks which machine of the
+  // app a wake reaches, and the wake door answers with the id it reached,
+  // so the app can tell "started" from "a sibling was already up".
+  // Its region too, so the switcher can say where the host is.
+  const machine = parseMachineId(env.FLY_MACHINE_ID?.trim());
+  const region = parseRegion(env.FLY_REGION?.trim());
+  const url = `https://${app}.fly.dev/wake`;
+  return { kind: "url", url, ...(machine ? { machine } : {}), ...(region ? { region } : {}) };
 }
 
 /** Boot revive runs on a Fly machine, or where `sleep.boot_revive` says so;
@@ -401,7 +408,8 @@ export class Sleeper {
   private timer: NodeJS.Timeout | null = null;
   private lastDisconnect: number | null;
   private clients = 0;
-  private sessionsCache: { at: number; count: number } | null = null;
+  /** `known`: whether tmux answered the last time it was asked. */
+  private sessionsCache: { at: number; count: number; known: boolean } | null = null;
   private entered: SleepReason | null = null;
   private readonly now: () => number;
   private readonly log: (m: string) => void;
@@ -456,7 +464,7 @@ export class Sleeper {
     // costs a process.
     if (!idleSleepDue({ ...pre, sessions: 0 })) return false;
     const live = this.deps.liveNarratives();
-    if (live) this.sessionsCache = { at: this.now(), count: live.length };
+    if (live) this.sessionsCache = { at: this.now(), count: live.length, known: true };
     if (!idleSleepDue({ ...pre, sessions: live === null ? null : live.length })) return false;
     this.log(`idle: no sessions, and no client for ${idleMinutes} min; going to sleep`);
     void this.sleep("idle");
@@ -468,12 +476,19 @@ export class Sleeper {
     if (!this.sessionsCache || t - this.sessionsCache.at >= SESSIONS_CACHE_MS) {
       const live = this.deps.liveNarratives();
       // Unknown keeps the last count rather than reporting a guess of zero.
-      this.sessionsCache = { at: t, count: live ? live.length : this.sessionsCache?.count ?? 0 };
+      this.sessionsCache = { at: t, count: live ? live.length : this.sessionsCache?.count ?? 0, known: live !== null };
     }
+    const idleMinutes = this.deps.idleMinutes();
+    const lastDisconnect = this.clients > 0 ? null : this.lastDisconnect;
+    // The countdown is reported only while the rule would fire at its end:
+    // a rule set, nobody connected, and tmux saying no sessions. With tmux
+    // unknown the rule never fires (`tick`), so no countdown is claimed.
+    const counting = idleMinutes !== null && idleMinutes > 0 && lastDisconnect !== null && this.sessionsCache.known && this.sessionsCache.count === 0;
     return {
-      idle_minutes: this.deps.idleMinutes(),
-      last_client_disconnect: this.clients > 0 ? null : this.lastDisconnect,
+      idle_minutes: idleMinutes,
+      last_client_disconnect: lastDisconnect,
       sessions: this.sessionsCache.count,
+      sleeps_in_ms: counting ? Math.max(0, lastDisconnect + idleMinutes * 60_000 - t) : null,
     };
   }
 

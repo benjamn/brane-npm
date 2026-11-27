@@ -181,6 +181,9 @@ describe("agentRequestRefusal, as the HTTP handler and the upgrade ask it", () =
 const serverSource = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "src", "daemon", "server.ts");
 
 const CLOSED_TO_AGENTS = new Set([
+  // The operator's tailnet (which machines are up, which path a device is
+  // on) is for the operator's app; an agent has no use for it.
+  "GET /api/tailnet",
   // Approving protocols is the operator's (docs/protocols.md#approval); an
   // agent sees what is pending on /home and /fold.
   "GET /api/protocols/pending",

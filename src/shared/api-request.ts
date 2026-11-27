@@ -133,3 +133,91 @@ export function isRetryableError(err: unknown): boolean {
 export function retryDelayMs(attempt: number): number {
   return RETRY_BASE_MS * 2 ** attempt;
 }
+
+/** How long the control socket's dial may sit in CONNECTING before it is
+ *  closed and re-dialed. A browser has no connect timeout worth the name for
+ *  a WebSocket: a SYN into a path that just went dark waits out the OS's
+ *  own, over a minute on iOS, and the 2 s reconnect only starts after that.
+ *  The first dials are short because a fresh dial after the path returns is
+ *  answered at once and a stuck one is not. They lengthen with each dial
+ *  that fails to open, to 15 s, five times a cold TCP + TLS + upgrade at
+ *  741 ms RTT, so a link that is merely slow still gets through. A request
+ *  is different: a GET re-sent while the daemon is still working on the
+ *  first copy costs the daemon twice, so each attempt waits the whole
+ *  timeout (docs/request-layer.md). */
+export const CONTROL_DIAL_TIMEOUTS_MS: readonly number[] = [5_000, 10_000, 15_000];
+export const CONTROL_DIAL_TIMEOUT_MS = 15_000;
+
+/** The dial timeout after `failures` consecutive dials that never opened. */
+export function controlDialTimeoutMs(failures: number): number {
+  const i = Math.max(0, Math.min(Math.floor(failures), CONTROL_DIAL_TIMEOUTS_MS.length - 1));
+  return CONTROL_DIAL_TIMEOUTS_MS[i];
+}
+
+type BufferedRead = "json" | "text" | "arrayBuffer" | "blob";
+const BUFFERED_READS: BufferedRead[] = ["json", "text", "arrayBuffer", "blob"];
+
+/** Read a body to the end, calling `onIdle` (once) when no chunk has arrived
+ *  for `idleMs`. Idle, not total: a large payload on a slow link is still
+ *  arriving, and only silence is a dead connection. */
+export async function readBodyWithIdleTimeout(
+  body: ReadableStream<Uint8Array>,
+  idleMs: number,
+  onIdle: () => void,
+): Promise<Uint8Array> {
+  const reader = body.getReader();
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const arm = () => {
+    clearTimeout(timer);
+    timer = setTimeout(onIdle, idleMs);
+  };
+  try {
+    arm();
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      chunks.push(value);
+      size += value.byteLength;
+      arm();
+    }
+  } finally {
+    clearTimeout(timer);
+  }
+  const out = new Uint8Array(size);
+  let at = 0;
+  for (const c of chunks) {
+    out.set(c, at);
+    at += c.byteLength;
+  }
+  return out;
+}
+
+/** Give a response's buffered reads (`json`, `text`, `arrayBuffer`, `blob`)
+ *  the deadline its headers had.
+ *
+ *  A fetch's timeout ends when the headers arrive; the body after them had
+ *  none, so a connection that died mid-response left `res.json()` pending
+ *  forever: no error, no retry, a spinner until the page was reloaded. A
+ *  tailnet path that flips between relay and direct does exactly that to the
+ *  connections open across the flip (measured 2026-11-25, docs/request-layer.md).
+ *
+ *  `abort` cancels the request, which errors the body, so the read rejects
+ *  with the abort. A caller that streams `res.body` itself is left alone: it
+ *  owns its own pacing. `clone()` is guarded too. */
+export function guardResponseBody<R extends Response>(res: R, abort: () => void, idleMs: number): R {
+  const target = res as unknown as Record<string, unknown>;
+  for (const method of BUFFERED_READS) {
+    target[method] = async () => {
+      const bytes = res.body ? await readBodyWithIdleTimeout(res.body, idleMs, abort) : new Uint8Array(0);
+      if (method === "arrayBuffer") return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
+      if (method === "blob") return new Blob([bytes as BlobPart], { type: res.headers.get("content-type") ?? "" });
+      const text = new TextDecoder().decode(bytes);
+      return method === "json" ? JSON.parse(text) : text;
+    };
+  }
+  const clone = res.clone.bind(res);
+  target.clone = () => guardResponseBody(clone(), abort, idleMs);
+  return res;
+}

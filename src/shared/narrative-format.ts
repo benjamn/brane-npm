@@ -208,10 +208,48 @@ export function relPart(ms: number, now: number = Date.now()): { val: string; ag
   if (hr < 24) return { val: `${hr}h`, ago: true };
   const day = Math.floor(hr / 24);
   if (day < 7) return { val: `${day}d`, ago: true };
+  return { val: shortDate(ms, now), ago: false };
+}
+
+/** "Jun 10", or "Jun 10, 2025" outside `now`'s year. */
+function shortDate(ms: number, now: number): string {
   const d = new Date(ms);
   const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
   const date = `${months[d.getMonth()]} ${d.getDate()}`;
-  return { val: d.getFullYear() === new Date(now).getFullYear() ? date : `${date}, ${d.getFullYear()}`, ago: false };
+  return d.getFullYear() === new Date(now).getFullYear() ? date : `${date}, ${d.getFullYear()}`;
+}
+
+/** `relPart`'s twin for a countdown to `ms`: the same units ("45s", "7m",
+ *  "3h", "2d") and the same week's cutoff to a date, but rounded *up*, as a
+ *  countdown clock is, so it never says less time than is left: 7m30s is
+ *  "8m", and the minutes tick down until the last one, which counts in
+ *  seconds. `ahead` is false for a date ("Dec 3"), which takes no "in".
+ *  `changesInMs` is how long until `val` changes, so a view can redraw
+ *  exactly then rather than on a timer. Null once `ms` has passed. */
+export function relAhead(ms: number, now: number = Date.now()): { val: string; ahead: boolean; changesInMs: number } | null {
+  const left = ms - now;
+  if (left <= 0) return null;
+  const tiers: Array<[unit: number, most: number, sym: string]> = [
+    [1_000, 60, "s"],
+    [60_000, 60, "m"],
+    [3_600_000, 24, "h"],
+    [86_400_000, 7, "d"],
+  ];
+  for (const [unit, most, sym] of tiers) {
+    if (left <= unit * most) {
+      const n = Math.ceil(left / unit);
+      return { val: `${n}${sym}`, ahead: true, changesInMs: left - (n - 1) * unit };
+    }
+  }
+  return { val: shortDate(ms, now), ahead: false, changesInMs: left - 7 * 86_400_000 };
+}
+
+/** A whole number of minutes, as a setting reads: exact, in the largest
+ *  unit that divides it ("15m", "90m", "2h", "1d"). */
+export function formatMinutes(minutes: number): string {
+  if (minutes > 0 && minutes % 1440 === 0) return `${minutes / 1440}d`;
+  if (minutes > 0 && minutes % 60 === 0) return `${minutes / 60}h`;
+  return `${minutes}m`;
 }
 
 /** Humanized activity span "created-ago to last-active-ago" — e.g. "3d to 4h

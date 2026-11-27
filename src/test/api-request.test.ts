@@ -1,10 +1,11 @@
-import { test, describe } from "node:test";
+import { test, describe, it, before, after } from "node:test";
 import assert from "node:assert/strict";
 import { existsSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import {
   DEFAULT_TIMEOUT_MS,
+  controlDialTimeoutMs,
   JSON_HEADERS,
   MAX_ATTEMPTS,
   NO_HEADERS,
@@ -13,6 +14,7 @@ import {
   requiresPreflight,
   retryDelayMs,
   withToken,
+  guardResponseBody,
 } from "../shared/api-request.js";
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
@@ -163,5 +165,93 @@ describe("the app's own request layer obeys the rules", { skip: existsSync(apiSo
         assert.ok(head.includes("body:"), `JSON_HEADERS without a body:\n${head}`);
       }
     }
+  });
+});
+
+// A fetch's timeout ended with the headers, so a connection that died
+// mid-body left `res.json()` pending forever (measured against the app's own
+// fetchAttempts, 2026-11-25: still pending at 20x the timeout, no retry).
+describe("guardResponseBody: the body gets a deadline too", () => {
+  let server: import("node:http").Server;
+  let base: string;
+
+  before(async () => {
+    const { createServer } = await import("node:http");
+    server = createServer((req, res) => {
+      if (req.url === "/stall") {
+        res.writeHead(200, { "content-type": "application/json", "content-length": "1000" });
+        res.write('[{"id":"claude-00000000"');
+        return; // and then silence
+      }
+      if (req.url === "/slow") {
+        // Slow but alive: a chunk every 40 ms, each well inside the idle budget.
+        res.writeHead(200, { "content-type": "application/json" });
+        const parts = ["[1", ",2", ",3", ",4", "]"];
+        const next = () => {
+          const p = parts.shift();
+          if (p === undefined) return res.end();
+          res.write(p);
+          setTimeout(next, 40);
+        };
+        return next();
+      }
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end('{"ok":true}');
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    base = `http://127.0.0.1:${(server.address() as import("node:net").AddressInfo).port}`;
+  });
+
+  after(async () => {
+    server.closeAllConnections();
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  });
+
+  const guarded = async (path: string, idleMs: number) => {
+    const controller = new AbortController();
+    const res = await fetch(base + path, { signal: controller.signal });
+    return guardResponseBody(res, () => controller.abort(), idleMs);
+  };
+
+  it("rejects a read whose body stalls, where it used to hang", async () => {
+    const res = await guarded("/stall", 150);
+    const started = Date.now();
+    await assert.rejects(res.json());
+    assert.ok(Date.now() - started < 2_000, "it ended near the idle budget, not never");
+  });
+
+  it("counts silence, not total time: a slow body that keeps arriving completes", async () => {
+    const res = await guarded("/slow", 150);
+    assert.deepEqual(await res.json(), [1, 2, 3, 4]);
+  });
+
+  it("leaves an ordinary response as it was, for every buffered read and a clone", async () => {
+    assert.deepEqual(await (await guarded("/", 150)).json(), { ok: true });
+    assert.equal(await (await guarded("/", 150)).text(), '{"ok":true}');
+    assert.equal((await (await guarded("/", 150)).arrayBuffer()).byteLength, 11);
+    const blob = await (await guarded("/", 150)).blob();
+    assert.equal(blob.type, "application/json");
+    const res = await guarded("/", 150);
+    assert.deepEqual(await res.clone().json(), { ok: true });
+    assert.deepEqual(await res.json(), { ok: true });
+    assert.equal(res.ok, true);
+    assert.equal(res.status, 200);
+  });
+
+  it("guards a clone's read as well", async () => {
+    const res = await guarded("/stall", 150);
+    await assert.rejects(res.clone().json());
+  });
+});
+
+describe("attempt and dial deadlines", () => {
+  it("every attempt of a request waits the whole timeout: a slow GET is not re-sent", (t) => {
+    let src: string;
+    try { src = readFileSync(new URL("../../expo/lib/api.ts", import.meta.url), "utf8"); } catch { t.skip("source not present"); return; }
+    assert.match(src, /setTimeout\(\(\) => controller\.abort\(\), timeoutMs\)/);
+  });
+
+  it("the control dial starts short and lengthens to 15 s", () => {
+    assert.deepEqual([0, 1, 2, 3, 9].map(controlDialTimeoutMs), [5_000, 10_000, 15_000, 15_000, 15_000]);
   });
 });

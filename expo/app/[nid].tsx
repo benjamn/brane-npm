@@ -81,6 +81,7 @@ import {
   terminalOnlyHref,
 } from "@shared/view-url";
 import { useAppHost } from "@/lib/appHost";
+import { FINE_POINTER, CARD_TITLE_LINE, CARD_TITLE_GAP, CARD_SIDE_PAD } from "@/lib/pointer";
 import { visiblePanes, selectPane } from "@shared/pane-layout";
 
 interface PendingPayload {
@@ -2492,7 +2493,7 @@ export default function ChatView() {
           onPress={() => setShowSwitcher(false)}
           tabIndex={-1}
         >
-          <View style={styles.switcherContent}>
+          <View style={[styles.switcherContent, FINE_POINTER && styles.switcherContentTall]}>
             <View style={styles.switcherTitleRow}>
               <Text style={styles.switcherTitle}>Switch narrative</Text>
               {/* The one in-app route to the list, needed when a narrative
@@ -2602,13 +2603,6 @@ export default function ChatView() {
                 );
               }}
             />
-            <Pressable
-              style={styles.switcherCancel}
-              role="button"
-              onPress={() => setShowSwitcher(false)}
-            >
-              <Text style={styles.switcherCancelText}>Cancel</Text>
-            </Pressable>
           </View>
         </Pressable>
       </Modal>
@@ -3057,7 +3051,9 @@ const styles = StyleSheet.create({
   },
   switcherOverlay: {
     flex: 1,
-    backgroundColor: "rgba(0,0,0,0.6)",
+    // 0.7, as QrModal's and LockSheet's: at 0.6 a dark chat behind it came
+    // out within a shade of the card.
+    backgroundColor: "rgba(0,0,0,0.7)",
     justifyContent: "center",
     alignItems: "center",
     padding: 24,
@@ -3065,22 +3061,37 @@ const styles = StyleSheet.create({
   switcherContent: {
     backgroundColor: "#1e1e1e",
     borderRadius: 12,
-    paddingTop: 20,
-    paddingHorizontal: 20,
-    paddingBottom: 8,
+    // The daemons-and-branes picker's geometry (CARD_* in lib/pointer.ts):
+    // as much above the title as below it; at the bottom the last row's
+    // own 8px margin makes up the side padding.
+    paddingTop: CARD_TITLE_GAP,
+    paddingHorizontal: CARD_SIDE_PAD,
+    paddingBottom: CARD_SIDE_PAD - 8,
     width: "100%",
     maxWidth: 400,
-    maxHeight: "70%",
+    // A cap, not a size: a short list still gets a short card. On a touch
+    // screen it leaves backdrop above and below, the easy way to close.
+    maxHeight: "80%",
+    // The edge the switcher's layers have (layerCard in app/index.tsx):
+    // a dark grey card on a dimmed dark grey page needs a drawn edge to
+    // read as a card, in sunlight especially.
+    borderWidth: 1,
+    borderColor: "#3a3a40",
+  },
+  // FINE_POINTER: the whole height the overlay leaves inside its padding.
+  switcherContentTall: {
+    maxHeight: "100%",
   },
   switcherTitleRow: {
     flexDirection: "row",
     alignItems: "baseline",
-    justifyContent: "space-between",
-    marginBottom: 16,
+    marginBottom: CARD_TITLE_GAP,
   },
   switcherTitle: {
+    flex: 1,
     color: "#e0e0e0",
     fontSize: 18,
+    lineHeight: CARD_TITLE_LINE,
     fontWeight: "600",
   },
   switcherListLink: {
@@ -3133,15 +3144,6 @@ const styles = StyleSheet.create({
     fontSize: 14,
     textAlign: "center",
     paddingVertical: 20,
-  },
-  switcherCancel: {
-    paddingVertical: 12,
-    alignItems: "center",
-    marginTop: 4,
-  },
-  switcherCancelText: {
-    color: "#888",
-    fontSize: 15,
   },
   reloadButton: {
     paddingHorizontal: 8,

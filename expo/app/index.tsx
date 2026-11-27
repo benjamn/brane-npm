@@ -57,13 +57,14 @@ import DevicesLayer from "@/components/DevicesLayer";
 import { buildIsolateUrl, isIsolated, terminalOnlyHref } from "@shared/view-url";
 import { handOffNarrativeMenu } from "@shared/menu-handoff";
 import { useAppHost } from "@/lib/appHost";
+import { FINE_POINTER, CARD_TITLE_LINE, CARD_TITLE_GAP, CARD_SIDE_PAD, CARD_CLOSE_INSET } from "@/lib/pointer";
 import { sortNarratives } from "@shared/narrative-sort";
 import { isAwaiting, awaitingGlow, multiAwaitingGlow, AWAITING_STATUS, NOT_AWAITING_STATUS } from "@shared/narrative-status";
 import { isListScrollKey, listScrollTarget } from "@shared/list-scroll-keys";
 import { buildHitSnippet, type MatchRange, type SnippetOptions } from "@shared/hit-snippet";
 import { interruptSession } from "@/lib/terminal";
-import { markSlept, probeReach, reachOf, useReachRecords, wakeDaemon } from "@/lib/reach";
-import { canSleep, parseSleepStatus, postureLine, reachLabel, sleepOffer, sleepWakeSlot, withSleepIntent, type Reach } from "@shared/sleep";
+import { markSlept, probeAllReach, reachOf, tailnetWord, useReachRecords, wakeDaemon } from "@/lib/reach";
+import { canSleep, daemonDetailText, daemonRegion, reachWords, parseSleepStatus, pathLabel, sleepOffer, sleepPhraseChangesInMs, sleepWakeSlot, withSleepIntent, type Reach } from "@shared/sleep";
 
 // How long a keyed smooth scroll counts as still under way, for stacking the
 // next key onto its target. Chromium's keyboard smooth scroll settles in
@@ -558,12 +559,132 @@ function RowMenu({
   );
 }
 
-/** A row's dot for a daemon that is not answering: amber while it is asleep
- *  or on its way either side of it, red when nothing can wake it. */
+/** A row's dot: green awake; amber for a daemon not answering, or asleep,
+ *  or on its way either side of it, whatever kind of host it is (the dot
+ *  says what is known, not what the host is); red for a wake that started
+ *  another machine. */
 function reachDotColor(reach: Reach, fallback: string): string {
-  if (reach === "asleep" || reach === "sleeping" || reach === "waking" || reach === "still-asleep") return "#d9b866";
-  if (reach === "unreachable") return "#e07070";
+  if (reach === "awake") return "#66d9a0";
+  if (reach === "connecting") return "#9ad966";
+  if (reach === "asleep" || reach === "unreachable" || reach === "sleeping" || reach === "waking" || reach === "still-asleep") return "#d9b866";
+  if (reach === "woke-other") return "#e07070";
   return fallback;
+}
+
+/** A machine row's ⋯ item that copies its address, which the row itself
+ *  no longer spends a line on; the label shows it, so reading it is free. */
+function copyAddressItem(d: DaemonEntry, close: () => void): ContextMenuItem {
+  return {
+    label: `Copy ${d.host}`,
+    icon: "📋",
+    onPress: () => {
+      close();
+      try { void navigator.clipboard?.writeText(d.host); } catch {}
+    },
+  };
+}
+
+/** One line that scrolls sideways when it is longer than the row, its far
+ *  edge faded, as a narrative card's summary is ([nid].tsx): the text is
+ *  never cut off with an ellipsis, and never wraps into what would read as
+ *  another line. The fade masks the text rather than painting over it, so
+ *  a glow behind the row shows through. */
+function FadeLine({ children, style }: { children: React.ReactNode; style?: React.CSSProperties }) {
+  const fade = "linear-gradient(to right, #000 calc(100% - 40px), transparent)";
+  return (
+    <div
+      className="no-scrollbar"
+      style={{
+        overflowX: "auto",
+        overflowY: "hidden",
+        scrollbarWidth: "none",
+        WebkitOverflowScrolling: "touch",
+        display: "flex",
+        alignItems: "center",
+        flex: 1,
+        minWidth: 0,
+        maskImage: fade,
+        WebkitMaskImage: fade,
+        ...style,
+      } as React.CSSProperties}
+    >
+      {children}
+      {/* Scrolled to the end, the last characters clear the fade. */}
+      <span aria-hidden style={{ flex: "0 0 40px" }} />
+    </div>
+  );
+}
+
+/** One switcher row's text, laid out as a narrative's card is (the
+ *  narrative switcher, NarrativeMeta.tsx): a bold title with a dim "in
+ *  <place>", then a line that opens with the status dot, then one line of
+ *  detail. Each line is one line, so a wrap is never mistaken for a new
+ *  fact, and the dot sits in the text instead of a column of its own. */
+function SwitcherRowText({
+  title,
+  tag,
+  place,
+  dot,
+  cost,
+  word,
+  more,
+  sep = " · ",
+  detail,
+}: {
+  title: string;
+  /** A quiet word after the title ("home"). */
+  tag?: string | null;
+  place?: string | null;
+  dot: string;
+  cost?: string | null;
+  /** The state, in the row's light text ("awake", "asleep", "3 active"). */
+  word: string;
+  /** What qualifies it, quieter, as a narrative's "from 1h" is. */
+  more?: string | null;
+  /** Between the word and `more`: " · " by default, " " where `more`
+   *  continues the word ("3 active of 412"). */
+  sep?: string;
+  detail?: string | null;
+}) {
+  return (
+    <View style={{ flex: 1, minWidth: 0 }}>
+      <View style={styles.rowTitleLine}>
+        <Text style={styles.rowTitle} numberOfLines={1}>{title}</Text>
+        {tag ? <Text style={[styles.rowPlace, { color: "#888" }]} numberOfLines={1}>{tag}</Text> : null}
+
+      </View>
+      <View style={styles.rowMetaLine}>
+        <View style={[styles.daemonDot, { backgroundColor: dot }]} />
+        <FadeLine>
+          <Text style={styles.rowMeta}>
+            <Text style={{ color: "#d8d8dd" }}>{word}</Text>
+            {/* Where it is, read with its state: "awake in nrt". */}
+            {place ? (
+              <>
+                <Text style={{ color: "#888" }}> in </Text>
+                <Text style={{ color: "#5e8a72" }}>{place}</Text>
+              </>
+            ) : null}
+            {more ? <Text style={{ color: "#888" }}>{sep}{more}</Text> : null}
+          </Text>
+        </FadeLine>
+      </View>
+      {detail ? (
+        <FadeLine style={{ marginTop: 3 }}>
+          <Text style={styles.rowDetail}>{detail}</Text>
+        </FadeLine>
+      ) : null}
+      {/* The cost on a line of its own, last. On a narrative's card it
+          qualifies the role ("$2 /worker"); a machine or brane has no role
+          for it to modify, and beside the state it only pushed the state
+          out of sight. */}
+      {cost ? (
+        <FadeLine style={{ marginTop: 3 }}>
+          <Text style={styles.rowCost}>{cost}</Text>
+        </FadeLine>
+      ) : null}
+    </View>
+  );
 }
 
 function BraneSwitcher({
@@ -634,8 +755,29 @@ function BraneSwitcher({
   const [sleepError, setSleepError] = useState<string | null>(null);
   // Awake, asleep or unreachable, per daemon (expo/lib/reach.ts).
   const reach = useReachRecords();
+  // A row's "sleeps in 7m" is counted down from its status's answer at
+  // render time, so the open switcher redraws when the soonest such text
+  // would change: each minute while it shows minutes, each second in the
+  // last one, and never with no countdown showing.
+  const [countdownTick, setCountdownTick] = useState(0);
+  useEffect(() => {
+    if (!showDropdown) return;
+    const now = Date.now();
+    let soonest: number | null = null;
+    for (const r of Object.values(reach)) {
+      if (r?.probe !== "ok") continue;
+      const wait = sleepPhraseChangesInMs(parseSleepStatus(r.status?.sleep), r.statusAt ?? null, now);
+      if (wait !== null && (soonest === null || wait < soonest)) soonest = wait;
+    }
+    if (soonest === null) return;
+    // A hair past the change, so the redraw lands on the new text.
+    const timer = setTimeout(() => setCountdownTick((n) => n + 1), soonest + 20);
+    return () => clearTimeout(timer);
+  }, [showDropdown, reach, countdownTick]);
   const activeReach: Reach | null = activeDaemon ? reachOf(activeDaemon, reach[activeDaemon.id], connected) : null;
-  const activeSleep = activeDaemon && connected ? parseSleepStatus(reach[activeDaemon.id]?.status?.sleep) : null;
+  // The same posture every row shows, read the same way: from the last
+  // status, whenever the daemon is awake (not only while its socket is up).
+  const activeSleep = activeDaemon && activeReach === "awake" ? parseSleepStatus(reach[activeDaemon.id]?.status?.sleep) : null;
   // The undead on each daemon that is up (expo/lib/reach.ts): the glow its
   // row wears, in their own hues, and the count under its name
   // (docs/sleep.md, "The undead count").
@@ -643,17 +785,21 @@ function BraneSwitcher({
   const glowOf = (nids: string[]) => multiAwaitingGlow(nids.map(glowHueFor));
   const activeUndead = activeDaemon && activeReach === "awake" ? undeadOf(activeDaemon.id) : [];
   const activeGlow = glowOf(activeUndead);
-  const activePosture = activeReach === "awake" ? postureLine(activeSleep, activeUndead.length) : null;
-  // Opening the switcher asks every daemon it lists whether it is up, on
+  // The connected daemon's own view of the path to this device ("direct",
+  // "relayed via nyc"): what a slow or stuck connection is usually about.
+  const activePath = activeDaemon && activeReach === "awake" ? pathLabel(reach[activeDaemon.id]?.path) : null;
+  const activeWords = activeDaemon ? reachWords(activeReach!, activeDaemon.wake, reach[activeDaemon.id]?.wakeAnswer, tailnetWord(reach[activeDaemon.id])) : null;
+  // Opening the switcher asks the daemons it lists whether they are up, on
   // the switcher's short budget: the active one only when its socket is
-  // down. Tailnet addresses only — the wake URL is the Wake item's alone.
+  // down, and none that was asked recently (`probeDue`: an answer stands
+  // for 30 s, a silent host is re-asked on a doubling backoff). Tailnet
+  // addresses only — the wake URL is the Wake item's alone.
   useEffect(() => {
     if (!showDropdown) return;
-    for (const d of daemons) {
-      if (d.archived || d.revoked) continue;
-      if (d.id === activeDaemon?.id && connected) continue;
-      void probeReach(d);
-    }
+    // With the active daemon connected it is asked what its Tailscale says
+    // of the others first, and a machine the tailnet has offline is never
+    // dialed (`probeAllReach`).
+    void probeAllReach(daemons.filter((d) => !(d.id === activeDaemon?.id && connected)));
     // Once per opening; a row's state then follows the store.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [showDropdown]);
@@ -854,14 +1000,30 @@ function BraneSwitcher({
         onRequestClose={closeDropdown}
       >
         <Pressable
-          style={styles.modalOverlay}
+          style={[styles.modalOverlay, styles.pickerOverlay]}
           onPress={closeDropdown}
           tabIndex={-1}
         >
-          <Pressable style={styles.modalContent} onPress={() => {}} tabIndex={-1}>
-            <Text style={styles.modalTitle}>Branes</Text>
+          <Pressable style={[styles.modalContent, FINE_POINTER && styles.modalContentTall]} onPress={() => {}} tabIndex={-1}>
+            {/* The way out sits in the title's row, which has the room, and
+                not in a row of its own under the list, which costs the rows
+                their height — a phone in landscape has little to spare. The
+                backdrop, Esc and the back gesture close it too. */}
+            <View style={styles.modalTitleRow}>
+              <Text style={styles.modalTitle}>Daemons and branes</Text>
+              <Pressable
+                style={styles.modalClose}
+                role="button"
+                aria-label="Close"
+                onPress={closeDropdown}
+              >
+                <Text style={styles.modalCloseText}>✕</Text>
+              </Pressable>
+            </View>
 
-            <ScrollView style={{ flexGrow: 0 }}>
+            {/* Room for the current row's outline, which the scroller would
+                clip, as the narrative switcher's list has (switcherList). */}
+            <ScrollView style={{ flexGrow: 0, padding: 4, margin: -4 }}>
             {archiveError && <Text style={styles.addError}>{archiveError}</Text>}
             {/* "All" option: the active daemon's own row, so its ⋯ is where
                 the active daemon is archived. */}
@@ -884,25 +1046,16 @@ function BraneSwitcher({
                 setShowDropdown(false);
               }}
             >
-              <View style={styles.daemonOptionRow}>
-                <View
-                  style={[
-                    styles.daemonDot,
-                    { backgroundColor: connected ? "#66d9a0" : reachDotColor(activeReach!, "#555") },
-                  ]}
-                />
-                <View style={{ flex: 1 }}>
-                  <Text style={styles.daemonName}>All branes</Text>
-                  <Text style={styles.daemonHost}>
-                    {activeDaemon.id}
-                    {reachLabel(activeReach!, activeDaemon.wake) ? ` · ${reachLabel(activeReach!, activeDaemon.wake)}` : ""}
-                  </Text>
-                  {activePosture && <Text style={styles.daemonHost}>{activePosture}</Text>}
-                  {braneCostLine(allBranesCost) && (
-                    <Text style={styles.daemonCost}>{braneCostLine(allBranesCost)}</Text>
-                  )}
-                </View>
-              </View>
+              {/* The current machine: tapping it shows all its branes,
+                  which are listed under it. */}
+              <SwitcherRowText
+                title={activeDaemon.id}
+                place={daemonRegion(activeDaemon.wake)}
+                dot={reachDotColor(activeReach!, "#666")}
+                cost={braneCostLine(allBranesCost)}
+                word={activeWords!.word}
+                detail={daemonDetailText(activeReach === "awake", activeSleep, activePath, activeDaemon.lastSeenAt, Date.now(), activeWords!.why, reach[activeDaemon.id]?.statusAt ?? null)}
+              />
             </Pressable>
             <RowMenu
               id="active"
@@ -911,6 +1064,7 @@ function BraneSwitcher({
               label={`Actions for ${activeDaemon.id}`}
               items={[
                 ...sleepWakeItems(activeDaemon, activeReach!),
+                copyAddressItem(activeDaemon, () => setMenuFor(null)),
                 {
                   label: "Archive this daemon",
                   icon: "🗄️",
@@ -929,6 +1083,8 @@ function BraneSwitcher({
                 style={[
                   styles.daemonOption,
                   styles.switcherRow,
+                  // Under the machine they live on.
+                  styles.braneRowNested,
                   b.brane_id === activeBraneId && styles.daemonOptionActive,
                   menuFor === `brane:${b.brane_id}` && styles.rowMenuOpen,
                 ]}
@@ -941,29 +1097,16 @@ function BraneSwitcher({
                   setShowDropdown(false);
                 }}
               >
-                <View style={styles.daemonOptionRow}>
-                  <View
-                    style={[
-                      styles.daemonDot,
-                      {
-                        backgroundColor:
-                          b.active_count > 0 ? "#66d9a0" : "#555",
-                      },
-                    ]}
-                  />
-                  <View style={{ flex: 1 }}>
-                    <Text style={styles.daemonName}>
-                      {b.brane_id}{b.is_home ? " (home)" : ""}
-                    </Text>
-                    <Text style={styles.daemonHost}>
-                      {b.active_count} active, {b.narrative_count} total
-                      {b.absorbed_count > 0 ? ` (${b.absorbed_count} absorbed)` : ""}
-                    </Text>
-                    {braneCostLine(b.cost) && (
-                      <Text style={styles.daemonCost}>{braneCostLine(b.cost)}</Text>
-                    )}
-                  </View>
-                </View>
+                <SwitcherRowText
+                  title={b.brane_id}
+                  tag={b.is_home ? "home" : null}
+                  dot={b.active_count > 0 ? "#66d9a0" : "#666"}
+                  cost={braneCostLine(b.cost)}
+                  word={`${b.active_count} active`}
+                  more={`of ${b.narrative_count}`}
+                  sep=" "
+                  detail={b.absorbed_count > 0 ? `${b.absorbed_count} absorbed` : null}
+                />
               </Pressable>
               {!b.is_home && visibleBranes.length > 1 && (
                 <RowMenu
@@ -984,11 +1127,11 @@ function BraneSwitcher({
             {/* Other daemons (not currently active) */}
             {otherDaemons.map((d) => {
               const dReach = reachOf(d, reach[d.id]);
-              const dLabel = d.revoked ? "signed out" : reachLabel(dReach, d.wake);
+              const dWords = reachWords(dReach, d.wake, reach[d.id]?.wakeAnswer, tailnetWord(reach[d.id]));
               const dUp = !d.revoked && dReach === "awake";
               const dUndead = dUp ? undeadOf(d.id) : [];
               const dGlow = glowOf(dUndead);
-              const dPosture = dUp ? postureLine(parseSleepStatus(reach[d.id]?.status?.sleep), dUndead.length) : null;
+              const dSleep = dUp ? parseSleepStatus(reach[d.id]?.status?.sleep) : null;
               return (
               <View
                 key={d.id}
@@ -1008,15 +1151,13 @@ function BraneSwitcher({
                   setShowDropdown(false);
                 }}
               >
-                <View style={styles.daemonOptionRow}>
-                  <View style={[styles.daemonDot, { backgroundColor: d.revoked ? "#555" : reachDotColor(dReach, "#555") }]} />
-                  <View style={{ flex: 1 }}>
-                    <Text style={styles.daemonName}>{d.id}</Text>
-                    <Text style={styles.daemonHost}>{d.host} (switch daemon)</Text>
-                    {dLabel && <Text style={styles.daemonHost}>{dLabel}</Text>}
-                    {dPosture && <Text style={styles.daemonHost}>{dPosture}</Text>}
-                  </View>
-                </View>
+                <SwitcherRowText
+                  title={d.id}
+                  place={daemonRegion(d.wake)}
+                  dot={d.revoked ? "#666" : reachDotColor(dReach, "#666")}
+                  word={d.revoked ? "signed out" : dWords.word}
+                  detail={daemonDetailText(dUp, dSleep, null, d.lastSeenAt, Date.now(), d.revoked ? null : dWords.why, reach[d.id]?.statusAt ?? null)}
+                />
               </Pressable>
               <RowMenu
                 id={`daemon:${d.id}`}
@@ -1025,6 +1166,7 @@ function BraneSwitcher({
                 label={`Actions for ${d.id}`}
                 items={[
                   ...sleepWakeItems(d, dReach),
+                  copyAddressItem(d, () => setMenuFor(null)),
                   {
                     label: "Archive",
                     icon: "🗄️",
@@ -1083,8 +1225,12 @@ function BraneSwitcher({
                 </Text>
               </Pressable>
             )}
-            </ScrollView>
 
+            {/* The sometimes-actions, last in the scroll rather than pinned
+                under it: when the rows fit they sit where they always did,
+                and when they don't (a phone in landscape, many daemons) the
+                rows get the height and these wait at the end of the list.
+                Close stays pinned: it is the one way out. */}
             <Pressable
               style={styles.addDaemonButton}
               role="button"
@@ -1102,14 +1248,7 @@ function BraneSwitcher({
                 <Text style={[styles.addDaemonButtonText, !connected && { opacity: 0.5 }]}>Devices</Text>
               </Pressable>
             )}
-
-            <Pressable
-              style={styles.modalCancel}
-              role="button"
-              onPress={closeDropdown}
-            >
-              <Text style={styles.modalCancelText}>Close</Text>
-            </Pressable>
+            </ScrollView>
           </Pressable>
         </Pressable>
       </Modal>
@@ -1623,8 +1762,15 @@ export default function NarrativeList() {
     return () => document.removeEventListener("keydown", handleListKey);
   }, [isFocused]);
 
+  // Which load is the current one. A load answers for the daemon it was
+  // started against; switch daemons while one is in flight and its answer,
+  // or its failure a minute later, used to land on the new daemon's list:
+  // the wrong narratives, or an empty list under the old host's error.
+  const loadGenRef = useRef(0);
   const loadData = useCallback(async () => {
     if (!conn) return;
+    const gen = ++loadGenRef.current;
+    const current = () => gen === loadGenRef.current;
     setError(null);
     setEndedLimit(ENDED_PAGE_SIZE);
     try {
@@ -1638,6 +1784,7 @@ export default function NarrativeList() {
         fetchFolds(conn),
         fetchBranes(conn, true).catch(() => [] as BraneInfo[]),
       ]);
+      if (!current()) return;
       setNarratives(sortNarratives(narrs));
       setFolds(flds);
       setBranes(brns);
@@ -1645,12 +1792,13 @@ export default function NarrativeList() {
         listRef.current?.scrollToOffset({ offset: 0, animated: false });
       }, 50);
     } catch (err) {
+      if (!current()) return;
       setError(String(err));
       setNarratives([]);
       setFolds([]);
       setBranes([]);
     } finally {
-      setLoading(false);
+      if (current()) setLoading(false);
     }
   }, [conn, activeBraneId]);
 
@@ -2344,11 +2492,14 @@ const styles = StyleSheet.create({
     backgroundColor: "#2a2a30",
     marginBottom: 6,
   },
+  // The narrative switcher's current row (switcherItemActive in [nid].tsx):
+  // an outline set off from the row, so an awaiting glow's rim still shows.
   daemonOptionActive: {
-    backgroundColor: "#1a3a2a",
-    borderWidth: 1,
-    borderColor: "#3a6a4a",
-  },
+    outlineWidth: 2,
+    outlineStyle: "solid",
+    outlineColor: "#4caf50",
+    outlineOffset: 2,
+  } as any,
   daemonOptionRow: {
     flexDirection: "row",
     alignItems: "center",
@@ -2418,6 +2569,23 @@ const styles = StyleSheet.create({
     borderRadius: 4,
     marginRight: 10,
   },
+  braneRowNested: { marginLeft: 16 },
+  // SwitcherRowText: the narrative card's typography (NarrativeMeta.tsx).
+  rowTitleLine: { flexDirection: "row", alignItems: "baseline", minWidth: 0 },
+  rowTitle: {
+    color: "#d8d8dd",
+    fontSize: 15,
+    fontWeight: "600",
+    fontFamily: "monospace",
+    flexShrink: 1,
+    minWidth: 0,
+  } as any,
+  rowPlace: { marginLeft: 8, fontSize: 13, fontFamily: "monospace", flexShrink: 0 } as any,
+  rowMetaLine: { flexDirection: "row", alignItems: "center", marginTop: 4, minWidth: 0 },
+  rowMeta: { fontSize: 13, fontFamily: "monospace", whiteSpace: "nowrap" } as any,
+  rowCost: { color: "#7bb894", fontSize: 12, fontFamily: "monospace", lineHeight: 16, whiteSpace: "nowrap" } as any,
+  // The narrative card's summary line (switcherItemSummary in [nid].tsx).
+  rowDetail: { color: "#9a9aa0", fontSize: 12, lineHeight: 16, whiteSpace: "nowrap" } as any,
   daemonName: {
     color: "#d8d8dd",
     fontSize: 15,
@@ -2820,19 +2988,59 @@ const styles = StyleSheet.create({
     alignItems: "center",
     padding: 24,
   },
+  // The picker's own backdrop, as the narrative switcher's (switcherOverlay
+  // in [nid].tsx): 0.7, so a dark page comes out further from the card.
+  // The layers over the picker keep modalOverlay's 0.6.
+  pickerOverlay: {
+    backgroundColor: "rgba(0,0,0,0.7)",
+  },
   modalContent: {
     backgroundColor: "#1e1e22",
     borderRadius: 12,
-    padding: 20,
+    // As much above the title as below it, which is what puts the ✕ as
+    // far from the top edge as from the list (CARD_* in lib/pointer.ts).
+    paddingTop: CARD_TITLE_GAP,
+    paddingHorizontal: CARD_SIDE_PAD,
+    paddingBottom: CARD_SIDE_PAD,
     width: "100%",
     maxWidth: 400,
+    // A cap, not a size: a short list still gets a short card. On a touch
+    // screen it leaves backdrop above and below, the easy way to close.
     maxHeight: "80%",
+    // The narrative switcher's edge, and its layers' (layerCard): a dark
+    // card on a dimmed dark page reads as a card only with one drawn.
+    borderWidth: 1,
+    borderColor: "#3a3a40",
+  },
+  // FINE_POINTER: the whole height the overlay leaves inside its padding.
+  modalContentTall: {
+    maxHeight: "100%",
+  },
+  modalTitleRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    marginBottom: CARD_TITLE_GAP,
   },
   modalTitle: {
     color: "#d8d8dd",
     fontSize: 18,
+    lineHeight: CARD_TITLE_LINE,
     fontWeight: "600",
-    marginBottom: 16,
+  },
+  // The ✕: a square as tall as the title's line, reaching into the side
+  // padding so it sits as far from the right edge as from the top.
+  modalClose: {
+    width: CARD_TITLE_LINE,
+    height: CARD_TITLE_LINE,
+    marginRight: -CARD_CLOSE_INSET,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  modalCloseText: {
+    color: "#888",
+    fontSize: 16,
+    lineHeight: 16,
   },
   foldOption: {
     paddingVertical: 14,
@@ -2845,14 +3053,5 @@ const styles = StyleSheet.create({
     color: "#d8d8dd",
     fontSize: 15,
     fontFamily: "monospace",
-  },
-  modalCancel: {
-    paddingVertical: 12,
-    alignItems: "center",
-    marginTop: 8,
-  },
-  modalCancelText: {
-    color: "#888",
-    fontSize: 15,
   },
 });

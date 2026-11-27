@@ -75,6 +75,7 @@ export const FRESH_WINDOW_MS = 60_000;
  *  message; `GET /ws/mcp` under a device token is a mint (ACT_ROUTES). */
 export const FREE_ROUTES: readonly string[] = [
   "GET /api/status",
+  "GET /api/tailnet",
   "GET /api/branes",
   "GET /api/protocols",
   "GET /api/protocols/pending",

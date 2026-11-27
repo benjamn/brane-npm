@@ -3,7 +3,9 @@
  * daemon, one row per melded device plus this machine's CLI, with a Revoke
  * on each other device. A modal layer over the switcher like the add-daemon
  * form and the sign-out confirm (see `BraneSwitcher` in app/index.tsx), so
- * its backdrop, Close and the back gesture dismiss this layer only.
+ * its backdrop, its ✕ and the back gesture dismiss this layer only. Its
+ * card is the switchers' card (CARD_* in lib/pointer.ts): the ✕ in the
+ * title row, and the rarely used footer at the end of the scroll.
  *
  * Revoking is per row and confirmed in place: the row's button turns into
  * "Revoke?" and a second tap does it. The revoked device's sockets are closed
@@ -25,6 +27,7 @@ import { relPart } from "@shared/narrative-format";
 import { originHost } from "@shared/app-origin";
 import { proofName } from "@shared/verification-hop";
 import CredentialsSection from "./CredentialsSection";
+import { FINE_POINTER, CARD_TITLE_LINE, CARD_TITLE_GAP, CARD_SIDE_PAD, CARD_CLOSE_INSET } from "@/lib/pointer";
 
 function ago(ms: number): string {
   const p = relPart(ms);
@@ -179,14 +182,27 @@ export default function DevicesLayer({
   return (
     <Modal visible={visible} transparent animationType="fade" onRequestClose={close}>
       <Pressable style={styles.overlay} onPress={close} tabIndex={-1}>
-        <Pressable style={styles.card} onPress={(e) => e.stopPropagation()} tabIndex={-1}>
-          <Text style={styles.title}>Devices on {daemonName}</Text>
+        <Pressable style={[styles.card, FINE_POINTER && styles.cardTall]} onPress={(e) => e.stopPropagation()} tabIndex={-1}>
+          <View style={styles.titleRow}>
+            <Text style={styles.title} numberOfLines={1}>Devices on {daemonName}</Text>
+            <Pressable
+              style={[styles.close, revoking !== null && { opacity: 0.5 }]}
+              role="button"
+              aria-label="Close"
+              onPress={close}
+              disabled={revoking !== null}
+            >
+              <Text style={styles.closeText}>✕</Text>
+            </Pressable>
+          </View>
+          {error && <Text style={styles.error}>{error}</Text>}
+          <ScrollView style={styles.list}>
           {tokens === null && !error ? (
             <ActivityIndicator style={{ marginVertical: 16 }} color="#aaa" />
           ) : unsupported ? (
             <Text style={styles.body}>This daemon is older than the Devices list. Update brane on it to see and revoke devices.</Text>
           ) : (
-            <ScrollView style={styles.list}>
+            <>
               {sorted.map((t) => (
                 <View key={t.id} style={styles.rowWrap}>
                 <View style={styles.row}>
@@ -241,9 +257,10 @@ export default function DevicesLayer({
                 </View>
               ))}
               <CredentialsSection conn={conn} visible={visible} />
-            </ScrollView>
+            </>
           )}
-          {error && <Text style={styles.error}>{error}</Text>}
+          {/* The wholesale sign-out, last in the scroll as the picker's Add
+              Daemon and Devices are: the rows get the height. */}
           <Text style={styles.footnote}>
             A revoked device is signed out until it scans a fresh Meld QR. To keep only this device:
           </Text>
@@ -257,9 +274,7 @@ export default function DevicesLayer({
               {signedOutOthers ? "Other devices signed out" : "Sign out other devices"}
             </Text>
           </Pressable>
-          <Pressable style={[styles.close, revoking !== null && { opacity: 0.5 }]} role="button" onPress={close} disabled={revoking !== null}>
-            <Text style={styles.closeText}>Close</Text>
-          </Pressable>
+          </ScrollView>
         </Pressable>
       </Pressable>
     </Modal>
@@ -323,20 +338,37 @@ function CascadePanel({
   );
 }
 
-// Matches the switcher's layers (`layerCard` and friends in app/index.tsx).
+// The switchers' card (`modalContent` in app/index.tsx, `switcherContent`
+// in app/[nid].tsx): their geometry, edge, ✕ and height caps.
 const styles = StyleSheet.create({
   overlay: { flex: 1, backgroundColor: "rgba(0,0,0,0.6)", justifyContent: "center", alignItems: "center", padding: 24 },
   card: {
     backgroundColor: "#1e1e22",
     borderRadius: 12,
-    padding: 20,
+    paddingTop: CARD_TITLE_GAP,
+    paddingHorizontal: CARD_SIDE_PAD,
+    paddingBottom: CARD_SIDE_PAD,
     width: "100%",
     maxWidth: 420,
-    maxHeight: "85%",
+    // On a touch screen, backdrop above and below to tap away on.
+    maxHeight: "80%",
     borderWidth: 1,
     borderColor: "#3a3a40",
   },
-  title: { color: "#d8d8dd", fontSize: 16, fontWeight: "600", marginBottom: 10 },
+  cardTall: { maxHeight: "100%" },
+  titleRow: { flexDirection: "row", alignItems: "center", marginBottom: CARD_TITLE_GAP },
+  title: { flex: 1, color: "#d8d8dd", fontSize: 18, lineHeight: CARD_TITLE_LINE, fontWeight: "600" },
+  // As the switchers' ✕: a square as tall as the title's line, reaching
+  // into the side padding so it is as far from the right edge as the top.
+  close: {
+    width: CARD_TITLE_LINE,
+    height: CARD_TITLE_LINE,
+    marginLeft: 12,
+    marginRight: -CARD_CLOSE_INSET,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  closeText: { color: "#888", fontSize: 16, lineHeight: 16 },
   body: { color: "#999", fontSize: 13, lineHeight: 18 },
   list: { flexGrow: 0 },
   rowWrap: { borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: "#3a3a40", paddingVertical: 10 },
@@ -357,10 +389,8 @@ const styles = StyleSheet.create({
   revokeConfirm: { backgroundColor: "#e0a070" },
   revokeText: { color: "#e0a070", fontSize: 13, fontWeight: "600" },
   revokeConfirmText: { color: "#111" },
-  error: { color: "#e07070", fontSize: 12, marginTop: 8 },
+  error: { color: "#e07070", fontSize: 12, marginBottom: 8 },
   footnote: { color: "#666", fontSize: 12, lineHeight: 16, marginTop: 12 },
   signOut: { backgroundColor: "#2a2a30", borderRadius: 8, paddingVertical: 10, alignItems: "center", marginTop: 8 },
   signOutText: { color: "#e0a070", fontSize: 14, fontWeight: "600" },
-  close: { backgroundColor: "#2a2a30", borderRadius: 8, paddingVertical: 10, alignItems: "center", marginTop: 12 },
-  closeText: { color: "#aaa", fontSize: 14, fontWeight: "600" },
 });

@@ -7,6 +7,44 @@ message in `benjamn/brane-npm`, the repository npm publishes from (see
 [docs/releasing.md](docs/releasing.md)), with pull request links removed.
 This file travels in the npm tarball.
 
+## 0.3.17 - 2026-11-27
+
+Waking a machine now starts the one you asked for, and the switcher's
+rows say only what the app observed. Redeploy each Fly machine with this
+version, in an app of its own (`/fly`), to get the wake changes.
+
+- The wake door says which machine answered. The row reads "machine is
+  up" and checks every 2 s until the daemon answers (nrt: 15 s to 11 s),
+  or "ewr answered" if another machine did
+  ([#686](https://github.com/benjamn/brane/pull/686)).
+- The switcher asks the connected daemon's Tailscale which machines are
+  online before dialing any: one it lists as offline reads "off the
+  tailnet" and isn't dialed. Its word counts only while its Tailscale is
+  running and healthy ([#686](https://github.com/benjamn/brane/pull/686),
+  [#689](https://github.com/benjamn/brane/pull/689)).
+- Probes are sparing, a response that stalls partway fails after 60 s,
+  and a control socket that hasn't opened in 5 s is redialed
+  ([#686](https://github.com/benjamn/brane/pull/686)).
+- Machine rows follow the narrative card's layout: name, a dot and one
+  word ("awake in nrt"), sessions and sleep rule, and cost. Long lines
+  scroll instead of wrapping, and the address moves to the ⋯ menu
+  ([#687](https://github.com/benjamn/brane/pull/687)).
+- Rows read the same for a laptop and a cloud machine and name no
+  provider: "no answer", "wake sent", "going to sleep…". "probably
+  asleep", "unreachable: not a Fly machine" and "always on" are gone
+  ([#689](https://github.com/benjamn/brane/pull/689)).
+- While a machine's idle countdown runs, its row ticks down like a
+  clock: "sleeps in 7m", then seconds, then "sleep due"
+  ([#689](https://github.com/benjamn/brane/pull/689),
+  [#692](https://github.com/benjamn/brane/pull/692)).
+- The switchers and Devices share one card, with an edge, a darker
+  backdrop, a ✕ in the title row, and full height under a mouse
+  ([#691](https://github.com/benjamn/brane/pull/691),
+  [#694](https://github.com/benjamn/brane/pull/694)).
+- `/fly` says to pin an app's image by digest before its first machine
+  ([#690](https://github.com/benjamn/brane/pull/690),
+  [#693](https://github.com/benjamn/brane/pull/693)).
+
 ## 0.3.16 - 2026-11-24
 
 Follow-ups to sleep and wake on Fly machines.

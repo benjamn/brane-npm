@@ -29,9 +29,9 @@ can then be several times the size of one anyone would leave on.
 | Exit record | `~/.brane/exit-record.json` | Written on every exit the routine ran; a boot that finds none means a crash or a kill |
 | Boot revive | `bootRevive`, run by `ManifestRestorer` on the first operator connection after boot | Revives the manifest's narratives with a prompt naming when the host slept and resumed; a wake alone revives nothing |
 | Wake recipe | `wake` in `GET /api/status`, saved on the device's registry entry (`expo/lib/registry.ts`) at every good probe | How to wake this host; "none" is a recipe, with a reason |
-| Wake listener | `src/fly/wake-listener.ts`, started first by `docker-entrypoint.sh`; `[http_service]` in the `fly.toml` (/fly) | A second, public port answering `/wake` with 204, so Fly Proxy has a service to start the machine for |
-| Asleep state, Wake, Sleep | `src/shared/sleep.ts` (the rules), `expo/lib/reach.ts` (the store), the switcher in `expo/app/index.tsx` | Probe failed and the entry has a recipe: *probably asleep*. Every row with a URL recipe has one Wake/Sleep slot in its ⋯ (`sleepWakeSlot`): Sleep while it answers, Wake while it doesn't, disabled while checking, waking or going to sleep |
-| The undead count | `AwaitingTracker.narratives()` → `awaiting` on `GET /api/status`; `multiAwaitingGlow` (`src/shared/narrative-status.ts`); `sleepLine`/`postureLine` (`src/shared/sleep.ts`); `noteAwaiting` (`expo/lib/reach.ts`) | A daemon's row glows with its awaiting narratives' hues and says `3 sessions, 2 undead` |
+| Wake listener | `src/fly/wake-listener.ts`, started first by `docker-entrypoint.sh`; `[http_service]` in the `fly.toml` (/fly) | A second, public port answering `/wake` with which machine it is on (`{machine, region}`), so Fly Proxy has a service to start the machine for and the app can tell whose door answered |
+| Asleep state, Wake, Sleep | `src/shared/sleep.ts` (the rules), `expo/lib/reach.ts` (the store), the switcher in `expo/app/index.tsx` | Probe missed twice: *no answer*, for every kind of host, or *off the tailnet* when the tailnet says so. After a Wake the row follows the door's answer: *machine is up* once the right machine answered, *ewr answered* when a sibling did. Every row with a URL recipe has one Wake/Sleep slot in its ⋯ (`sleepWakeSlot`): Sleep while it answers, Wake while it doesn't, disabled while checking, waking or going to sleep |
+| The undead count | `AwaitingTracker.narratives()` → `awaiting` on `GET /api/status`; `multiAwaitingGlow` (`src/shared/narrative-status.ts`); `sleepLine`/`postureLine` (`src/shared/sleep.ts`); `noteAwaiting` (`expo/lib/reach.ts`) | A daemon's row glows with its awaiting narratives' hues |
 
 The shared shapes (`WakeRecipe`, `SleepStatus`) have one definition,
 `src/shared/sleep.ts`, which the daemon imports, so the two sides cannot
@@ -171,18 +171,45 @@ environment as the fallback; a config value that is set wins, so
 | `sleep.tailscale_down` | on when `FLY_APP_NAME` is set | Whether an elective sleep leaves the tailnet; a signalled one does so only on Fly |
 
 `GET /api/status` reports `wake` and `sleep: { idle_minutes,
-last_client_disconnect, sessions }` ([Daemon](daemon-api.md)).
+last_client_disconnect, sessions, sleeps_in_ms }` ([Daemon](daemon-api.md)).
 `last_client_disconnect` is null while any control-socket client is
 connected, and the clock starts at daemon startup: a host woken by a
 stray request that nobody follows goes back to sleep after N minutes,
 which is what bounds what a stranger's wake can cost.
 
+`sleeps_in_ms` is what the countdown has left as the daemon answers,
+reported only while the rule would fire at its end: a rule set, no
+control-socket client, and tmux answering with no sessions (with tmux
+unknown the rule never fires, so no countdown is claimed); null
+otherwise. It is relative rather than a time so the app needs no
+agreement between its clock and the daemon's: the row subtracts the
+time since that status arrived (`statusAt`, set only with a status: a
+401 or a first miss moves `probedAt` and brings none) and reads `0
+sessions · sleeps in 7m`. The words are `relAhead`
+(`src/shared/narrative-format.ts`), the countdown twin of the narrative
+card's `relPart`: the same units (`3h`, `7m`, `45s`, `2d`, then a date
+past a week), rounded up as a countdown clock is, so it never says less
+time than is left; the minutes tick down, and the last minute counts in
+seconds. The switcher redraws exactly when the soonest such text would
+change (`sleepPhraseChangesInMs`): once a minute, once a second in the
+last one, and never with no countdown showing. The daemon checks the
+rule once a minute (`IDLE_TICK_MS`, kept equal to the app's
+`IDLE_CHECK_MS`), so the sleep lands up to a minute after the countdown
+ends, and the row says *sleep due* through that minute. Past it the
+status says nothing about now, and nothing has asked the host since, so
+the row stops claiming a time and gives the rule, whose minutes read
+exactly in their largest whole unit (`formatMinutes`: `15m`, `90m`,
+`2h`). A held countdown (a
+session, a device connected) reads the rule, `sleeps after 15m idle`;
+the daemon the app is connected to is always held, by that connection.
+A daemon before 0.3.17 sends no `sleeps_in_ms` and reads the rule.
+
 ## Wake recipes
 
 | Host | Recipe | Who runs it |
 |---|---|---|
-| Fly machine | A URL: `https://<app>.fly.dev/wake`, from `FLY_APP_NAME` | The app, with an opaque `no-cors` fetch; or any shell or awake daemon with `fly machine start` |
-| Always-on box (a Mac mini) | None: "not a Fly machine" | Nobody; unreachable means *unreachable*, not asleep |
+| Fly machine | A URL: `https://<app>.fly.dev/wake`, from `FLY_APP_NAME`, and the machine's id, from `FLY_MACHINE_ID` | The app, with one `fetch` whose answer it reads; or any shell or awake daemon with `fly machine start` |
+| A box that stays up (a Mac mini) | None: "no way to wake it" (daemons before 0.3.17 said "not a Fly machine"; the row shows no reason either way) | Nobody; its row has no Wake, and reads *no answer* like any other host that doesn't answer |
 | Laptop, docked | (not built) Wake-on-LAN through a relay on its LAN that is also on the tailnet | An awake daemon or the app, by asking the relay |
 | Laptop, mobile | None | Nobody; the app says so instead of offering a Wake that does nothing |
 
@@ -208,15 +235,32 @@ a deliberate operator step in `/fly init`, and `fly ips release` closes
 it, leaving `fly machine start` as the only wake. Deploys pass
 `--no-public-ips` so one never opens it by accident.
 
-A browser can send the wake with no CORS: a `no-cors` fetch returns an
-opaque response the page can't read and doesn't need to. Fly's own APIs
-send no CORS headers (measured 2026-11-04), so a URL is the only way a
-static page reaches Fly. The fetch is exactly `{ mode: "no-cors",
-redirect: "follow", cache: "no-store" }`: Chromium refuses a `no-cors`
-request whose redirect mode is `error` before sending it at all. A
-`no-cors` request carries no custom headers, so it wakes *a* stopped
-machine in the app, the nearest; a specific machine gets its own app, or
-an awake daemon starts it by id.
+Fly's own APIs send no CORS headers (measured 2026-11-04), so a URL is
+the only way a static page reaches Fly. The fetch is exactly `{ mode:
+"cors", redirect: "follow", cache: "no-store" }` with no custom headers,
+so it is a simple request with no preflight, and the listener answers
+`Access-Control-Allow-Origin: *` so the page can read the body.
+
+**One app per machine.** Fly Proxy, not the caller, chooses which machine
+of an app a request reaches. It prefers one that is already running and
+starts a stopped one only when none is, the nearest to the caller. With
+four machines in one app and one awake, every Wake for the other three
+was answered by the awake one in under 100 ms and started nothing
+(measured 2026-11-25); the app then showed *waking…* for three minutes
+over a machine nobody had started. A browser can't send
+`fly-force-instance-id`, so the URL can only be made to mean one machine
+by giving that machine its own app ([/fly](../protocols/fly.md)).
+
+**The door says who answered.** The listener answers `GET /wake` with
+`{"machine": FLY_MACHINE_ID, "region": FLY_REGION}`, and the recipe in
+`/api/status` carries the daemon's own machine id. The app compares the
+two (`wakeReachedOther`): a match means the machine is up and the row
+reads *machine is up* (*connecting…* beneath); a mismatch reads *<region>
+answered* (*not this machine* beneath) and offers Wake again, instead
+of a wait that can't end. An answer that can't be read (an older image's
+204, a recipe from before machine ids) leaves the row *wake sent*. What the app shows after a tap is therefore something a machine
+said, not a guess; it is kept in `sessionStorage` (`brane_wakes`) so a
+reload doesn't forget a wake in flight and doesn't send another.
 
 **Laptops.** Wake-on-LAN is a LAN broadcast Tailscale can't send
 ([Tailscale on WoL](https://tailscale.com/blog/wake-on-lan-tailscale-upsnap)),
@@ -232,17 +276,104 @@ address; a stopped machine's tailnet node is offline, so the probe can't
 wake it. Only the Fly Proxy hostname wakes, touched by the ⋯ menu's Wake
 and nowhere else. `src/test/sleep-reach.test.ts` reads `expo/lib/reach.ts`
 and checks the wake fetch appears once, inside `wakeDaemon`, with no
-timer or loop around it; the re-probes after a tap (every 5 s, up to a
-3 min ceiling that boot-to-first-narration will set) go to the tailnet.
-Past the ceiling the row says *still asleep; tap Wake again* and sends
-nothing on its own.
+timer or loop around it; the re-probes after a tap go to the tailnet, at
+`WAKE_REPROBE_DELAYS_MS` (4, 8, 15, 30, 45 s, then every 60 s) up to a
+3 min ceiling. Once the door has answered for this very machine
+(`wakeConfirmed`) the peer is not absent but booting, so the loop asks
+every 2 s for the next half minute (`WAKE_CONFIRMED_REPROBE_MS`): on
+2026-11-26 nrt was listening 8 s after the proxy started it and the app
+connected 7 s after that, all spent waiting for a 5 s tick. Past the
+ceiling the row says *no answer* (*tap Wake again* beneath) and sends nothing
+on its own.
 
 The probe needs a short budget, since an offline peer times out rather
 than refusing: the switcher uses 5 s and one attempt, where melding and
 adding a daemon keep the request layer's 60 s with retries. It can't
-tell asleep from broken: a host with a recipe that doesn't answer is
-*probably asleep*; one without is *unreachable*, with the recipe's
-reason. The app shows that word ([Web App](web-app.md)).
+tell asleep from broken, so the row doesn't pretend to. **It says only
+what the app observed**, in as few words as the row's space needs, and
+the same for every kind of host: a host that doesn't answer reads *no
+answer*, whatever its recipe. A laptop with its lid shut and a stopped
+cloud machine look the same from here, and either may be broken. The
+recipe decides only whether the row's ⋯ offers Wake; the reason a
+`none` recipe carries is not shown. A Sleep the daemon accepted (202)
+is not a sleep seen, so once *going to sleep…* has had its grace the
+row reads *no answer* too; a wake sent reads *wake sent*, not
+*waking*; and *off the tailnet* is said only when the connected
+daemon's Tailscale, running and healthy, lists it so ([Web
+App](web-app.md)).
+
+**Ask a daemon before dialing a machine.** The app can't ask its own
+device's Tailscale anything, which is why it learned "asleep" by dialing
+and timing out. But the daemon it is connected to is on the tailnet and
+its `tailscale status` already knows, for every peer and without sending
+one a packet, whether control has it online. A machine that slept ran
+`tailscale down` and shows offline within seconds. So when the switcher
+opens with a control socket up, it asks that daemon first (`GET
+/api/tailnet?hosts=…`, `probeAllReach` in `expo/lib/reach.ts`):
+
+- **offline**: the row reads *off the tailnet*, for every kind of host,
+  and **no request is sent to it**. The phone's Tailscale never hears
+  about a stopped machine. The words are the tailnet's listing, not a
+  claim that the machine is off.
+- **online**: it gets the one probe; if that goes unanswered the row
+  says *no answer*, with *on the tailnet* beneath: a daemon or a path in
+  trouble, not a sleeping machine.
+- **unknown** (the daemon has no Tailscale to ask, doesn't have the
+  host as a peer, or predates the route): probed as below.
+
+The daemon's word is taken only when its own Tailscale answered with
+`BackendState` `Running` and no health warnings (`tailnetTrusted`,
+`src/shared/sleep.ts`); anything else is *unknown*. A stopped or
+logged-out Tailscale still prints its last peer list, and one cut off
+from the coordination server reports each peer's `Online` only as of
+its last contact, so either would make *off the tailnet* a claim
+nobody checked. The cost is a dial that a healthy view would have
+spared. The path to this device (*direct*, *relayed via …*) is held to
+the same rule.
+
+The waking loop asks the same way before each re-probe, so a machine
+that has not rejoined yet is not dialed. The answer also carries the
+daemon's view of the device that asked, which the active row shows as
+*direct* or *relayed via nyc* (`pathLabel`): the first thing to know
+when a connection is slow. With no daemon connected there is nobody to
+ask, and the rules below are all there is. Pinned by
+`src/test/tailnet-view.test.ts` and `src/test/sleep-reach.test.ts`.
+
+**Probes are sparing, and one miss is not a verdict.** A probe of a
+stopped machine is not free: its tailnet node stays in every peer's
+netmap, and a request to it makes the phone's Tailscale dial the peer's
+home relay and retry every few seconds for as long as something keeps
+asking. So the store (`expo/lib/reach.ts`) probes on the rules in
+`src/shared/sleep.ts`, pinned by `src/test/sleep-reach.test.ts`:
+
+- An answer is fresh for `PROBE_FRESH_MS` (30 s); opening the switcher
+  again inside that asks nothing.
+- A daemon that missed is asked again no sooner than
+  `PROBE_MISS_BACKOFF_MS` (60 s), doubling per miss to
+  `PROBE_MISS_BACKOFF_MAX_MS` (5 min) (`probeDue`). A tap on Wake, a
+  control-socket connect, and the operator's own refresh force one.
+- A daemon that answered last time is not marked failed by one miss: it
+  is asked once more after `PROBE_CONFIRM_DELAY_MS` (3 s)
+  (`probeAfterMiss`). Probes fail in normal operation (a path being
+  re-established, a phone changing networks), and a failed probe never
+  does anything but change a label: it does not drop the active
+  connection, clear a recipe, or block a switch.
+- A refusal inside `PROBE_REFUSED_UNDER_MS` (1.5 s) means the machine is
+  up and the daemon is not listening yet (the tailnet comes up about 2 s
+  before the daemon does, measured 2026-11-25), so it is retried at
+  `PROBE_NOT_READY_RETRY_MS` up to `PROBE_NOT_READY_RETRIES` times
+  rather than counted as a miss.
+- Every probe has its own deadline (`withDeadline`), so one that never
+  settles can't leave a row *checking…* forever.
+
+**The same care on the way in.** A control WebSocket dialed into a path
+that is still forming can sit unopened for over a minute, so the app
+closes it and dials again after 5, 10, then 15 s. Requests are not
+treated that way: each attempt waits its whole timeout, so a slow GET is
+never sent twice ([The Request
+Layer](request-layer.md#a-slow-request-is-not-re-sent)). And a request's
+deadline covers its body, not only its headers
+([there](request-layer.md#the-deadline-covers-the-body)).
 
 ## The undead count
 
@@ -258,13 +389,13 @@ every daemon it opens on; for the active daemon the control socket's
 `awaiting` edges keep it current (`noteAwaiting`, `expo/lib/reach.ts`).
 A probe that fails, and a Sleep, clear it: no daemon, no parked call.
 
-The row shows it twice. In words, under the name: `sleeps after 15 min
-idle · 3 sessions, 2 undead`, and `2 undead` alone on a row whose status
-carried no posture. And as the glow the narratives' own cards wear: one
+The row shows it as the glow the narratives' own cards wear, and no
+longer in words: it once also said `3 sessions, 2 undead`, but each of
+the undead is already one of the sessions, so the line counted one agent
+twice and read as two kinds of thing. One
 awaiting narrative lights the daemon's row with its ring, in its hue;
 several split the rim by edge, top, bottom, left, right, one hue each
-(`multiAwaitingGlow`), so the colors and the count read together until
-the edges run out at four, where the words carry the rest. The hues come
+(`multiAwaitingGlow`), until the edges run out at four. The hues come
 from the same per-device allocator as the cards' (`src/shared/glow-hues.ts`),
 so a remote daemon's waiting narrative previews the hue it will glow in
 once the operator switches there. Each edge is the ring's layers pushed
@@ -294,7 +425,7 @@ with this branch's image:
 |---|---|
 | `fly deploy --update-only --no-public-ips` with an `[http_service]`, no machines | No machine and no IP created, though `fly` prints "create 1 app machine" |
 | Idle rule, no sessions, no client | Slept exactly 15 min after boot; `tailscale down`; exit 0; Fly: "exited with exit code 0, not restarting". The machine stays *stopped* under `on-failure` |
-| Wake, `GET https://<app>.fly.dev/wake` on a stopped machine | Proxy starts it; VM up in ~0.8 s; 204 after ~2.1 s; tailnet rejoined at ~3 s; daemon listening, on its old port, at ~4 s |
+| Wake, `GET https://<app>.fly.dev/wake` on a stopped machine | Proxy starts it; VM up in ~0.8 s; the door answers (204 then, 200 with the machine now) after ~2.1 s; tailnet rejoined at ~3 s; daemon listening, on its old port, at ~4 s |
 | Sleep act with one agent awaiting | 202 naming it; the agent's parked `listen` woke with the sleeping note (since removed); manifest; exit 0; machine stopped 3 s after the request |
 | `fly deploy` onto a running machine (the signal path) | SIGINT ran the routine: manifest, `tailscale down`, exit 0; the new image booted and revived the agent |
 | Volume unmount after a sleep with a live agent | `error umounting /home/brane: EBUSY`, then a reboot, until the routine learned to end the sessions on Fly (step 4); clean since |
@@ -307,26 +438,42 @@ would buy little for the cost of a token on the machine.
 
 ## What remains
 
-1. **Still unmeasured on Fly:** whether iOS Tailscale peers reconnect
-   cleanly after a *stop* (the warning /fly carries is for a destroy);
-   which machine the wake URL starts when another region's is already
-   up; and whether the machine can suspend itself through `/.fly/api`
+1. **Measured 2026-11-25, and not good:** a wake of lax from the phone
+   took 101 s from the machine starting to the app connected. The
+   machine was up in 2 s, on the tailnet in 5, and the phone had a
+   direct path in 6; four connections were refused because the daemon
+   was not listening until second 7; then the phone's path dropped and
+   nothing arrived for 78 s. Why the path drops after first contact is
+   not known, nor why a phone that has visited a Fly machine sometimes
+   can't reach the laptop until its Tailscale is restarted (the stale
+   node state of PR #299 is the suspect). Seen again on 2026-11-26 with
+   nrt alone in its own app: 16 s after nrt ran `tailscale down`, the
+   laptop's Tailscale had lost its direct path to the phone on the same
+   Wi-Fi and heard from it only through a relay, until the phone's
+   Tailscale was restarted. The laptop, a peer of nrt too, was
+   unaffected. The retries above shorten what the app adds to that, and
+   asking a daemon instead of dialing takes away the traffic to stopped
+   machines; neither explains it.
+2. **Remote meld restarts every machine of the app**, because `fly
+   secrets set` does. One app per machine confines that to the machine
+   being melded.
+3. **Still unmeasured on Fly:** whether the machine can suspend itself through `/.fly/api`
    without a token, which would keep processes across a sleep on
    machines of 2 GB or less. Also how long a phone that vanishes without
    closing its control socket holds the idle clock: the count drops only
    on the socket's `close`, and how soon the 30 s heartbeat write errors
    through userspace tailscaled is unknown.
-2. **The Sleep act on a Mac.** The app hides Sleep where the recipe is
+4. **The Sleep act on a Mac.** The app hides Sleep where the recipe is
    `none`, and rightly: nothing could wake the host from the phone. Since
    #679 a bridge never starts a daemon, so the old reason a Mac's sleep
    wouldn't hold is gone; what's left is that the Mac itself stays up,
    so a "sleep" there is a `brane daemon stop` by another name. Worth
    building only with a real wake for a Mac (Wake-on-LAN, below).
-3. **The list while asleep.** The switcher's probe is quick, but the
+5. **The list while asleep.** The switcher's probe is quick, but the
    narrative list's opening requests still wait the request layer's full
    60 s with retries before erroring when the active daemon is asleep.
-4. **The template repository and the token page**, above.
-5. **Wake-on-LAN for a docked laptop**, above.
+6. **The template repository and the token page**, above.
+7. **Wake-on-LAN for a docked laptop**, above.
 
 Separately: `caffeinate -i` (`src/daemon/keep-awake.ts`) runs for the
 daemon's lifetime with no opt-out, deciding for every operator that

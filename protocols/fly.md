@@ -26,8 +26,8 @@ sessions on disk, and the next wake brings them back.
 | `sleep` | Stop a machine. The daemon's own exit; the app's Sleep act; or `fly machine stop` from outside. |
 | `wake` | Start a stopped machine. Wake in the app's ⋯ (`https://<app>.fly.dev/wake`), or `fly machine start`. |
 | `deploy` | Build and push the image; update existing machines, never create or start one. |
-| `up` | Provisioning: one machine per region that has a volume, reattaching it. |
-| `down` | Provisioning: destroy all machines. Volumes preserved. |
+| `up` | Provisioning: the app's one machine, in the region of its volume, reattaching it. |
+| `down` | Provisioning: destroy the app's machine. Its volume is preserved. |
 
 **Sleep and wake are the daily verbs.** `up` and `down` create and
 destroy machines, and are for when the fleet's shape changes, not for
@@ -48,7 +48,9 @@ no compute; its root filesystem at $0.15/GB/month (the image is about
 which is billed whether the machine runs, stops or doesn't exist.
 
 Volumes are the source of truth: each represents a region the operator
-committed to, and machines come and go around them.
+committed to, and machines come and go around them. One region is one
+app with one volume and at most one machine ([One app per
+machine](#one-app-per-machine)).
 
 Each machine runs **tailscaled** (its only network access) and a **brane
 daemon**. The volume is mounted at `/home/brane`, the whole home
@@ -108,11 +110,14 @@ image at `/opt/brane/models`, outside the volume.
   - `[http_service]` is the **wake door**, nothing more. Fly Proxy
     terminates TLS on 443 and routes to `internal_port`, where the image
     runs a separate listener (`dist/fly/wake-listener.js`) that answers
-    `GET /wake` with 204 and everything else with 404. It is never the
+    `GET /wake` with 200 and which machine it is on
+    (`{"machine": …, "region": …}`) and everything else with 404. It is never the
     daemon's port: the daemon runs under `--bind 0.0.0.0`, where it has no
     IP filter, and stays reachable only over Tailscale.
   - `auto_start_machines = true`: a request for the app starts a stopped
-    machine and is routed to it. That's the wake.
+    machine and is routed to it. That's the wake. The proxy chooses the
+    machine, and prefers one already running, which is why an app holds
+    exactly one ([One app per machine](#one-app-per-machine)).
   - `auto_stop_machines = "off"`: the proxy never stops a machine. It
     couldn't judge: all real traffic goes over Tailscale, so the proxy sees
     none, and `"stop"` would put every machine to sleep minutes after it
@@ -132,6 +137,25 @@ image at `/opt/brane/models`, outside the volume.
   - **No `[checks]`**, on purpose. A health check that fails while
     tailscaled is still reconnecting lets Fly declare a slow boot dead.
     The image's `HEALTHCHECK` is Docker's and Fly ignores it.
+
+## One app per machine
+
+An app holds exactly one machine, and a fleet is one app per region,
+named `brane-<region>-<16 hex>` (`brane-nrt-…`). Two things in Fly act on
+the app, not the machine, and both went wrong with four machines in one:
+
+- **The wake URL.** `https://<app>.fly.dev/wake` reaches whichever
+  machine Fly Proxy picks, and it picks a running one first. With ewr
+  awake, a Wake for ams, lax or nrt was answered by ewr in under 100 ms
+  and started nothing (measured 2026-11-25). A browser can't send
+  `fly-force-instance-id`.
+- **Secrets.** `fly secrets set` restarts every running machine of the
+  app, so one remote meld restarted the fleet.
+
+`brane config fly.app` holds one name, the app the next command is for;
+with several, name the app in each command (`fly apps list` shows them).
+`up` therefore never scales an app past one machine: a second region is
+a second `init`.
 
 ## /fly init
 
@@ -165,19 +189,22 @@ One-time setup.
    What it exposes, in plain words: anyone who knows the hostname can
    start the machine, and each such start costs minutes at the running
    rate until the idle rule puts it back to sleep. They reach only the
-   wake listener, which says 204 or 404; the daemon is not behind it.
+   wake listener, which says which machine it is or 404; the daemon is
+   not behind it.
    An app named before this step existed (`brane-` and 6 hex digits) has
    a door anyone patient could find; whether to open it is the
    operator's call.
    `fly ips list -a "$APP"` shows the door, and `fly ips release <ip>
    -a "$APP"` (each address) takes it off.
 
-Then `/fly new` for each region.
+Then `/fly new` for the app's region. Another region is another app:
+run `init` again with that region in the name.
 
 ## /fly new
 
-Add a region: create its 10 GB volume. No machine yet; `/fly up` starts
-it. First check one isn't there already:
+Give the app its region: create its one 10 GB volume. No machine yet;
+`/fly up` starts it. First check one isn't there already, since an app
+with a volume has its region and gets no second:
 
 ```bash
 fly volumes list -a "$APP"
@@ -203,6 +230,29 @@ cp "$BRANE_ROOT/Dockerfile" "$BRANE_ROOT/docker-entrypoint.sh" "$CTX/"
 `fly` may print `Process groups have changed. This will: create 1 "app"
 machine` on an app with no machines; `--update-only` still creates none.
 
+**Before an app's first `/fly up`, pin the image by digest.** A deploy
+registers its image by tag (`registry.fly.io/<app>:deployment-…`), and
+creating a machine from that tag can fail with `MANIFEST_UNKNOWN`. On
+2026-11-26 that happened six times in a row, over several minutes and
+two deploys, for a new app's first machine (ams), although a tag had
+updated nrt's existing machine the day before. Put a digest in `[build]`
+in place of `dockerfile`, and deploy again, which builds nothing:
+
+```toml
+[build]
+  image = "registry.fly.io/<app>@sha256:<64 hex>"
+```
+
+What has worked is **a digest that already sits in another app's
+registry**. lax's and ewr's first machines both came up on the first
+try, minutes after their apps were made, from ams's digest, so one
+build can serve every region. The deploy's build output names the
+digest, in its `pushing manifest for …@sha256:…` line. The other form,
+an app's own digest pinned right after its first push, is untried:
+ams's own digest worked, but only 15 hours later, so pinning and the
+wait can't be told apart. If it fails, pin another app's digest. Put
+`dockerfile = "Dockerfile"` back for the next build.
+
 **A deploy doesn't start a stopped machine** (and exits 0 all the same):
 a sleeping machine gets the new image on its next wake. A running one is
 restarted onto it, through the same `SIGINT` and `kill_timeout` as
@@ -210,16 +260,17 @@ restarted onto it, through the same `SIGINT` and `kill_timeout` as
 
 ## /fly up
 
-One machine per region that has a `brane_data` volume. Scale each region
-on its own: a single `fly scale count N --region a,b,c` can stack
-machines in one region and create stray volumes.
+The app's one machine, in the region of its `brane_data` volume. Always
+name the region, and never a count above 1 or a list of regions: `fly
+scale count` can stack machines in one region and create stray volumes,
+and a second machine breaks the wake URL.
 
 ```bash
-fly volumes list -a "$APP" --json   # the regions with a brane_data volume
-fly scale count 1 --region <region> --yes -a "$APP"   # once per region
+fly volumes list -a "$APP" --json   # the app's one brane_data volume, and its region
+fly scale count 1 --region <region> --yes -a "$APP"
 ```
 
-Running machines are left alone, and so are stopped ones: a region
+A running machine is left alone, and so is a stopped one: an app
 whose machine is asleep needs [/fly wake](#fly-wake), not `up`. Watch
 the first boot with `/fly logs`: the machine is ready once its daemon
 logs `listening on`.
@@ -255,21 +306,27 @@ The normal path is the app's **Wake** button, which fetches the wake URL.
 From a shell, either:
 
 ```bash
-curl -s -o /dev/null -w '%{http_code}\n' "https://$APP.fly.dev/wake"   # 204 once up
+curl -s "https://$APP.fly.dev/wake"   # {"machine":"…","region":"…"} once up
 fly machine start <id> -a "$APP"
 ```
 
-The URL wakes *a* stopped machine in the app, the nearest one to the
-caller; `fly machine start` picks one by id. Without a public IP (see
+`fly machine start` picks a machine by id. The URL can't: Fly Proxy
+sends the request to a machine of the app that is already running if
+there is one, and starts a stopped one, the nearest to the caller, only
+when none is. So the URL means a particular machine only when the app
+holds one machine ([One app per machine](#one-app-per-machine)); the
+answer's `machine` says which one took it. When it was a sibling, the
+app's Wake reads that and names the machine that answered, rather than
+reporting a wake. Without a public IP (see
 [/fly init](#fly-init), step 4) the URL fails and only `fly machine
 start` works.
 
-The 204 means the machine is running, not that the daemon is ready: a
+The answer means the machine is running, not that the daemon is ready: a
 wake costs a whole boot (tailscaled rejoining, the daemon starting)
 before the app can reach it. The agents the last Sleep recorded come
 back only when the app connects, so a `curl` or a stranger's wake
 starts none of them. Measured on a
-`performance-1x` in ewr: the 204 in about 2 s, the daemon listening about
+`performance-1x` in ewr: the answer in about 2 s, the daemon listening about
 4 s after the request, and a revived agent back in its loop about 10 s
 after that. `/fly logs` shows `listening on` when the daemon is up.
 
@@ -311,7 +368,9 @@ brane meld --remote \
 Wake the machine first ([/fly wake](#fly-wake)): setting a secret
 doesn't start a stopped machine, and `--ask` needs one running.
 
-1. `--send` sets the secret, which restarts the running machines; each
+1. `--send` sets the secret, which restarts **every** running machine of
+   the app, agents and all, not only the one being melded (another reason
+   an app holds one machine); each
    daemon adopts the hash as a device row as it starts, once (a hash it
    has ever seen, revoked or not, never comes back), and drops the
    variable.
@@ -390,8 +449,8 @@ console before its region comes back, or the new one is named `…-1`.
 ## Volume Safety
 
 **Volumes are never created by accident.** Only `/fly new` creates them,
-one region at a time; `/fly deploy` uses `--update-only`, and `/fly up`
-scales one region at a time.
+one per app; `/fly deploy` uses `--update-only`, and `/fly up`
+scales the app's one region to one machine.
 
 Intentional volumes are 10 GB; stray ones from Fly auto-provisioning are
 typically 1 GB. Investigate with `fly volumes list -a "$APP"` before
@@ -409,12 +468,30 @@ anything is deleted, and leave deleting to the operator.
   up` timed out. See [Tailscale](#tailscale).
 - A volume in the old layout: the entrypoint migrates it.
 
+### `/fly up` fails to launch the machine
+
+- `failed to get manifest … MANIFEST_UNKNOWN … unknown tag=deployment-…`:
+  the image is referenced by tag. Pin it by digest ([/fly
+  deploy](#fly-deploy)) and run `up` again. Nothing was created.
+- `insufficient resources to create new machine with existing volume`:
+  the host holding the volume has no room for the machine's size right
+  now. Nothing was created. The one time it happened (ams), the second
+  retry, about 50 s later, succeeded.
+  Leave the volume alone: Fly may later move the machine and its volume
+  to another host by itself (`migrated=true` in `fly machine status`,
+  and a new volume id with the same data). That cost one wake 84 s
+  instead of about 10 s.
+
 ### A wake does nothing
 
 - `curl` can't connect or resolve: no public IP. `fly ips list`; see
   [/fly init](#fly-init), step 4.
-- 204, but the app still can't reach the daemon: the boot isn't done.
-  `/fly logs` until `listening on`.
+- An answer naming another machine: the app holds more than one machine
+  and a running sibling took the request; nothing was started. See
+  [One app per machine](#one-app-per-machine); `fly machine start <id>`
+  meanwhile.
+- An answer naming this machine, but the app still can't reach the
+  daemon: the boot isn't done. `/fly logs` until `listening on`.
 - The machine started and stopped again: the daemon exited 0 (an idle
   sleep with nobody connecting, say) or crashed through its `retries`.
   `/fly logs` says which.

@@ -94,7 +94,7 @@ import { disposeEmbeddingModel, embedText, preloadEmbeddingModel } from "../memo
 import { runIndex, hasUnindexedEvents, type IndexStats } from "../memory/index.js";
 import { parseDuration, timeSince } from "../commands/memory.js";
 import { getTlsCertPath, getTlsKeyPath } from "../commands/certify.js";
-import { getTailscaleIps, getTailscaleIpsAsync } from "../tailscale.js";
+import { getTailscaleIps, getTailscaleIpsAsync, getTailnetAsync, tailnetAnswer, type TailnetView } from "../tailscale.js";
 import { addressesToBind, nextProbeDelay, TAILSCALE_PROBE_MAX_MS } from "./tailscale-rebind.js";
 import { archivedBraneIds, braneArchiveRefusal, setBraneArchived, visibleUnscopedClause } from "../db/branes.js";
 import { CertManager, type CertStatus } from "./cert-manager.js";
@@ -1309,6 +1309,15 @@ export async function startServer(config: DaemonConfig): Promise<void> {
   // AGOG in the app. Its own control message rather than a `status`: an older
   // app reads any unknown status as the narrative's lifecycle status.
   const awaiting = new AwaitingTracker((nid, isAwaiting) => broadcastAwaiting(controlClients, nid, isAwaiting));
+
+  // `tailscale status`, shared by requests a few seconds apart and by ones
+  // in flight together (GET /api/tailnet).
+  let tailnetCache: { at: number; view: Promise<TailnetView> } | null = null;
+  const tailnetView = (): Promise<TailnetView> => {
+    const now = Date.now();
+    if (!tailnetCache || now - tailnetCache.at > TAILNET_VIEW_FRESH_MS) tailnetCache = { at: now, view: getTailnetAsync() };
+    return tailnetCache.view;
+  };
   function notifyListenWaiters(narrativeId: string): void {
     wakeListenWaiters(listenWaiters, narrativeId);
     // Every append funnels through here, so it's the one place to push the
@@ -1710,6 +1719,19 @@ export async function startServer(config: DaemonConfig): Promise<void> {
         // is also a reason the host is not asleep.
         awaiting: awaiting.narratives(),
       });
+      return;
+    }
+
+    // Route: GET /api/tailnet?hosts=a,b — what this machine's Tailscale says
+    // about the hosts asked for, and about the device asking: online or
+    // not, direct or relayed, last handshake. A read of `tailscale status`,
+    // which sends nothing to any peer, so the app can learn that a machine
+    // is asleep without dialing it (src/tailscale.ts, docs/sleep.md). Held
+    // for a few seconds so a switcher full of rows is one subprocess.
+    if (path === "/api/tailnet" && req.method === "GET") {
+      const hosts = (url.searchParams.get("hosts") ?? "").split(",");
+      const from = req.socket.remoteAddress;
+      void tailnetView().then((view) => sendJson(res, 200, tailnetAnswer(view, hosts, from)));
       return;
     }
 
@@ -4177,6 +4199,9 @@ function broadcastStatus(controlClients: Set<ControlClient>, narrativeId: string
     }
   }
 }
+
+/** How long one read of `tailscale status` answers GET /api/tailnet. */
+const TAILNET_VIEW_FRESH_MS = 3_000;
 
 // Push a narrative's awaiting edge — parked waiting for direction, or not.
 function broadcastAwaiting(controlClients: Set<ControlClient>, narrativeId: string, awaiting: boolean): void {

@@ -14,8 +14,16 @@
  * request reaches this listener, so a token in the path would protect
  * nothing; the bounds are the app name's entropy and the daemon's idle rule.
  * By the time the response is written the machine is already up, which is
- * all a wake means: `GET` or `HEAD /wake` answers 204, anything else 404,
- * both with empty bodies.
+ * all a wake means. `GET /wake` answers 200 with which machine this is,
+ * `{"machine": FLY_MACHINE_ID, "region": FLY_REGION}`, readable from any
+ * origin: Fly Proxy, not the caller, chooses which machine of an app a
+ * request reaches, and it prefers one that is already running, so without
+ * an answer the app could not tell "your machine started" from "a sibling
+ * took the request and yours is still stopped" (measured 2026-11-25: with
+ * one machine up, every wake for the other three reached it). It names
+ * nothing a holder of the URL could not learn by sending the request, and
+ * nothing of the daemon's. `HEAD` answers the same without a body; anything
+ * else is 404 with an empty body.
  *
  * Logging: one startup line, then one short line per `/wake` hit (a wake is
  * an event the operator may want to see in `fly logs`) and nothing for a
@@ -35,18 +43,40 @@ export const DEFAULT_WAKE_PORT = 8080;
 export interface WakeListenerOptions {
   /** Called once per answered `/wake`. Defaults to a one-line console log. */
   onWake?: () => void;
+  /** Where the machine's identity comes from. Defaults to the process's. */
+  env?: NodeJS.ProcessEnv;
+}
+
+/** What the door says about the machine it is on. Only values shaped like
+ *  Fly's own (an id of lowercase letters and digits, a three-letter region)
+ *  are passed on; anything else is null. */
+export function wakeIdentity(env: NodeJS.ProcessEnv = process.env): { machine: string | null; region: string | null } {
+  const machine = env.FLY_MACHINE_ID?.trim() ?? "";
+  const region = env.FLY_REGION?.trim() ?? "";
+  return {
+    machine: /^[0-9a-z]{6,32}$/.test(machine) ? machine : null,
+    region: /^[a-z]{3}$/.test(region) ? region : null,
+  };
 }
 
 export function createWakeListener(options: WakeListenerOptions = {}): Server {
   const onWake = options.onWake ?? (() => console.log("wake-listener: /wake"));
+  const body = JSON.stringify(wakeIdentity(options.env));
   const server = createServer((req, res) => {
     // Never read the body; drain it so a POST can't hold the socket open.
     req.resume();
     const path = (req.url ?? "").split("?", 1)[0];
     if (path === "/wake" && (req.method === "GET" || req.method === "HEAD")) {
       onWake();
-      res.writeHead(204, { "Cache-Control": "no-store" });
-      res.end();
+      res.writeHead(200, {
+        "Cache-Control": "no-store",
+        "Content-Type": "application/json",
+        "Content-Length": String(Buffer.byteLength(body)),
+        // Readable by the app from any origin; a GET with no headers needs
+        // no preflight, so there is no OPTIONS to answer.
+        "Access-Control-Allow-Origin": "*",
+      });
+      res.end(req.method === "HEAD" ? undefined : body);
       return;
     }
     res.writeHead(404, { "Cache-Control": "no-store", "Content-Length": "0" });
@@ -87,7 +117,7 @@ if (isMain()) {
   // private IPv4, and with userspace tailscaled no tailnet address is on a
   // kernel interface to bind to anyway (see docker-entrypoint.sh).
   server.listen(port, "0.0.0.0", () => {
-    console.log(`wake-listener: listening on 0.0.0.0:${port} (GET /wake -> 204)`);
+    console.log(`wake-listener: listening on 0.0.0.0:${port} (GET /wake -> 200, which machine this is)`);
   });
   server.on("error", (err) => {
     console.error(`wake-listener: ${err.message}`);

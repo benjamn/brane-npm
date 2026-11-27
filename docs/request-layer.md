@@ -37,6 +37,8 @@ no request sets that header and that `JSON_HEADERS` appears only where a
 | `withToken()` | Token into the query string, joining an existing one with `&` and staying in front of a `#` |
 | `isRetryableMethod()`, `isRetryableError()` | What may be replayed |
 | `DEFAULT_TIMEOUT_MS` | 60 s |
+| `controlDialTimeoutMs()` | The control socket's dial: 5 s, 10 s, then 15 s, lengthening with each dial that never opened |
+| `guardResponseBody()`, `readBodyWithIdleTimeout()` | The same deadline over the body: abort when no chunk arrives for that long |
 | `setCorsHeaders()` | `src/daemon/server.ts`; exported for `src/test/cors-preflight.test.ts` |
 
 Three decisions are less obvious than they look:
@@ -61,6 +63,37 @@ say so. Replaying that spawns a second one. An HTTP error is likewise an
 *answer* and never retried: a 404 will not change on a second ask, and a 500
 may have had effects. Only a request that provably never landed is safe to
 send again.
+
+<a id="a-slow-request-is-not-re-sent"></a>
+**A slow request is not re-sent; a stuck dial is.** Every attempt of a
+request waits the whole timeout for its response to begin. An earlier
+version of this layer gave the first attempts only 8 s and then 20 s, on the
+theory that a connection opened while the path was dark sits in TCP's SYN
+backoff (1, 2, 4, 8, 16, 32 s) and a fresh one would be answered sooner. It
+was taken out before release: a GET the daemon is still working on would be
+cancelled and sent again, two or three times, and the incident it was meant
+for (2026-11-26, the phone unable to reach any daemon until its Tailscale
+was restarted) turned out to be the phone's Tailscale replying through a
+relay it had already left, which no fresh connection fixes. The control socket's dial is the exception,
+because a WebSocket that has not opened has sent the daemon nothing: it is
+closed and re-dialed if it hasn't opened in 5 s, then 10, then 15
+(`controlDialTimeoutMs`), and a dial that timed out is followed by the next
+at once, not after the usual 2 s.
+
+<a id="the-deadline-covers-the-body"></a>
+**The deadline covers the body.** `fetch` resolves when the headers arrive,
+and the timer that guarded it used to be cleared there, so a response whose
+body stalled halfway (a tailnet path that dropped after the first packets)
+left `res.json()` pending forever: no error, no retry, a spinner. It was
+reproduced against a server that sends headers and half a body and then
+nothing: the read was still pending at twenty times the timeout and settled
+only when the connection was killed. `guardResponseBody()` now wraps every
+response `fetchAttempts` returns: `json`, `text`, `arrayBuffer` and `blob`
+read through `readBodyWithIdleTimeout()`, which aborts the request when no
+chunk has arrived for the request's timeout. It is an idle deadline, not a
+total one, so a large body on a slow link that keeps moving is never cut
+off. A caller that streams `res.body` itself is left alone. Pinned by the
+stalling-server cases in `src/test/api-request.test.ts`.
 
 **HTTP/2 would help and is not available.** One connection instead of Chrome's
 six means one TLS handshake instead of six, which is worth real time at this

@@ -42,7 +42,7 @@ import { installVerification, noteVerified, refreshStatus, requireVerification }
 import LockSheet from "@/components/LockSheet";
 import { useProtocolView } from "@/lib/protocols";
 import type { ProtocolNamespace } from "@shared/protocol-names";
-import { noteAwaiting, probeReach, setReachRegistryListener } from "@/lib/reach";
+import { noteAwaiting, probeReach, setReachRegistryListener, setTailnetHelper } from "@/lib/reach";
 import { parseWakeRecipe } from "@shared/sleep";
 
 // Before the first tap: iOS must never move the page under the app, whether
@@ -286,9 +286,15 @@ export default function RootLayout() {
           // The socket says it is awake; the status says how to wake it
           // once it isn't. The full budget, since this one is not a guess.
           const entry = loadDaemons().find((d) => d.host === params.host && d.token === params.token);
-          if (entry) void probeReach(entry, { quick: false });
+          if (entry) void probeReach(entry, { quick: false, force: true });
+          // A connected daemon can say what the tailnet thinks of the
+          // others, so the switcher need not dial them to find out.
+          setTailnetHelper(entry ?? null);
         },
-        onDisconnect: () => setConnected(false),
+        onDisconnect: () => {
+          setConnected(false);
+          setTailnetHelper(null);
+        },
         onSignedOut: () => markSignedOut(params),
       });
       channelRef.current = ch;
