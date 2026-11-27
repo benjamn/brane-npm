@@ -25,12 +25,30 @@ export interface ContextMenuItem {
 //   "below"  — drops beneath the trigger (default; the card-header idiom).
 //   "beside" — vertically centered on the trigger's line, so a compact
 //              single-item menu on a list row doesn't spill onto the row below.
-export type ContextMenuAlign = "below" | "beside";
+//   "left"   — to the trigger's left, its first item level with the trigger,
+//              so the lit trigger shows beside the menu it opened; it hangs
+//              down from there, never above the trigger's line, which a
+//              scroller would cut off (the switcher's rows).
+export type ContextMenuAlign = "below" | "beside" | "left";
 
-export default function ContextMenu({ items, onClose, align = "below", hue = "green" }: {
+// An item's size, which "left" needs to put the first item on the trigger's
+// line: the panel's border and padding, then half an item.
+const ITEM_PAD_Y = 10;
+const ITEM_LINE = 21;
+const PANEL_PAD = 4;
+const FIRST_ITEM_MIDDLE = 1 + PANEL_PAD + ITEM_PAD_Y + ITEM_LINE / 2;
+// A menu opening leftward grows toward a scroller's edge, which would cut
+// it off, so past this width its labels wrap instead.
+const LEFT_MAX_WIDTH = 240;
+
+export default function ContextMenu({ items, onClose, align = "below", hue = "green", opaque, evenGlow }: {
   items: ContextMenuItem[];
   onClose: () => void;
   align?: ContextMenuAlign;
+  // Over rows of text rather than a terminal: see MenuPanel's `opaque`.
+  opaque?: boolean;
+  // See MenuPanel's `evenGlow`.
+  evenGlow?: boolean;
   // Defaults to the 🦠 green every context menu used to be. Pass a hue when the
   // thing that opened the menu has a color of its own — the list's status
   // badges do — so the panel and its anchor read as one sign.
@@ -69,16 +87,24 @@ export default function ContextMenu({ items, onClose, align = "below", hue = "gr
     <MenuPanel
       ref={menuRef}
       hue={hue}
+      opaque={opaque}
+      evenGlow={evenGlow}
       style={{
-        right: 16,
-        // "below" drops under the trigger; "beside" centers on its line.
-        top: align === "beside" ? "50%" : "calc(100% + 4px)",
+        // "left" ends at the trigger's left edge and puts its first item's
+        // middle (half an item plus the panel's padding down) on the
+        // trigger's; "below" drops under the trigger; "beside" centers on
+        // its line.
+        right: align === "left" ? "100%" : 16,
+        top: align === "left"
+          ? `calc(50% - ${FIRST_ITEM_MIDDLE}px)`
+          : align === "beside" ? "50%" : "calc(100% + 4px)",
         transform: align === "beside" ? "translateY(-50%)" : undefined,
-        padding: 4,
+        padding: PANEL_PAD,
         display: "flex",
         flexDirection: "column",
         gap: 2,
         minWidth: 120,
+        ...(align === "left" ? { width: "max-content", maxWidth: LEFT_MAX_WIDTH } : {}),
       }}
     >
       {items.map((item) => (
@@ -93,16 +119,16 @@ export default function ContextMenu({ items, onClose, align = "below", hue = "gr
           }}
           style={{
             opacity: item.disabled ? 0.5 : 1,
-            padding: "10px 14px",
+            padding: `${ITEM_PAD_Y}px 14px`,
             borderRadius: 6,
             border: "none",
             backgroundColor: "transparent",
             color: "#ccc",
             fontSize: 15,
-            lineHeight: "21px",
+            lineHeight: `${ITEM_LINE}px`,
             cursor: item.disabled ? "default" : "pointer",
             textAlign: "left",
-            whiteSpace: "nowrap",
+            whiteSpace: align === "left" ? "normal" : "nowrap",
             display: "flex",
             alignItems: "center",
             gap: 10,

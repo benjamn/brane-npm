@@ -341,11 +341,29 @@ export function daemonReach({ recipe, probe, wakeSentAt, wakeAnswer, sleptAt, no
   return "checking";
 }
 
+/** The region a Fly machine's tailnet name carries, or null. The image's
+ *  entrypoint names a machine `$TS_HOSTNAME-$FLY_REGION` on the tailnet
+ *  (docker-entrypoint.sh), and /fly's fly.toml sets `TS_HOSTNAME` to
+ *  `daemon-<app>`, so the name says where the machine is even when its
+ *  recipe never did: a device that melded it before recipes carried a
+ *  region, or has not heard from it since. Only that shape counts, on a
+ *  MagicDNS (`.ts.net`) name, so a laptop called `ben-mac` (or `brane-mac`)
+ *  never reads as "in mac"; a machine named any other way, the entrypoint's
+ *  bare `brane-<region>` default included, is placed by its recipe alone. */
+const FLY_TAILNET_NAME = /^daemon-[a-z0-9-]+-([a-z]{3})\.[a-z0-9-]+\.ts\.net$/;
+export function regionFromHost(host: string | null | undefined): string | null {
+  if (typeof host !== "string") return null;
+  const name = host.toLowerCase().replace(/:\d+$/, "");
+  return FLY_TAILNET_NAME.exec(name)?.[1] ?? null;
+}
+
 /** Where a daemon is, for its status line ("awake in nrt"): the region a
  *  cloud host's recipe kept from its last status, so it shows asleep or
- *  awake. Null for a host that reports none. */
-export function daemonRegion(recipe: WakeRecipe | null | undefined): string | null {
-  return recipe?.kind === "url" ? recipe.region ?? null : null;
+ *  awake; else the one its tailnet name carries (`regionFromHost`), so a
+ *  machine the device has never heard a region from is placed all the
+ *  same. Null for a host that gives neither. */
+export function daemonRegion(recipe: WakeRecipe | null | undefined, host?: string | null): string | null {
+  return (recipe?.kind === "url" ? recipe.region ?? null : null) ?? regionFromHost(host);
 }
 
 /** The row's state for a daemon that is not simply awake, split in two:

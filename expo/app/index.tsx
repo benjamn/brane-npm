@@ -530,7 +530,11 @@ function braneCostLine(cost?: BraneCost | null): string | null {
 }
 
 /** A switcher row's ⋯: the same trigger and menu as a fold row's in the
- *  spawn dialog. `id` names the row; one menu is open at a time. */
+ *  spawn dialog. `id` names the row; one menu is open at a time. The menu
+ *  opens to the ⋯'s left, level with it, and hangs down rather than
+ *  centering on it: the list scrolls, and a scroller cuts off what sticks
+ *  out above it (or left of it) for good, while what hangs below only
+ *  lengthens the scroll. */
 function RowMenu({
   id,
   openId,
@@ -552,12 +556,21 @@ function RowMenu({
         role="button"
         accessibilityLabel={label}
       >
-        <Text style={styles.rowMenuIcon}>⋯</Text>
+        <Text style={[styles.rowMenuIcon, openId === id && styles.rowMenuIconOpen]}>⋯</Text>
       </Pressable>
-      {openId === id && <ContextMenu items={items} onClose={() => setOpenId(null)} align="beside" />}
+      {openId === id && <ContextMenu items={items} onClose={() => setOpenId(null)} align="left" opaque evenGlow hue={ROW_MENU_HUE} />}
     </div>
   );
 }
+
+/** The hue of a switcher row's ⋯ menu and its lit ⋯, so the two read as
+ *  one sign. Not green: in the switcher green already means the current
+ *  machine (its outline) and awake (the dot). */
+const ROW_MENU_HUE: MenuHue = "yellow";
+const ROW_MENU_RGB = menuHueRgb(ROW_MENU_HUE);
+
+/** The space under a switcher layer's title and above its buttons. */
+const LAYER_GAP = 10;
 
 /** A row's dot: green awake; amber for a daemon not answering, or asleep,
  *  or on its way either side of it, whatever kind of host it is (the dot
@@ -572,10 +585,11 @@ function reachDotColor(reach: Reach, fallback: string): string {
 }
 
 /** A machine row's ⋯ item that copies its address, which the row itself
- *  no longer spends a line on; the label shows it, so reading it is free. */
+ *  no longer spends a line on. Not spelled out in the label: as
+ *  `Copy <host>` it set the menu's width, wider than the row. */
 function copyAddressItem(d: DaemonEntry, close: () => void): ContextMenuItem {
   return {
-    label: `Copy ${d.host}`,
+    label: "Copy address",
     icon: "📋",
     onPress: () => {
       close();
@@ -889,7 +903,7 @@ function BraneSwitcher({
     if (!confirmForget) return;
     setForgetting(true);
     try {
-      // After a failed revoke the button reads "Forget anyway": the second
+      // After a failed revoke the button reads "Delete anyway": the second
       // press forgets without telling the daemon.
       await onForgetDaemon(confirmForget.id, { revoke: forgetError === null });
       setConfirmForget(null);
@@ -1050,7 +1064,7 @@ function BraneSwitcher({
                   which are listed under it. */}
               <SwitcherRowText
                 title={activeDaemon.id}
-                place={daemonRegion(activeDaemon.wake)}
+                place={daemonRegion(activeDaemon.wake, activeDaemon.host)}
                 dot={reachDotColor(activeReach!, "#666")}
                 cost={braneCostLine(allBranesCost)}
                 word={activeWords!.word}
@@ -1153,7 +1167,7 @@ function BraneSwitcher({
               >
                 <SwitcherRowText
                   title={d.id}
-                  place={daemonRegion(d.wake)}
+                  place={daemonRegion(d.wake, d.host)}
                   dot={d.revoked ? "#666" : reachDotColor(dReach, "#666")}
                   word={d.revoked ? "signed out" : dWords.word}
                   detail={daemonDetailText(dUp, dSleep, null, d.lastSeenAt, Date.now(), d.revoked ? null : dWords.why, reach[d.id]?.statusAt ?? null)}
@@ -1338,10 +1352,8 @@ function BraneSwitcher({
           <Pressable style={styles.layerCard} onPress={(e) => e.stopPropagation()} tabIndex={-1}>
             <Text style={styles.layerTitle}>Sign out other devices?</Text>
             <Text style={styles.signOutBody}>
-              {activeDaemon?.id} will issue a new token. This device keeps
-              its access; every other phone and browser paired with it is
-              signed out until it scans a fresh Meld QR. Running agents and
-              your shell are unaffected.
+              Every other phone and browser will need a new Meld QR. This
+              device, your shell, and your agents will stay signed in.
             </Text>
             {signOutError && (
               <Text style={styles.addError}>{signOutError}</Text>
@@ -1385,7 +1397,7 @@ function BraneSwitcher({
           <Pressable style={styles.layerCard} onPress={(e) => e.stopPropagation()} tabIndex={-1}>
             <Text style={styles.layerTitle}>Put {sleepTarget?.id} to sleep?</Text>
             <Text style={styles.signOutBody}>
-              Its machine stops until you wake it here. Running agents
+              The machine will stop until you tap Wake. Running agents will
               resume when you reconnect.
             </Text>
             {sleepError && <Text style={styles.addError}>{sleepError}</Text>}
@@ -1429,8 +1441,8 @@ function BraneSwitcher({
             <Text style={styles.layerTitle}>Delete {confirmForget?.id}?</Text>
             <Text style={styles.signOutBody}>
               {forgetError === null
-                ? "This browser signs itself out of it, so its token stops working on the daemon, and then forgets it. To use it here again, scan a fresh Meld QR."
-                : "It could not be reached to sign this browser out, so its token still works. Forget it anyway? The token can be revoked later from the Devices list on another device."}
+                ? "This browser will sign out and need a new Meld QR to reconnect."
+                : "The daemon didn't answer. This browser's token still works."}
             </Text>
             {forgetError && <Text style={styles.addError}>{forgetError}</Text>}
             <View style={styles.layerButtonRow}>
@@ -1446,14 +1458,14 @@ function BraneSwitcher({
                 style={[styles.signOutButton, styles.layerConfirm, forgetting && { opacity: 0.5 }]}
                 onPress={handleForget}
                 role="button"
-                aria-label={forgetError === null ? "Delete" : "Forget anyway"}
+                aria-label={forgetError === null ? "Delete" : "Delete anyway"}
                 aria-busy={forgetting}
                 disabled={forgetting}
               >
                 {forgetting ? (
                   <ActivityIndicator size="small" color="#111" />
                 ) : (
-                  <Text style={styles.addButtonText}>{forgetError === null ? "Delete" : "Forget anyway"}</Text>
+                  <Text style={styles.addButtonText}>{forgetError === null ? "Delete" : "Delete anyway"}</Text>
                 )}
               </Pressable>
             </View>
@@ -2254,9 +2266,8 @@ export default function NarrativeList() {
         <View style={styles.center}>
           <Text style={styles.signedOutTitle}>Signed out of {activeDaemon.id}</Text>
           <Text style={styles.emptySubtext}>
-            Its token was rotated from another device, so the one stored here
-            no longer works. Scan a fresh Meld QR — or run `brane meld` on
-            that machine — to reconnect. Nothing else was touched.
+            Another device rotated the daemon's token. Scan a new Meld QR, or
+            run `brane meld` on the daemon's machine, to reconnect.
           </Text>
         </View>
       ) : loading ? (
@@ -2522,7 +2533,8 @@ const styles = StyleSheet.create({
     opacity: 0.7,
     backgroundColor: "#222228",
   },
-  // Lift the row with an open menu above the rows after it.
+  // Lift the row with an open menu above the rows after it. The row itself
+  // is not marked: the lit ⋯ and the menu beside it say whose it is.
   rowMenuOpen: {
     zIndex: 100,
   },
@@ -2538,6 +2550,25 @@ const styles = StyleSheet.create({
     color: "#aaa",
     fontSize: 15,
   },
+  // The ⋯ while its menu is open, lit in the menu's hue. A text-shadow
+  // alone, as the 🦠 has, barely shows on three 15px dots, so the ⋯ sits
+  // in a lit pill: a tinted fill and a soft glow, no edge of its own.
+  rowMenuIconOpen: {
+    color: "#fff",
+    borderRadius: 10,
+    paddingHorizontal: 6,
+    marginHorizontal: -6,
+    backgroundColor: `rgba(${ROW_MENU_RGB}, 0.22)`,
+    ...(Platform.OS === "web"
+      ? {
+          boxShadow: [
+            `0 0 10px rgba(${ROW_MENU_RGB}, 0.8)`,
+            `0 0 22px rgba(${ROW_MENU_RGB}, 0.45)`,
+          ].join(", "),
+          textShadow: `0 0 6px rgba(${ROW_MENU_RGB}, 0.9)`,
+        }
+      : {}),
+  } as any,
   archivedActions: {
     flexDirection: "row",
     alignItems: "center",
@@ -2669,16 +2700,18 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: "#3a3a40",
   },
+  // The same space under a layer's title as above its buttons, so the text
+  // between them sits in the middle rather than crowding the buttons.
   layerTitle: {
     color: "#d8d8dd",
     fontSize: 16,
     fontWeight: "600",
-    marginBottom: 10,
+    marginBottom: LAYER_GAP,
   },
   layerButtonRow: {
     flexDirection: "row",
     gap: 8,
-    marginTop: 4,
+    marginTop: LAYER_GAP,
   },
   layerCancel: {
     flex: 1,

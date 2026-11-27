@@ -87,7 +87,7 @@ Two things follow.
 
 ### Rotating the token
 
-"Sign out other devices", at the foot of the Devices list in the app's brane switcher, replaces that device's token. The device that asked keeps its access; every other web client is refused from that moment and must scan a fresh `brane meld` QR. Local processes are unaffected — the CLI and MCP bridges hold no token, and agent sessions authenticate per narrative. `brane token rotate` in a shell signs out every device: the shell has no token of its own to replace, so once the operator passes the presence prompt the daemon revokes every device token in that one request.
+"Sign out other devices", at the foot of the Devices list in the app's daemon switcher, replaces that device's token. The device that asked keeps its access; every other web client is refused from that moment and must scan a fresh `brane meld` QR. Local processes are unaffected — the CLI and MCP bridges hold no token, and agent sessions authenticate per narrative. `brane token rotate` in a shell signs out every device: the shell has no token of its own to replace, so once the operator passes the presence prompt the daemon revokes every device token in that one request.
 
 For a device, the daemon retires the old token on the **first use** of the new one rather than on the rotate request itself, so a lost response cannot lock every device out; an unused replacement lapses after 60 seconds. The cost of that is a window of at most 60 seconds during which both tokens are valid, and only if the requesting device vanished before confirming. Rotation revokes credentials, not sessions on the host: a tmux session someone already attached to stays attached.
 

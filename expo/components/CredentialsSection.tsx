@@ -126,7 +126,7 @@ export default function CredentialsSection({ conn, visible }: { conn: Connection
         <ActivityIndicator style={{ marginVertical: 8 }} color="#aaa" />
       ) : list.length === 0 ? (
         <Text style={styles.note}>
-          None yet. Any one you add can verify any of your devices, once verification is switched on.
+          None yet. A passkey or security key added here will verify every device once verification is on.
         </Text>
       ) : (
         list.map((c) => (
@@ -136,7 +136,7 @@ export default function CredentialsSection({ conn, visible }: { conn: Connection
               <Text style={styles.rowDetail}>{detail(c)}</Text>
               {rpId !== null && c.rp_id !== rpId && (
                 <Text style={styles.warn}>
-                  Enrolled for {c.rp_id}; this daemon is now {rpId}, so it cannot verify here. Add one on this host.
+                  This credential verifies at {c.rp_id}, not at {rpId}.
                 </Text>
               )}
             </View>
@@ -159,7 +159,7 @@ export default function CredentialsSection({ conn, visible }: { conn: Connection
         ))
       )}
       {onlyDeviceBound && (
-        <Text style={styles.warn}>A security key is not synced: add a second credential as its backup.</Text>
+        <Text style={styles.warn}>Every credential here is bound to one device.</Text>
       )}
       {error && <Text style={styles.error}>{error}</Text>}
       {pageUrl ? (
@@ -172,8 +172,8 @@ export default function CredentialsSection({ conn, visible }: { conn: Connection
         </Pressable>
       )}
       <Text style={styles.note}>
-        A passkey is confirmed at the daemon's machine (Touch ID or its password) before it is added; a YubiKey vouches for
-        itself. On iPhone, turn on Stolen Device Protection, so a passcode someone saw cannot stand in for Face ID.
+        Adding a passkey takes Touch ID or the password at the daemon's machine. Adding a YubiKey takes neither. On
+        iPhone, Stolen Device Protection stops a passcode from replacing Face ID.
       </Text>
     </View>
   );

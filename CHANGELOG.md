@@ -7,6 +7,16 @@ message in `benjamn/brane-npm`, the repository npm publishes from (see
 [docs/releasing.md](docs/releasing.md)), with pull request links removed.
 This file travels in the npm tarball.
 
+## 0.3.18 - 2026-11-27
+
+Fixes to the daemon switcher's rows.
+
+- A row's ⋯ menu opens to the left of the ⋯, so the list no longer cuts
+  the menu off. The menu is opaque. While the menu is open, the menu and
+  the ⋯ glow yellow. A Fly machine's row shows the region from the
+  machine's tailnet name
+  ([#696](https://github.com/benjamn/brane/pull/696)).
+
 ## 0.3.17 - 2026-11-27
 
 Waking a machine now starts the one you asked for, and the switcher's

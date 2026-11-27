@@ -37,6 +37,7 @@ import {
   probeHeardHost,
   reachLabel,
   daemonRegion,
+  regionFromHost,
   reachWords,
   sleepPhraseChangesInMs,
   daemonDetailText,
@@ -496,6 +497,27 @@ describe("daemon rows: three lines, the same on every machine row", () => {
     assert.equal(daemonRegion(undefined), null);
   });
 
+  it("places a Fly machine by its tailnet name when its recipe has no region", () => {
+    const host = "daemon-brane-5a04ec-ewr.tailc3f485.ts.net:45029";
+    assert.equal(regionFromHost(host), "ewr");
+    assert.equal(regionFromHost("daemon-brane-5a04ec-ewr.tailc3f485.ts.net"), "ewr", "no port");
+    assert.equal(daemonRegion(undefined, host), "ewr", "never heard a recipe");
+    assert.equal(daemonRegion({ kind: "url", url: fly.url }, host), "ewr", "a recipe without a region");
+    assert.equal(daemonRegion(fly, host), "nrt", "the recipe's region, which the daemon reported, wins");
+    // Only the entrypoint's shape, on a MagicDNS name: nothing else is a region.
+    assert.equal(regionFromHost("ben-mac.tailc3f485.ts.net:7433"), null, "a laptop's name");
+    assert.equal(regionFromHost("rocinante.tailc3f485.ts.net:7433"), null);
+    assert.equal(regionFromHost("daemon-brane-5a04ec-ewr:45029"), null, "not a MagicDNS name");
+    assert.equal(regionFromHost("daemon-brane-5a04ec-ewr.example.com:45029"), null);
+    assert.equal(regionFromHost("100.101.102.103:45029"), null);
+    assert.equal(regionFromHost("daemon-brane-5a04ec-ewr1.tailc3f485.ts.net"), null);
+    assert.equal(regionFromHost(""), null);
+    assert.equal(regionFromHost("Daemon-Brane-5a04ec-EWR.tailc3f485.ts.net:45029"), "ewr", "names are case-insensitive");
+    assert.equal(regionFromHost("daemon-brane-5a04ec-ewr-1.tailc3f485.ts.net:45029"), null, "a collision suffix hides the region");
+    assert.equal(regionFromHost("brane-mac.tailc3f485.ts.net:7433"), null, "not /fly's daemon- prefix");
+    assert.equal(daemonRegion({ kind: "none", reason: "no way to wake it" }, "rocinante.tailc3f485.ts.net:7433"), null);
+  });
+
   it("keeps every state's word short enough for one line, the reason going below", () => {
     const fly = { kind: "url", url: "https://x.fly.dev/wake", machine: "a1b2c3d4e5f6a7" } as const;
     const states: Reach[] = ["awake", "checking", "sleeping", "asleep", "unreachable", "waking", "connecting", "woke-other", "still-asleep"];
@@ -585,8 +607,8 @@ describe("daemon rows: three lines, the same on every machine row", () => {
   it("the switcher builds every machine row with the same component", (t) => {
     let src: string;
     try { src = readFileSync(new URL("../../expo/app/index.tsx", import.meta.url), "utf8"); } catch { t.skip("source not present"); return; }
-    assert.match(src, /title=\{activeDaemon\.id\}\s*place=\{daemonRegion\(activeDaemon\.wake\)\}/);
-    assert.match(src, /title=\{d\.id\}\s*place=\{daemonRegion\(d\.wake\)\}/);
+    assert.match(src, /title=\{activeDaemon\.id\}\s*place=\{daemonRegion\(activeDaemon\.wake, activeDaemon\.host\)\}/);
+    assert.match(src, /title=\{d\.id\}\s*place=\{daemonRegion\(d\.wake, d\.host\)\}/);
     assert.doesNotMatch(src, />All branes</);
   });
 });

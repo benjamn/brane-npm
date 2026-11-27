@@ -200,7 +200,7 @@ export default function DevicesLayer({
           {tokens === null && !error ? (
             <ActivityIndicator style={{ marginVertical: 16 }} color="#aaa" />
           ) : unsupported ? (
-            <Text style={styles.body}>This daemon is older than the Devices list. Update brane on it to see and revoke devices.</Text>
+            <Text style={styles.body}>This daemon's brane predates the Devices list.</Text>
           ) : (
             <>
               {sorted.map((t) => (
@@ -215,10 +215,10 @@ export default function DevicesLayer({
                     {t.kind === "device" && <Text style={styles.rowLabel}>"{t.label}"</Text>}
                     {elsewhereNote(t) && <Text style={styles.rowWarn}>{elsewhereNote(t)}</Text>}
                     {t.origin === "adopted" && t.kind === "device" && (
-                      <Text style={styles.rowWarn}>From before tokens were hashed; may have been logged</Text>
+                      <Text style={styles.rowWarn}>Issued before brane hashed tokens.</Text>
                     )}
                     {t.origin === "adopted" && t.kind === "agent" && (
-                      <Text style={styles.rowLabel}>Kept from before agents had their own tokens; replaced when it is next revived</Text>
+                      <Text style={styles.rowLabel}>The next revive will replace this old shared token.</Text>
                     )}
                   </View>
                   {t.kind !== "local" && !t.current && (
@@ -262,7 +262,7 @@ export default function DevicesLayer({
           {/* The wholesale sign-out, last in the scroll as the picker's Add
               Daemon and Devices are: the rows get the height. */}
           <Text style={styles.footnote}>
-            A revoked device is signed out until it scans a fresh Meld QR. To keep only this device:
+            A revoked device will need a new Meld QR.
           </Text>
           <Pressable
             style={[styles.signOut, (!connected || revoking !== null) && { opacity: 0.5 }]}
@@ -307,13 +307,13 @@ function CascadePanel({
         // Revive answers "already running" for a live session and can't hand
         // a running process a new token, so this is the one way back.
         <Text style={styles.cascadeNote}>
-          This cuts {token.owner_nid ?? "the agent"} off from brane at once; its session keeps running without
-          tools. To bring it back, end its session and revive it.
+          {token.owner_nid ?? "The agent"} will lose brane tools at once. The session will keep running.
+          Ending and reviving the session will reconnect {token.owner_nid ?? "the agent"}.
         </Text>
       )}
       {token.descendants.length > 0 && (
         <Text style={styles.cascadeHead}>
-          Also revoke {token.descendants.length === 1 ? "the device or agent" : `the ${token.descendants.length} devices and agents`} it added:
+          Also revoke {token.descendants.length === 1 ? "the device or agent" : `the ${token.descendants.length} devices and agents`} this token added:
         </Text>
       )}
       {token.descendants.map((id) => {
@@ -331,7 +331,7 @@ function CascadePanel({
       {agents.length > 0 && (
         <Text style={styles.cascadeNote}>
           Started {agents.length === 1 ? "1 running agent" : `${agents.length} running agents`}:{" "}
-          {agents.map((a) => a.id).join(", ")}. Their sessions keep running; revoking their tokens cuts off their brane tools.
+          {agents.map((a) => a.id).join(", ")}. A revoked agent will lose brane tools. The agent's session will keep running.
         </Text>
       )}
     </View>

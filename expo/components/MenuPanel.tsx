@@ -1,7 +1,8 @@
 import { forwardRef } from "react";
 
-// Shared popover-panel look for all of brane's floating menus: a translucent,
-// slightly-tinted panel with a soft surrounding glow in one of four hues.
+// Shared popover-panel look for all of brane's floating menus: a translucent
+// (or, with `opaque`, solid), slightly-tinted panel with a soft surrounding
+// glow in one of its hues.
 // Each menu picks a hue — either by what opens it (🦠 context, 🥫 macros, 🦾
 // controls) or, for the narrative list's status badges, by what it is about:
 // a menu hanging off LIVE / IDLE / DEAD glows in that word's own color, so the
@@ -10,7 +11,7 @@ import { forwardRef } from "react";
 // keeps its own structure. Items inside should be transparent so the panel's
 // hue shows through (use menuHueRgb() for a matching hover wash).
 
-export type MenuHue = "green" | "tomato" | "blue" | "grey";
+export type MenuHue = "green" | "tomato" | "blue" | "grey" | "yellow";
 
 const HUE_RGB: Record<MenuHue, string> = {
   green: "140, 230, 170", // 🦠 context menu
@@ -18,14 +19,17 @@ const HUE_RGB: Record<MenuHue, string> = {
   blue: "120, 190, 255",  // 🦾 controls, and IDLE
   grey: "170, 175, 180",  // DEAD — lighter than the word it glows behind,
                           // because #666 casts no light of its own
+  yellow: "255, 240, 90", // a switcher row's ⋯: not green, which there means
+                          // the current machine and awake
 };
 
-// Translucent (~75%) dark backdrop tinted toward each hue.
+// Dark backdrop tinted toward each hue, translucent (~75%) unless `opaque`.
 const HUE_BG: Record<MenuHue, string> = {
-  green: "rgba(34,50,42,0.75)",
-  tomato: "rgba(58,30,26,0.75)",
-  blue: "rgba(26,38,60,0.75)",
-  grey: "rgba(40,42,46,0.75)",
+  green: "34,50,42",
+  tomato: "58,30,26",
+  blue: "26,38,60",
+  grey: "40,42,46",
+  yellow: "52,46,22",
 };
 
 /** The hue's "r, g, b" string, for building matching hover/border colors. */
@@ -35,6 +39,12 @@ export function menuHueRgb(hue: MenuHue): string {
 
 interface MenuPanelProps {
   hue: MenuHue;
+  // A solid backdrop. The translucent one keeps a terminal readable under a
+  // menu; over rows of text (the switcher's) it mixes theirs into the items'.
+  opaque?: boolean;
+  // A glow even on every side, for a menu that hangs beside its trigger
+  // rather than dropping from it: no downward cast.
+  evenGlow?: boolean;
   // Position / layout / sizing — merged over the hue defaults. Callers set
   // top/bottom/left/right, padding, display, gap, width, etc. here.
   style?: React.CSSProperties;
@@ -44,7 +54,7 @@ interface MenuPanelProps {
 // forwardRef so callers that anchor an outside-click handler on the panel
 // itself (e.g. ContextMenu) can grab the underlying div.
 const MenuPanel = forwardRef<HTMLDivElement, MenuPanelProps>(function MenuPanel(
-  { hue, style, children },
+  { hue, opaque, evenGlow, style, children },
   ref,
 ) {
   const rgb = HUE_RGB[hue];
@@ -53,15 +63,15 @@ const MenuPanel = forwardRef<HTMLDivElement, MenuPanelProps>(function MenuPanel(
       ref={ref}
       style={{
         position: "absolute",
-        // ~75% opaque, intentionally NOT blurred so the terminal beneath stays
-        // sharp and readable.
-        backgroundColor: HUE_BG[hue],
+        // ~75% opaque unless `opaque`, and never blurred, so the terminal
+        // beneath stays sharp and readable.
+        backgroundColor: `rgba(${HUE_BG[hue]}, ${opaque ? 1 : 0.75})`,
         border: `1px solid rgba(${rgb}, 0.4)`,
         borderRadius: 8,
         zIndex: 100,
         boxShadow: [
-          "0 6px 20px rgba(0,0,0,0.45)",
-          `0 4px 14px rgba(${rgb}, 0.5)`,
+          evenGlow ? "0 0 20px rgba(0,0,0,0.45)" : "0 6px 20px rgba(0,0,0,0.45)",
+          evenGlow ? `0 0 14px rgba(${rgb}, 0.5)` : `0 4px 14px rgba(${rgb}, 0.5)`,
           `0 0 24px rgba(${rgb}, 0.32)`,
           `0 0 50px rgba(${rgb}, 0.18)`,
         ].join(", "),

@@ -299,7 +299,7 @@ and `src/test/socket-account.test.ts`.
 ## The Devices list
 
 `GET /api/tokens` lists every live token, `brane token list` prints it, and
-the brane switcher's **Devices** layer shows it with a Revoke on each other
+the daemon switcher's **Devices** layer shows it with a Revoke on each other
 device. `brane token list` folds agents' tokens, one per narrative session
 and soon several times the devices, into a closing `23 agent tokens` line;
 `--agents` lists them, and an agent's token seen from a second address keeps
